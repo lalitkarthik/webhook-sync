@@ -1,43 +1,37 @@
 # Source adapters
 
-**What this page contains.** The interface every source adapter implements, then Stripe and Razorpay in detail: where the signature and event id live, which events are handled, how an event names its payment, how a payment is fetched, how statuses map onto ours, and how the sweeper lists what we missed. It ends with the generic Standard Webhooks source that is designed for but not built.
+**What this page contains.** The interface every source adapter implements, then Stripe and Razorpay in detail: signatures and event ids, which events are handled, how an event names its payment, what a fetch reads, how statuses and columns map, what the sweeper lists, and the API reads each costs.
 
-**How to read it.** Read the interface and the status section. Then read the Stripe section; Razorpay is written as its differences from Stripe.
+**How to read it.** Read the interface and the status section, then Stripe. Razorpay is written as its differences from Stripe, and is built after pitching starts ([Q67](grilling-log.md)).
 
 ## The interface
 
-A **source adapter** is one module. The core calls only these six functions and never imports a source's SDK itself.
+A **source adapter** is one module. The core calls only these functions and never imports a source's SDK itself.
 
 | Function | Returns | Used by |
 |---|---|---|
-| `verify(raw_body, headers)` | the event id, the mode and which secret matched; or a rejection reason. Never raises. | receiver |
-| `describe(event)` | the event type, the **payment key** it is about, its creation time, and handled or ignored (with a reason) | receiver, sweeper |
-| `fetch(payment_key)` | the payment's current state as a business row; or an error with its class (`retry`, `dead`, `pause`, `not_found`) | ledger worker |
-| `from_payload(event)` | the business row the event itself implies, for the payload fallback | ledger worker |
-| `sweep(since)` | pages of missing-event candidates plus the checkpoint after each page | sweeper |
-| `list_payments(created_from, created_to)` | every payment at the source in a window, current state | verify |
+| `verify(raw_body, headers)` | event id, mode, which secret matched; or a rejection reason. Never raises. | receiver |
+| `describe(event)` | type, account, **payment key**, creation time, **fingerprint**, handled or ignored with a reason | receiver, sweeper |
+| `fetch(payment_key)` | the payment's current state as a business row, plus the columns an optional read couldn't fill; or an error with its class (`retry`, `dead`, `pause`, `not_found`) | ledger worker |
+| `sweep(slice_start, slice_end)` | every event (or, for Razorpay, payment) in that window of source time | sweeper |
+| `list_payments(created_from, created_to)` | every payment in a window with its current state, ready to write | verify, backfill |
+| `check_setup()` | the permission, webhook-endpoint and mode checks `doctor` runs | `doctor` |
 
-Every outbound call goes through the source's **rate limiter**: a token bucket, 10 requests a second by default ([Q36](grilling-log.md)). A 429 from the source is class `retry` and honours `Retry-After`.
+Every outbound call goes through the source's token-bucket rate limiter (10 a second by default). A 429 is class `retry` and honours `Retry-After`.
 
 ## Our status vocabulary
 
-Every source's statuses map onto one list, so the sheet reads the same whichever source a payment came from.
-
 ```mermaid
 stateDiagram-v2
-  [*] --> pending
-  pending --> requires_action
-  requires_action --> processing
-  pending --> processing
-  pending --> failed : attempt failed
+  [*] --> processing
+  [*] --> authorized : captured later
+  [*] --> failed : attempt failed
   failed --> processing : customer retried
   failed --> succeeded
   processing --> succeeded
   processing --> failed
-  pending --> authorized : captured later
   authorized --> succeeded : captured
   authorized --> canceled : released or expired
-  pending --> canceled
   succeeded --> partially_refunded
   partially_refunded --> refunded
   succeeded --> refunded
@@ -45,77 +39,75 @@ stateDiagram-v2
   canceled --> [*]
 ```
 
-Only `canceled` is **terminal**. `failed` is not: the same Stripe PaymentIntent can fail and then succeed when the customer tries another card. `refunded` is not either: when a refund fails after being created (a closed card), the source reduces the refunded amount again. **Disputes** are a separate column (`open`, `won`, `lost`), so a dispute on a refunded payment is still visible.
+A row is created only once a payment reaches `processing`, `authorized`, `failed` or `succeeded`. Abandoned checkouts and payments canceled before any charge make no row, so the sheet isn't full of amounts nobody paid (F10). Only `canceled` is **terminal**. The fetched state is always written as it is: the source is the truth, and fetching already removes the ordering problem ([ADR 0002](decisions/0002-fetch-current-state-not-event-payload.md)).
 
-**How stickiness works, refined while writing this page.** In fetch mode the source's current state is written as it is: it is the truth, and fetching already removes the ordering problem. Stickiness applies to **payload mode only**: a payload is never allowed to move a row out of `canceled`, or backwards along the order above, unless its `(created, event_id)` is newer than the row's `payload_version`. [Q13](grilling-log.md) said "terminal states are sticky" before refund failures were considered; this is the corrected rule.
+**Disputes** are a separate column with seven values: `inquiry` (Stripe's `warning_needs_response` and `warning_under_review`), `needs_response`, `under_review`, `won`, `lost`, `prevented`, `closed` (Stripe's `warning_closed`). The source's own word stays in `source_status`.
 
 ## Stripe
 
 | Thing | Where it is |
 |---|---|
-| Signature | `stripe-signature` header: `t=<unix time>,v1=<hmac>[,v1=<hmac>…]`, HMAC-SHA256 over `<t>.<raw body>`. Checked with `stripe.Webhook.construct_event(payload, sig_header, secret, tolerance=300)`, plus our own check that `t` is not more than 300 s in the future. During a secret roll Stripe sends two `v1` values; each configured secret is tried. |
-| Event id | `body.id` (`evt_…`) |
-| Mode | `body.livemode` |
-| Payment key | From `body.data.object`: a `payment_intent` is its own `id`; a `charge`, `refund` or `dispute` names it in its `payment_intent` field. If that field is empty (a legacy charge with no PaymentIntent), the event is **ignored** with reason `no_payment_intent`. An event carrying an `account` field (Stripe Connect) is ignored with reason `connect_account` ([ADR 0003](decisions/0003-one-buyer-per-deployment.md)). |
-| Created | `body.created` (Unix seconds) |
+| Signature | `stripe-signature`: `t=<unix time>,v1=<hmac>[,v1=…]`, HMAC-SHA256 over `<t>.<raw body>`. Checked with `stripe.Webhook.construct_event(payload, header, secret, tolerance=300)`, plus our own check that `t` isn't more than 300 s in the future. During a secret roll Stripe sends one `v1` per secret; each configured secret is tried. |
+| Event id, mode, account | `body.id` (`evt_…`); `body.livemode`; the configured account (an event carrying an `account` field is Stripe Connect and is ignored with reason `connect_account`, [ADR 0003](decisions/0003-one-buyer-per-deployment.md)) |
+| Payment key | From `body.data.object`: a `payment_intent`'s own `id`, or the `payment_intent` field of a `charge`, `refund` or `dispute`. If that is empty (a legacy charge), the event is ignored with reason `no_payment_intent`, and verify reports the count (F38). |
+| Fingerprint | `type`, `data.object.id`, `created`, `livemode` |
 
-**Handled event types** ([Q12](grilling-log.md)): `payment_intent.created`, `.processing`, `.requires_action`, `.amount_capturable_updated`, `.succeeded`, `.payment_failed`, `.canceled`; `charge.refunded`; `refund.created`, `refund.updated`, `refund.failed`; `charge.dispute.created`, `.updated`, `.closed`, `.funds_withdrawn`, `.funds_reinstated`. Everything else is stored and ignored with reason `unhandled_type`.
+**Handled event types** ([Q12](grilling-log.md), refined by the audit, F10, F35): `payment_intent.processing`, `.succeeded`, `.payment_failed`, `.canceled`, `.amount_capturable_updated`; `charge.refunded`; `refund.created`, `refund.updated`, `refund.failed`; `charge.dispute.created`, `.updated`, `.closed`, `.funds_withdrawn`, `.funds_reinstated`. `payment_intent.created` and `.requires_action` are stored and ignored. Everything else is ignored with reason `unhandled_type`.
 
-**Fetch.** `GET /v1/payment_intents/{id}?expand[]=latest_charge`: one call. If `latest_charge.disputed` is true, a second call, `GET /v1/disputes?payment_intent={id}`, gets the dispute status. The client pins its API version in code, so a new Stripe version can't change the shapes we read. Because only ids are read from the event payload, the webhook endpoint's own API version doesn't matter.
+**Fetch.** One call: `GET /v1/payment_intents/{id}?expand[]=latest_charge.balance_transaction`. If `latest_charge.disputed` is true, a second: `GET /v1/disputes?payment_intent={id}`. The adapter pins the Stripe API version in code, so a new version can't change the shapes we read.
 
-| PaymentIntent state | Our status |
+| Column | From |
 |---|---|
-| `requires_payment_method` or `requires_confirmation`, no `last_payment_error` | `pending` |
-| `requires_payment_method` with `last_payment_error` | `failed` |
-| `requires_action` | `requires_action` |
-| `processing` | `processing` |
-| `requires_capture` | `authorized` |
-| `canceled` | `canceled` |
-| `succeeded`, and `latest_charge.amount_refunded` is 0 / between / equal to `amount_received` | `succeeded` / `partially_refunded` / `refunded` |
+| status | `canceled` → canceled; `requires_capture` → authorized; `processing` → processing; `requires_payment_method` with `last_payment_error` → failed; `succeeded` with `latest_charge.amount_refunded` 0, between, or equal to `amount_received` → succeeded, partially_refunded, refunded |
+| amount, authorized | `amount_received`; `amount` when it differs (a partial capture) |
+| refunded | `latest_charge.amount_refunded` |
+| fee, net, settlement | the balance transaction's `fee`, `net`, `amount` and `currency` (the settlement currency, e.g. INR for a USD sale) |
+| method | `latest_charge.payment_method_details.type`, plus `card.brand` |
+| metadata | the configured keys of the PaymentIntent's `metadata` |
+| customer, description | `receipt_email` or `latest_charge.billing_details.email`; `billing_details.name`; `description` |
 
-Other columns: `amount_minor` = `amount`; `refunded_minor` = `latest_charge.amount_refunded`; `customer_email` = `receipt_email`, else `latest_charge.billing_details.email`; `customer_name` = `latest_charge.billing_details.name`; `description` = `description`.
+**Fetch errors.** 404 → `not_found` (the row keeps its last values and is flagged); 401 → `pause` the source; 403 on the main read → `pause`; **403 on an optional read** (disputes, the balance transaction) → the row is written with those columns marked unknown, and an alert names the missing permission ([Q85](grilling-log.md)); 429, 5xx, timeout, connection error → `retry`; any other 4xx → `dead`.
 
-**Fetch errors.** 404 → `not_found` (the payload fallback, [ledger-worker.md](ledger-worker.md)); 401 or 403 → `pause` (the key was revoked or lacks permission); 429, 5xx, timeout, connection error → `retry`; anything else 4xx → `dead`.
+**The key.** A **restricted** key with read access to PaymentIntents, Charges, Refunds, Disputes, Events, Balance transactions and Webhook endpoints, in test and live mode. `check_setup` makes one cheap read per resource and names any missing permission; it also finds the webhook endpoint whose URL matches, fails if any handled type isn't subscribed, and warns if the endpoint's API version differs from the pinned one (F29).
 
-**Sweep.** `GET /v1/events?types[]=…&created[gte]=<checkpoint − 60 s>`, auto-paginated oldest first, 100 a page ([sweeper.md](sweeper.md)). Only the 30 most recent days are listed.
+**Sweep.** `GET /v1/events?types[]=…&created[gte]=<slice start − 10 min>&created[lt]=<slice end>`, all pages. Stripe returns newest first; order doesn't matter, because the slice is committed only after all of it is stored (F03, [sweeper.md](sweeper.md)). Events are listed for 30 days only.
 
-**Verify listing.** `GET /v1/payment_intents?created[gte]=…&created[lt]=…&expand[]=data.latest_charge`, 100 a page.
+**Listing for verify and backfill.** `GET /v1/payment_intents?created[gte]=…&created[lt]=…&expand[]=data.latest_charge.balance_transaction`, 100 a page. The listed state is complete, so backfill and repair write it without fetching each payment again (F18).
 
 ## Razorpay: the differences
 
 | Thing | Where it is |
 |---|---|
-| Signature | `x-razorpay-signature`: HMAC-SHA256 over the raw body, **no timestamp**. `razorpay.Utility.verify_webhook_signature` wants the body as a decoded `str` (raw bytes raise `TypeError`), so the adapter decodes UTF-8 itself and treats a decoding failure as `malformed`. |
-| Replay protection | None in the signature. The dedupe key is the only defence against a captured request being replayed, which is why the event id must be present and unique. |
-| Event id | The `x-razorpay-event-id` **header**. The body has no top-level `id`; hookline reads `body["id"]` and so rejects every Razorpay event. |
-| Mode | Not in the event. The configured mode is trusted; startup and `doctor` check the key prefix `rzp_test_` or `rzp_live_`. |
-| Payment key | `payload.payment.entity.id`; for refunds `payload.refund.entity.payment_id`; for disputes `payload.dispute.entity.payment_id`. |
-| Created | `created_at` (Unix seconds) |
+| Signature | `x-razorpay-signature`: HMAC-SHA256 over the raw body, **no timestamp**. `razorpay.Utility.verify_webhook_signature` wants a `str`, so the adapter decodes UTF-8 itself; a decoding failure is `malformed`. |
+| Event id | The `x-razorpay-event-id` header. It isn't covered by the signature, so the receiver also dedupes on the signed body's hash ([Q86](grilling-log.md)). |
+| Mode | Not in the event. Startup and `doctor` check the key prefix `rzp_test_` or `rzp_live_`. |
+| Payment key | `payload.payment.entity.id`; `payload.refund.entity.payment_id`; `payload.dispute.entity.payment_id` |
+| Fingerprint | `event`, the entity id, `created_at` |
 
 **Handled event types:** `payment.authorized`, `payment.captured`, `payment.failed`; `refund.created`, `refund.processed`, `refund.failed`; `payment.dispute.created`, `.won`, `.lost`, `.closed`, `.under_review`, `.action_required`.
 
-**Fetch.** `GET /v1/payments/{id}`. Dispute status comes from `GET /v1/disputes/{dispute_id}` when the event names a dispute.
+**Fetch.** `GET /v1/payments/{id}`. Status: `authorized` → authorized; `captured` with `refund_status` null, `partial` or `full` → succeeded, partially_refunded, refunded; `refunded` → refunded; `failed` → failed. Fee and fee tax (GST) from `fee` and `tax`; method from `method`; metadata from `notes`. A payment fetch **never clears** the dispute column: dispute state comes only from dispute events and the disputes poll, so coalescing a dispute event with a later refund event can't lose it (F10).
 
-| Razorpay payment state | Our status |
+**Sweep and polling** ([Q86](grilling-log.md), F13). Razorpay has no events list, and its lists filter by **creation** time. Each sweep therefore:
+1. lists `GET /v1/payments` and `GET /v1/refunds` created in the slice, storing each payment's state as a synthetic event (`origin = 'sweep'`, id `sweep:<payment id>:<state hash>`) with a ledger job;
+2. hourly, re-fetches every ledger payment younger than 7 days that is `authorized` or has a refund not yet processed;
+3. hourly, polls `GET /v1/disputes`.
+
+Changes to older payments reach the ledger through nightly verify (30 days). The README states the gap.
+
+**Keys.** Razorpay keys can't be restricted to reading. The handover note says so: they live only in the server's environment and are rotated at handover ([Q85](grilling-log.md)).
+
+## API reads per month
+
+Stripe allows an average of about 500 reads per payment, with at least 10,000 a month per account (F18, [Q89](grilling-log.md)).
+
+| What | Reads a month for a buyer with 100 payments |
 |---|---|
-| `created` | `pending` |
-| `authorized` | `authorized` (Razorpay refunds uncaptured payments automatically after a few days; the next fetch sees it) |
-| `captured`, and `refund_status` null / `partial` / `full` | `succeeded` / `partially_refunded` / `refunded` |
-| `refunded` | `refunded` |
-| `failed` | `failed` |
-
-**Sweep.** No events list exists, so the sweeper polls `GET /v1/payments?from=&to=&count=100&skip=` and `GET /v1/refunds?from=&to=` from the checkpoint minus 10 minutes. Each payment found is stored as a **synthetic event** with `origin = 'sweep'`, event id `sweep:<payment id>:<updated state hash>`, and a ledger job. Polling sees current states, not every step between them, so the event trail has gaps for anything learned this way; the README says so ([Q39](grilling-log.md)).
-
-**Retries on their side.** Razorpay retries for 24 hours and then **disables the webhook**. [sweeper.md](sweeper.md) detects that.
-
-## Later: a generic Standard Webhooks source
-
-Designed for, not built in version 1 ([Q2](grilling-log.md)). Signature: the `standardwebhooks` library (MIT) over `webhook-id.webhook-timestamp.body`, ±5 minutes. Event id: the `webhook-id` header. There is no API to fetch from, so it runs in payload mode only, with the payment key, status and amount read from configured JSON paths (Convoy's per-source key-location idea, reimplemented). There is no sweep; a missed event is recovered only by the sender's retries.
-
-## Open questions
-
-- Whether Razorpay offers a way to list disputes per payment. Written: dispute status comes only from dispute events and fetching the named dispute. Check during the Razorpay slice.
-- Whether `payment_intent.created` should produce a sheet row for payments that never go further. Written: yes, as `pending`; a column filter hides them. Revisit if buyers find it noisy.
+| Sweeps (every 10 min, usually one page) | about 4,400 |
+| Ledger fetches (about 2 per payment, plus disputes) | about 250 |
+| Nightly verify (30 days of PaymentIntents, 100 a page) | about 30-60 |
+| Probes while paused (1, 2, 5, then every 15 min) | about 100 a day paused |
+| **Total** | about 5,000, half the minimum allowance |
 
 ## Where to go next
 

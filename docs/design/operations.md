@@ -1,184 +1,160 @@
 # Operations
 
-**What this page contains.** Everything about running the service: the admin pages, the `wsync` commands and `doctor`, alerts, configuration and secrets, starting and stopping, logs and health checks, retention, backups, the SQLite settings, and how a client runs it with Docker Compose.
+**What this page contains.** Running the service: the one process and its loops, the admin port, the `wsync` commands and `doctor`, alerts, configuration and secrets, starting and stopping, logs and health checks, and the SQLite settings. Where it runs, backups, monitoring and handover are in [hosting.md](hosting.md).
 
-**How to read it.** Each section stands alone. The config example and the `doctor` checklist are what a client handover needs.
+**How to read it.** Each section stands alone. The `doctor` table and the config example are what a handover needs.
 
 ## One process, several loops
 
 ```mermaid
 flowchart LR
-  subgraph P["wsync serve (one process)"]
-    HTTP["HTTP: webhooks, admin pages,<br/>/health, /ready"]
-    LW["ledger worker<br/>(one per source)"]
-    FL["flusher ★"]
-    SW["sweeper ★"]
-    VF["verify ★"]
-    RP["reaper"]
-    PR["pruner ★ · backup ★"]
+  subgraph P["wsync serve (one process, holds the lock file)"]
+    PUB["public port:<br/>/webhooks/*, /health"]
+    ADM["admin port, localhost:<br/>pages, admin API, /ready, /status"]
+    LW["ledger worker"]
+    FL["flusher"]
+    SW["sweeper"]
+    VF["verify"]
+    RP["reaper · pruner · backup"]
+    WR["writer<br/>(one connection)"]
   end
-  DB[("database")]
-  HTTP & LW & FL & SW & VF & RP & PR --- DB
+  DB[("SQLite file")]
+  PUB & LW & FL & SW & VF & RP & ADM --> WR --> DB
+  ADM -. "read-only connection" .-> DB
 ```
 
-★ = singleton, held by a lease in `singletons`, so a second process started by mistake can't run it twice. On Postgres, `wsync serve --workers N` adds ledger workers only ([Q26](grilling-log.md)).
+`wsync serve` takes an exclusive lock on `data/webhook-sync.lock` and refuses to start if another server holds it ([ADR 0007](decisions/0007-one-server-process-per-database.md)). Every write goes through the one writer; pages, verify and exports read through a read-only connection ([Q83](grilling-log.md)).
 
-## Admin pages
+## The admin port
 
-Server-rendered HTML, vendored Pico.css (MIT), dark mode, htmx for the buttons and for counters that refresh every 5 s. No JavaScript build ([Q58](grilling-log.md)).
+The admin pages and the admin API listen on a **second port bound to `127.0.0.1`**, reached from elsewhere by an SSH tunnel. The public port serves only the webhooks and `/health` ([Q88](grilling-log.md), F24).
 
-| Page | Shows | Actions |
+| Page (after pitching) | Shows | Actions |
 |---|---|---|
-| **Overview** | counters (received, duplicates, conflicts, rejected, done, waiting, dead), each source's and sink's state, last sweep, last verify, red banners for anything needing a person | Sweep now, Backfill range, Resume sink, Rebuild sheet |
-| **Events** | filterable list: source, type, origin, outcome, date | |
-| **Event timeline** | one event: its deliveries, its ledger job and every attempt, the row change it caused (`row_version`), the mirror job and its flush | Replay |
-| **Dead letters** | dead jobs by sink, with error and history | Retry one, Retry all for sink, Resolve with note |
-| **Verify** | runs, totals per currency, findings | Run full verify, Repair |
-| **Admin actions** | who did what, when | |
-| **Rejections** | recent rejections by reason (no bodies) | |
+| **Overview** | counters, each source's and sink's state, last sweep, last verify, banners | Sweep now, Backfill, Resume, Rebuild |
+| **Events** and **Event timeline** | events, filterable; one event's deliveries, job, attempts, row change and flush | Replay |
+| **Dead letters** | dead jobs with error and history | Retry one, Retry all, Resolve |
+| **Verify** | runs, totals, findings | Run, Repair |
+| **Admin actions**, **Rejections** | who did what; rejection counts and samples | |
 
-**Access** ([Q22](grilling-log.md)). Every admin page and action needs `ADMIN_TOKEN` (a bearer header, or a login form that sets a secure cookie). Actions are `POST` with a CSRF token. The service listens on `127.0.0.1` unless configured otherwise, and refuses to listen anywhere else without an admin token. Each token has a label, which is what the admin actions log records.
+Server-rendered HTML, vendored Pico.css (MIT), htmx for buttons, no JavaScript build ([Q58](grilling-log.md)). The pitch-ready cut has no pages: the CLI and the Sync status tab cover it ([Q67](grilling-log.md)).
+
+**Access.** Tokens are set as `ADMIN_TOKENS=label:token,…`; the label is what the admin-actions log records. If a buyer insists on exposing the admin port publicly: every token at least 32 random characters (`doctor` checks), login throttled to 5 tries a minute per address, compared with `hmac.compare_digest`, and a signed session cookie (`HttpOnly`, `SameSite=Strict`, `Secure`). Actions are `POST` with a CSRF token.
 
 ## Commands
 
 | Command | Does |
 |---|---|
 | `wsync serve` | Runs everything above |
-| `wsync doctor` | Checks a setup end to end (below). Exit code 0 only if every check passes. |
-| `wsync sweep` / `wsync backfill --from --to` | [sweeper.md](sweeper.md) |
-| `wsync replay <event_id>` | Enqueue a ledger job for that event's payment |
+| `wsync doctor` | Checks a setup end to end (below); exit code 0 only if every check passes |
+| `wsync status` | What `/status` shows: paused sources and sinks with reasons, counters, last sweep and verify |
+| `wsync sweep` / `backfill --from --to` / `replay <event_id>` | [sweeper.md](sweeper.md) |
 | `wsync verify [--full] [--repair] [--days N]` | [verify.md](verify.md) |
-| `wsync rebuild-sheet` | [sheets-sink.md](sheets-sink.md) |
+| `wsync rebuild-sheet` / `wsync resume <sink or source>` | [sheets-sink.md](sheets-sink.md), [queue.md](queue.md) |
 | `wsync dead list / retry <id or --all> / resolve <id> --note` | The dead-letter queue |
-| `wsync backup` | Consistent SQLite copy |
+| `wsync backup` | Encrypted consistent copy ([hosting.md](hosting.md)) |
 | `wsync demo <scene>` | [showcase.md](showcase.md) |
 
-Each command that changes anything writes an admin action, labelled `cli` ([Q47](grilling-log.md)).
+When a server is running, commands that change state ask it over the admin port; otherwise they run on their own. Each is logged as an admin action, labelled `cli`.
 
 ## doctor
 
-What a client handover runs to prove the setup works, and the first thing to run when something looks wrong.
+What a handover runs to prove the setup works, and the first thing to run when something looks wrong.
 
 | Check | Fails when |
 |---|---|
-| Config parses and validates | a typo, an unknown key, a missing required field |
+| Config parses and validates | a typo, an unknown key, a missing field |
 | Every source has a non-empty secret | fail-open risk |
-| Each API key's mode matches the configured mode | `sk_live_` with `mode = "test"`, `rzp_test_` with `mode = "live"` |
-| Each API key works (one cheap read) | revoked or wrong key |
-| Our clock is within 30 s of the source's (from its `Date` header) | Stripe signatures fail beyond 5 minutes of drift |
-| The spreadsheet is shared with the service account, and the header row matches config | unshared, wrong id, columns moved |
-| The database is writable, migrations are current, SQLite is in WAL mode with `synchronous=FULL` | read-only disk, network drive, old schema |
-| `ADMIN_TOKEN` set if listening on a non-local address | |
-| The public webhook URL answers (optional `--url`) | tunnel down, wrong path |
+| Stripe key is a **restricted** key with every needed read permission; each key's mode matches the config | `sk_live_` used, a permission missing (named), `rk_live_` with `mode = "test"` ([Q85](grilling-log.md)) |
+| Stripe's webhook endpoint for this URL is subscribed to every handled type; its API version matches the pinned one | a type not ticked (fail); a version differs (warning) (F29) |
+| Our clock within 30 s of the source's `Date` header | Stripe signatures fail beyond 5 minutes |
+| The spreadsheet is reachable and shared, the tabs and header match, the deployment id is ours; which Google auth is in use | unshared, wrong id, columns moved; the organisation blocks keys (explained in plain words, [Q90](grilling-log.md)) |
+| Database writable, migrations current, schema not newer than the code, WAL and `synchronous=FULL` on, on a local disk | read-only, network drive or synced folder (OneDrive, Dropbox, Google Drive) |
+| Admin tokens long enough if the admin port is public | |
+| The heartbeat URL and the backup destination are set and reachable | [hosting.md](hosting.md) |
+| The public webhook URL answers (with `--url`) | tunnel or DNS down |
 
 ## Alerts
 
-One outgoing URL (`alerts.url`), sent a Slack- and Discord-compatible JSON message, plus a red banner on the Overview page ([Q42](grilling-log.md)). Each kind of alert is sent at most once an hour; suppressed repeats are counted and reported in the next one.
+One outgoing URL (Slack- or Discord-compatible) plus a banner on the Overview. Each kind at most once an hour; suppressed repeats are counted in the next. Alert bodies carry ids and counts only, never emails, names or descriptions ([Q91](grilling-log.md)).
 
 | Alert | Fires when |
 |---|---|
-| sink paused / source paused | a pause, with the reason |
-| dead jobs | the first dead job, then an hourly digest while any remain unresolved |
-| verify differences | a full verify finds differences it couldn't repair, or the same payment is stale two nights running |
-| silent webhooks | [sweeper.md](sweeper.md) |
-| horizon near | 25 days since a Stripe checkpoint |
-| conflict | a delivery with a known id and a different body |
-| sheet capacity | the spreadsheet (all tabs) past 80 % of the cell limit |
-| database writes failing | a write fails for a reason other than a short lock: disk full, read-only file, lost Postgres connection |
-| clock skew | our clock more than 60 s from a source's `Date` header (checked on accepted deliveries) |
-| backup failed | the nightly `wsync backup` did not produce a file |
-| unknown currency | a payment in a currency the exponent table doesn't know; its sheet row is held back ([Q62](grilling-log.md)) |
+| source or sink paused | with the reason |
+| dead jobs | the first, then an hourly digest while any remain |
+| verify differences | a nightly run finds differences it can't repair, or the same payment stale two nights running |
+| silent webhooks, horizon near | [sweeper.md](sweeper.md) |
+| conflict | a known event id with a different fingerprint |
+| sheet changed during write | a moved row was caught and repaired |
+| missing permission | an optional read returned 403 |
+| unknown currency | a sheet row held back ([Q62](grilling-log.md)) |
+| database writes failing, clock skew, backup failed, sheet capacity | as named |
+
+In the pitch-ready cut only three kinds exist: paused, dead jobs, verify differences. The dead-man's switch covers a dead process ([hosting.md](hosting.md)).
 
 ## Configuration and secrets
 
-Everything that isn't secret lives in `webhook-sync.toml`; secrets come from environment variables or `.env`, never the TOML ([Q46](grilling-log.md)). Validated at startup with messages that say what to fix.
+Everything that isn't secret lives in `webhook-sync.toml`; secrets come from environment variables or `.env`, never the TOML ([Q46](grilling-log.md)).
 
 ```toml
 [service]
-listen = "127.0.0.1:8000"
+public_listen = "0.0.0.0:8000"      # webhooks and /health only
+admin_listen = "127.0.0.1:8001"     # secrets: ADMIN_TOKENS=label:token,...
 timezone = "Asia/Kolkata"
 retry_profile = "production"        # or "demo"
 
 [sources.stripe]
-mode = "test"                       # secrets: STRIPE_WEBHOOK_SECRETS (comma-separated, newest first), STRIPE_API_KEY
-rate_limit_per_second = 10
-
-[sources.razorpay]
-enabled = false
-mode = "test"                       # secrets: RAZORPAY_WEBHOOK_SECRETS, RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET
+mode = "test"                       # secrets: STRIPE_WEBHOOK_SECRETS (newest first), STRIPE_RESTRICTED_KEY
+account = "acct_…"
+metadata_keys = ["order_id"]
 
 [sinks.sheets]
-spreadsheet_id = "1AbC…"            # secret: GOOGLE_SERVICE_ACCOUNT_JSON (path or JSON)
-columns = ["payment_id", "source", "created", "status", "amount", "currency",
-           "refunded", "dispute", "customer_email", "description",
-           "written_from", "last_event", "updated"]
+spreadsheet_id = "1AbC…"            # secret: GOOGLE_SERVICE_ACCOUNT_JSON, or GOOGLE_OAUTH_REFRESH_TOKEN
+columns = ["payment_id", "source", "created", "status", "amount", "currency", "refunded",
+           "settled", "fee", "net", "settled_in", "method", "dispute", "customer_email",
+           "description", "metadata", "via", "note", "updated"]
 mask_email = true
+
+[sweeper]
+initial_lookback_days = 30
+heartbeat_url = "https://hc-ping.com/…"
 
 [verify]
 days = 30
 nightly_at = "02:00"
 auto_repair = true
 
-[sweeper]
-initial_lookback_days = 30          # first start only; 0 = start empty
-
 [retention]
-payload_days = 90
+payload_days = 30
 
 [alerts]
 url = ""                            # Slack or Discord incoming-webhook URL; empty = banner only
 ```
 
-`DATABASE_URL` selects Postgres; without it, the database is `data/webhook-sync.db`.
-
 ## Starting and stopping
 
-**Start:** validate config (fail closed, [receiver.md](receiver.md)) → refuse to start if the database's `schema_version` is newer than any migration this code knows (an older copy started against a newer database) → apply migrations → release any leases held by this host's previous run → start loops → start accepting deliveries.
+**Start:** take the lock file → validate config (fail closed, [receiver.md](receiver.md)) → refuse if the database's schema is newer than this code → apply migrations → return any `running` jobs whose `claimed_by` is a previous run of this instance to waiting, with the attempt counted and normal backoff, as the reaper does (a job that crashes the process every time must still reach `dead`) → start loops → start accepting deliveries.
 
-**Stop** ([Q37](grilling-log.md)): answer 503 to new deliveries → stop claiming → give running jobs up to 20 s to finish and record their result → release the leases of anything unfinished (back to waiting, attempt refunded, `attempts` row marked `released`) → exit. Results are recorded with a fresh database session, never one tied to the cancelled request; driftless records results with an already-cancelled context, which leaves jobs stuck in `running`. Docker Compose sets `stop_grace_period: 30s` because Docker's default of 10 s is shorter than the 20 s drain.
+**Stop** ([Q37](grilling-log.md)): answer 503 to new deliveries → stop claiming → give running jobs up to 20 s → release the leases of anything unfinished (back to waiting, attempt refunded) → release the lock file → exit. Results are recorded with a fresh connection, never one tied to a cancelled request. Platforms and Compose are given a 30 s stop grace period.
 
 ## Logs and health
 
-- **Logs:** one JSON object per line, UTF-8 forced (so an emoji in a description can't crash a Windows console), each line carrying `event_id`, `job_id` and `payment_key` where known. Never logged: secrets, signatures, raw bodies, emails, phone numbers ([Q21](grilling-log.md), [Q45](grilling-log.md)).
-- **`GET /health`:** 200 if the process is up.
-- **`GET /ready`:** 200 if the database answers, migrations are current, and no source is paused. Docker's health check uses it.
-
-## Retention and pruning
-
-The pruner runs daily at 03:00 local time, deleting or blanking 1,000 rows per transaction so SQLite's write lock is never held long. The table of what is kept for how long is in [data-model.md](data-model.md).
-
-## Backups
-
-SQLite: `wsync backup` runs `VACUUM INTO backups/webhook-sync-<date>.db`, a consistent copy taken while the service runs; it runs nightly after the pruner and keeps 7. Postgres: the client's provider ([Q49](grilling-log.md)).
-
-**Restoring an old backup:** stop, replace the file, start, run `wsync sweep`, then `wsync verify --full --repair`. The sweeper re-lists everything since the backup's checkpoint, so the events the backup lacks come back.
+- **Logs:** one UTF-8 JSON object per line, carrying `event_id`, `job_id` and `payment_key` where known. Never logged: secrets, signatures, raw bodies, emails, phone numbers.
+- **`GET /health`** (public): 200 if the process is up.
+- **`GET /ready`** (admin port): 200 if a delivery can be stored now: the database is writable and migrations are current. Paused sources and sinks do **not** fail it; a hosting platform would otherwise restart a receiver that is working ([Q81](grilling-log.md), F27).
+- **`GET /status`** (admin port): paused sources and sinks, counters, last sweep and verify, as JSON.
 
 ## SQLite settings
 
-| Setting | Why ([Q50](grilling-log.md)) |
+| Setting | Why |
 |---|---|
-| `journal_mode=WAL` | Admin pages read while the worker writes |
-| `synchronous=FULL` | Each commit is on disk before we answer 202, so even a power cut can't lose an acknowledged event |
-| `busy_timeout=5000` | Wait up to 5 s for the write lock instead of failing at once; past that, the receiver answers 503 |
-| `BEGIN IMMEDIATE` for every write | Takes the write lock at the start, avoiding the lock-upgrade deadlock between two writers |
-| Database on a local disk | `serve` warns and `doctor` fails on a UNC or mapped network path and on known sync folders (OneDrive, Dropbox, Google Drive), best effort: SQLite's locking is unreliable there |
-
-## Running it for a client: Docker Compose
-
-```mermaid
-flowchart LR
-  NET["Internet<br/>Stripe · Razorpay"] -- "HTTPS" --> CAD["caddy<br/>(automatic TLS)"]
-  CAD --> APP["webhook-sync<br/>wsync serve"]
-  APP --- VOL[("volume: data/<br/>SQLite + backups")]
-  APP -. "optional" .- PG[("postgres")]
-```
-
-`compose.yml` has the app, a Caddy container for HTTPS (sources require HTTPS in live mode), a named volume for `data/`, an optional Postgres profile, the health check on `/ready`, and `stop_grace_period: 30s`. For the local demo, no Compose is needed: `stripe listen --forward-to localhost:8000/webhooks/stripe` tunnels events in ([Q5](grilling-log.md)).
-
-## Open questions
-
-- Whether Caddy belongs in the default Compose file or only in a documented example, since many clients' hosts terminate HTTPS themselves. Written: included, behind a Compose profile.
+| WAL mode | Readers don't wait for the writer |
+| `synchronous=FULL` | A commit is on disk before we answer 202, so a power cut can't lose an acknowledged event ([Q50](grilling-log.md)) |
+| One writer connection behind an async lock, `BEGIN IMMEDIATE` issued explicitly | Writes queue in our code, in order; the audit measured a pool shedding load as "database is locked" (F14). The storm test asserts zero 503s and a p99 under 2 s ([Q83](grilling-log.md)) |
+| A read-only connection (`mode=ro`) for pages, verify and exports | Reads never take the write lock |
+| `busy_timeout=5000` | Only matters for a command-line process writing while no server runs |
+| A local disk | WAL is unsafe on network drives and in synced folders |
 
 ## Where to go next
 
-[edge-cases.md](edge-cases.md) and [testing.md](testing.md): how all of this is proved.
+[hosting.md](hosting.md): where it runs, and what happens around it.

@@ -1,8 +1,8 @@
 # The sweeper
 
-**What this page contains.** Why a sweeper is needed, how it catches up from a checkpoint for Stripe and for Razorpay, the 30-day horizon, how it detects silent webhooks, and manual backfill and replay.
+**What this page contains.** Why a sweeper is needed, how it catches up in time slices for Stripe and Razorpay, the first start, the 30-day horizon, silent webhooks, the dead-man's switch, and manual backfill and replay.
 
-**How to read it.** The first section is the reason. The flowchart is Stripe's sweep; Razorpay's differences follow.
+**How to read it.** The first section is the reason; the flowchart is Stripe's sweep; Razorpay's differences follow.
 
 ## Why it exists
 
@@ -14,68 +14,70 @@ Webhooks are best-effort. A source gives up on a failed delivery eventually, and
 | Stripe, test mode | 3 times over a few hours | stops |
 | Razorpay | 24 hours | **disables the webhook** |
 
-So a server that is down for an afternoon, a bad deploy, or a restored backup can lose events for good. n8n has exactly this gap: it doesn't queue events missed while it's down (feature inventory). The **sweeper** asks the source what happened since our **checkpoint** and stores anything missing, through the same path as a delivery ([Q38](grilling-log.md)).
+A server that is down for an afternoon, a bad deploy or a restored backup can therefore lose events for good. The **sweeper** asks the source what happened and stores anything missing ([Q38](grilling-log.md)).
 
-## Stripe: one sweep
+## Stripe: time slices
 
-Runs at startup (after a random 0-30 s delay, so restarting many copies doesn't hit Stripe at once) and every 10 minutes. It is a singleton, so two processes never sweep together.
-
-**The first start** ([Q64](grilling-log.md)). With no checkpoint yet, the sweeper looks back `initial_lookback_days` (default 30, Stripe's events horizon), so a new buyer's sheet starts with the last month's payments. `0` starts empty; older history comes from `backfill`. The choice is logged loudly on first start.
+The sweeper runs at startup (after a random 0-30 s delay) and every 10 minutes. It walks source time in **time slices** of up to 6 hours, and moves the **checkpoint** only after a whole slice is stored ([Q72](grilling-log.md)).
 
 ```mermaid
 flowchart TD
-  S["start sweep"] --> H{"checkpoint older<br/>than 30 days?"}
-  H -- yes --> FB["full backfill:<br/>list PaymentIntents by creation date<br/>→ a ledger job for each"]
-  H -- no --> W{"older than 25 days?"}
-  W -- yes --> AL["alert: horizon near"] --> L
-  W -- no --> L["GET /v1/events<br/>types = handled types<br/>created ≥ checkpoint − 60 s<br/>oldest first, 100 a page"]
-  L --> P["for each event on the page:<br/>store through the receiver's transaction<br/>(ON CONFLICT DO NOTHING), origin = 'sweep'"]
-  P --> CP["same transaction:<br/>checkpoint = newest created on the page"]
-  CP --> MORE{"more pages?"}
-  MORE -- yes --> L
-  MORE -- no --> SIL["silent-webhook check"]
+  S["start sweep"] --> NOW["source_now = the Date header<br/>of Stripe's first response"]
+  NOW --> H{"source_now − checkpoint<br/>over 30 days?"}
+  H -- yes --> FB["full backfill: list PaymentIntents<br/>since the checkpoint, each with<br/>its listed state, as ledger jobs"]
+  H -- no --> W{"over 25 days?"}
+  W -- yes --> AL["alert: horizon near"] --> SL
+  W -- no --> SL["slice: start = checkpoint,<br/>end = min(start + 6 h, source_now − 60 s)"]
+  SL --> L["list events created in<br/>[start − 10 min, end), every page"]
+  L --> P["insert each if absent<br/>(origin 'sweep'), with its ledger job"]
+  P --> CP["then, in its own transaction:<br/>checkpoint = end"]
+  CP --> MORE{"end < source_now − 60 s?"}
+  MORE -- yes --> SL
+  MORE -- no --> DONE["silent-webhook check;<br/>ping the dead-man's switch"]
 ```
 
-- **All events of our types, not only undelivered ones.** Stripe's `delivery_success=false` filter would miss events Stripe delivered successfully but we lost, for instance after restoring an old backup ([Q49](grilling-log.md)).
-- **The 60 s overlap window.** An event can appear in the list a little after its `created` time. Re-reading the last minute costs a few duplicate candidates, which the dedupe key turns into nothing.
-- **A page and its checkpoint commit together.** A crash mid-sweep resumes from the last committed page instead of starting over; driftless saves no progress until the end (feature inventory).
-- **The checkpoint uses Stripe's clock, not ours.** It is the newest `created` value actually seen, so our clock drifting can't open a gap.
-- **Swept events look like deliveries.** Same verification of shape, same dedupe, same ledger job. Their `origin` is `sweep`, which the sheet and the video show.
+- **Why slices, not pages.** Stripe lists events filtered by time **newest first** (oldest first needs an id cursor). Saving a checkpoint per page would, after a crash between pages, skip the older ones. A slice is committed only after every page of it is stored, so a crash re-walks at most one slice, and dedupe makes that free (F03).
+- **The checkpoint is on Stripe's clock**, taken from the `Date` header, so our clock drifting can't open a gap. An empty slice still advances it, so a quiet account never looks stale.
+- **A 10-minute overlap** is re-read before each slice, because an event can become listable a little after its `created` time.
+- **All events of our types**, not only undelivered ones, so events lost after restoring a backup come back too.
+- **Insert if absent, compare nothing.** A swept copy of an event never has the delivered bytes, so the sweeper doesn't check for conflicts and writes no `deliveries` row; its own count goes on `checkpoints` (F02).
 
-## The 30-day horizon
+## The first start and the horizon
 
-Stripe lists events for 30 days only. The sweeper warns at 25 days since the checkpoint. Past 30 days, it can no longer see what it missed, so it switches to a **full backfill**: list every PaymentIntent created since the checkpoint and give each a ledger job. Fetch mode makes that safe, since a payment we already hold just costs one API call and changes nothing. The event trail for that gap is missing, and the admin page says so.
+With no checkpoint yet, the sweeper starts `initial_lookback_days` back (default 30, Stripe's events horizon), so a new buyer's sheet begins with the last month's payments; `0` starts empty; older history by `backfill` ([Q64](grilling-log.md)).
 
-## Razorpay: polling instead
+Stripe lists events for 30 days only. Past 25 days behind, an alert. Past 30, the sweeper switches to a **full backfill**: it lists every PaymentIntent created since the checkpoint, with its current state, and enqueues each as a ledger job carrying that listed state, so nothing is fetched twice (F18). The event trail for that gap is missing, and the admin page says so.
 
-Razorpay has no events list ([Q39](grilling-log.md)). Each sweep lists `GET /v1/payments` and `GET /v1/refunds` with `from = checkpoint − 10 min`, 100 a page. For each payment found:
-- a **synthetic event** is stored, with `origin = 'sweep'` and event id `sweep:<payment id>:<hash of the state seen>`, so seeing the same state twice is a duplicate and a changed state is new;
-- a ledger job is enqueued.
+## Razorpay: polling
 
-Polling sees current states, not the steps between them, so the event trail has gaps for anything learned this way. The README states this limit.
+Razorpay has no events list, and its lists filter by **creation** time ([sources.md](sources.md), [Q86](grilling-log.md)):
+1. The same slices over `GET /v1/payments` and `GET /v1/refunds`, each payment stored as a synthetic event (`origin = 'sweep'`, id `sweep:<payment id>:<state hash>`) with a ledger job.
+2. Hourly, a re-fetch of every ledger payment younger than 7 days that is `authorized` or has a refund not yet processed.
+3. Hourly, a poll of `GET /v1/disputes`.
+
+Changes to older payments reach the ledger through nightly verify. The README states the gap.
 
 ## Silent webhooks
 
-If the sweeper keeps finding events that never arrived as deliveries, the source has probably stopped sending: a disabled Razorpay webhook, a changed URL, an expired tunnel ([Q40](grilling-log.md)).
-
-An alert fires when either:
-- a sweep stores at least one event whose `origin` is `sweep` and that is more than 10 minutes old (so the source had time to deliver it), or
+If the sweeper keeps finding events that never arrived as deliveries, the source has probably stopped sending: a disabled Razorpay webhook, a changed URL, an expired tunnel ([Q40](grilling-log.md)). An alert fires when either:
+- a sweep stores an event more than 10 minutes old whose type the webhook endpoint **is** subscribed to (types it isn't subscribed to are reported once by `doctor`, not every hour, F29); or
 - no delivery has arrived for 24 hours while sweeps keep finding activity.
 
-The alert says: "Events are reaching us only through the sweeper. Check the webhook settings in your Stripe/Razorpay dashboard." It is rate-limited to once an hour ([Q42](grilling-log.md)).
+The alert says: "Events are reaching us only through the sweeper. Check the webhook settings in your Stripe/Razorpay dashboard."
+
+## The dead-man's switch
+
+Every alert above comes from inside the running process, so a dead process, a full disk or a stopped server says nothing. After every successful sweep, the sweeper pings a **heartbeat URL** (Healthchecks.io's free tier, or any equivalent). If the pings stop, that outside service emails or messages the buyer and Lalit. An outside uptime check on `/health` covers the receiver ([Q81](grilling-log.md), [hosting.md](hosting.md)).
 
 ## Manual backfill and replay
 
-| Action | Admin page | CLI | What it does |
-|---|---|---|---|
-| Replay one event | button on the event's timeline | `wsync replay <event_id>` | Enqueues a ledger job for its payment; the fetch writes the current state. Logged as an admin action. |
-| Backfill a date range | form on the overview | `wsync backfill --from 2026-09-01 --to 2026-09-10` | Runs the sweep logic over that range without moving the checkpoint; events stored get `origin = 'backfill'`. Past the horizon, it lists payments instead. |
-| Sweep now | button | `wsync sweep` | One ordinary sweep, immediately. |
+| Action | Command | What it does |
+|---|---|---|
+| Replay one event | `wsync replay <event_id>` | Enqueues a ledger job for its payment; the fetch writes the current state. Works for any age, since only the payment id is needed. |
+| Backfill a date range | `wsync backfill --from 2026-09-01 --to 2026-09-10` | Lists PaymentIntents created in that range with their state, as ledger jobs, without moving the checkpoint. |
+| Sweep now | `wsync sweep` | One ordinary sweep, immediately. |
 
-## Open questions
-
-
-- Whether the sweep interval should shorten after an outage is detected. Written: no; 10 minutes, plus "Sweep now".
+With a server running, these commands ask it over its admin port to do the work ([ADR 0007](decisions/0007-one-server-process-per-database.md)). Each is logged as an admin action.
 
 ## Where to go next
 

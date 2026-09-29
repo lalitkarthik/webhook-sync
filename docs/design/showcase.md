@@ -1,63 +1,64 @@
 # Showcase
 
-**What this page contains.** What the demo has to show a buyer, the five scenes of the 60-second video, the `wsync demo` command that drives them, and the README's outline.
+**What this page contains.** Who the demo is for, the prototype GIF, the scenes of the pitch-ready video, the `wsync demo` command, and the README.
 
-**How to read it.** The scenes table is the video script. Each scene maps to a test in [testing.md](testing.md), so what the video shows is also what CI proves.
+**How to read it.** The scenes table is the video script. Each scene maps to a check in [testing.md](testing.md), so what the video shows is also what CI proves.
 
-## What a buyer must come away believing
+## Who it is for
 
-The posted budgets for "connect Stripe to my sheet" run $10-250, below the $250 floor. The demo earns a $300-500 price only by showing what no-code tools can't: no duplicates, no silent loss, catching up after an outage, and a nightly proof. "It connects X to Y" is worth $50; "it can't lose or double-count a payment, and here's the proof" is the product (vault research, [Q1](grilling-log.md)).
+Three audiences, one core ([Q66](grilling-log.md)):
+- **A small business that wants a live sales sheet.** The clearest demo: anyone understands "five resends, one row".
+- **n8n and Zapier users who lose or double-count events.** The duplicate-storm scene shows their pain; the forwarding sink is the offer that fixes it ([next-adapters.md](next-adapters.md)).
+- **A SaaS founder who needs payment and subscription state in their own database.** Where the posted money is; the database sink is the first paid adapter.
 
-## The five scenes
+"Stripe to a Google Sheet" alone already sells for $0-35 a month (Coupler, Stripe Marketplace apps, Pabbly), so the demo leads with what those don't do: updates within seconds, no subscription, self-hosted and owned by the buyer, and a nightly proof (audit, competitors section).
 
-Result first: Upwork previews only the first 5-10 seconds on hover ([Q56](grilling-log.md)). The screen shows the sheet on the left and the admin Overview on the right.
+## The prototype GIF (for pitches from 8 October)
 
-| # | Scene | Seconds | What the viewer sees | Proved in CI by |
+About 20 seconds, from the 8-10 h prototype ([Q67](grilling-log.md), [Q93](grilling-log.md)):
+1. **Duplicate storm.** One payment; `stripe events resend` five times. The sheet keeps one row; the duplicates counter reads 4.
+2. **Outage and catch-up.** Server stopped; three payments made; server started. The rows appear, with Via = `sweep`.
+
+## The pitch-ready video
+
+Result first: Upwork previews only the first 5-10 seconds. The sheet on the left, a terminal with `wsync status` on the right.
+
+| # | Scene | Seconds | What the viewer sees | Proved by |
 |---|---|---|---|---|
-| 1 | **Duplicate storm** | 0-12 | One payment; `stripe events resend` five times. The sheet keeps one row; the duplicates counter goes 0 → 4. | load: duplicate storm |
-| 2 | **Outage and catch-up** | 12-26 | Server stopped; 10 payments triggered; server started. The sheet fills to 10/10, each row tagged `sweep`. | crash points, sweeper integration |
-| 3 | **Sheet access revoked** | 26-40 | Service account unshared: backoff visible on the timeline, then the red "paused: 403" banner. Re-shared: Resume. All rows arrive; nothing lost. | property: FakeSheets 403 |
-| 4 | **Burst** | 40-52 | 200 payments at once. The API-call counter stops at about 6; 200 rows. Caption: "n8n forum: 56 of 100". | load: burst |
-| 5 | **End card** | 52-60 | Verify page: "Verified nightly: 0 differences". Name and contact. | verify integration |
+| 1 | **Duplicate storm** | 0-15 | As in the GIF, with fee and net filled in | load: duplicate storm |
+| 2 | **Outage and catch-up** | 15-35 | Ten payments while down; ten rows after, tagged `sweep` | crash point `mid_slice`; outage scenario |
+| 3 | **Verify and the Daily summary** | 35-55 | `wsync verify`: "last 30 days, N payments, 0 differences"; the Daily summary tab with gross, fees and net per day | verify scenario |
+| 4 | End card | 55-60 | Name and contact | |
 
-Title and end cards are made once with HyperFrames (Apache-2.0); recording with OpenScreen, captions from local Whisper, edit in Clipchamp (vault demo-video research). A separate GitHub README GIF per scene stays under 10 MB.
+Later, for the full video (rescripted after the audit, F36):
+- **Access revoked:** unshare the sheet; "paused: 403" within seconds, jobs waiting; re-share; Resume; the rows drain.
+- **Burst:** 200 payments created before the flusher starts, then "200 rows, N Sheets calls" with the real N.
+
+Title and end cards once with HyperFrames (Apache-2.0); recording with OpenScreen; captions from local Whisper; editing in Clipchamp (vault video research). README GIFs under 10 MB.
 
 ## wsync demo
 
-Each scene is a command, so a retake costs a minute instead of a setup ([Q56](grilling-log.md)):
-
 | Command | Does |
 |---|---|
-| `wsync demo reset` | Empties the database and the test spreadsheet's Payments tab; sets `RETRY_PROFILE=demo` |
-| `wsync demo duplicates` | Creates one payment through the Stripe CLI, waits for its row, resends its event five times |
-| `wsync demo outage` | Stops the receiver, triggers 10 payments, waits, restarts, runs a sweep |
-| `wsync demo revoke` | Prints the steps to unshare and re-share (the service account can't unshare itself), then watches until paused and resumed |
-| `wsync demo burst` | Triggers 200 payments and shows the Sheets call counter |
+| `wsync demo reset` | Empties the database and the demo spreadsheet's tabs; sets the demo retry profile |
+| `wsync demo duplicates` | Creates one payment with the Stripe CLI, waits for its row, resends its event five times |
+| `wsync demo outage` | Stops the receiver, creates payments, waits, restarts, runs a sweep |
+| `wsync demo verify` | Runs a full verify and opens the Daily summary |
 
-`demo` refuses to run unless every source is in test mode.
+`demo` refuses to run unless every source is in test mode **and** the spreadsheet id is on the configured demo allow-list, so a mistyped id can never empty a real sheet (F36).
 
 ## The README
 
-In this order ([Q57](grilling-log.md)):
-
-1. **The problem**, in two lines, with Zapier's own help page on duplicate rows and n8n's 56-of-100 thread.
-2. **Four GIFs**, one per scene.
-3. **The guarantees**, each with the test that proves it:
-   - one row per payment, however often an event is delivered
-   - nothing acknowledged is ever lost, even through a crash
-   - events missed while down are recovered automatically
-   - a broken sheet or key pauses and resumes; nothing is dropped
-   - every night, source, database and sheet are proved to agree
-4. **Architecture**: the overview diagram from [00-overview.md](00-overview.md).
-5. **Quickstart** in five commands: clone, `uv sync`, copy `.env.example`, `wsync doctor`, `wsync serve` with `stripe listen`.
-6. **Configuration**: the TOML, briefly.
-7. **Honest limits**: Razorpay is polled, so its event trail has gaps; one buyer per deployment; rows appear a few seconds after the event; a sheet exported to CSV can still carry formula text into Excel.
-8. **Credits**: ported code and licences ([ADR 0005](decisions/0005-permissive-licences-only.md)).
-
-## Open questions
-
-- Whether to also record a 2-3 minute walkthrough for buyers who want more than 60 seconds. Written: later, if a pitch asks.
+1. **The problem**, in two lines: Zapier's own help page on duplicate rows, and n8n's 56-of-100 thread.
+2. **The GIFs.**
+3. **The guarantees**, each with the test that proves it: one row per payment however often an event arrives; nothing acknowledged is lost, even through a crash; events missed while down come back; every night, the last 30 days are proved to match Stripe, and the sheet the database.
+4. **"Why not Coupler, Zapier or Hookdeck?"**, answered in four lines: seconds, not hours; no subscription; self-hosted and owned; the proof.
+5. **Architecture**: the overview diagram.
+6. **Quickstart** in five commands.
+7. **Honest limits:** rows appear a few seconds after the event; one buyer per deployment; Razorpay is polled, so changes to older payments arrive with nightly verify; the sheet is machine-owned (use filter views); a sheet exported to CSV can carry formula text into Excel.
+8. **Next adapters:** forwarding to n8n or Zapier; your own database with subscriptions.
+9. **Credits** for ported code ([ADR 0005](decisions/0005-permissive-licences-only.md)).
 
 ## Where to go next
 
-[build-order.md](build-order.md): the order it gets built in, and when it is ready to pitch.
+[build-order.md](build-order.md): the order it gets built in.

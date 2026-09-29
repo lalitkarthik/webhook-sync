@@ -1,14 +1,18 @@
 # Webhook sync: overview
 
-**What this page contains.** A picture of the whole service, what each part does and deliberately doesn't do, the rules every part follows, and where to read next.
+**What this page contains.** A picture of the whole service, what each part does and deliberately doesn't do, the rules every part follows, who it is for, and where to read next.
 
-**How to read it.** Read the first four sections, then follow the reading order at the bottom. Words in **bold** are defined in [CONTEXT.md](../../CONTEXT.md). Everything here is a **decision, not a description**: none of it is built yet. The questions behind each decision are in [grilling-log.md](grilling-log.md).
+**How to read it.** Read the first five sections, then follow the reading order at the bottom. Words in **bold** are defined in [CONTEXT.md](../../CONTEXT.md). Everything here is a **decision, not a description**: none of it is built. The questions behind each decision are in [grilling-log.md](grilling-log.md).
 
-**Status: design complete, awaiting review** (2026-09-30). Every question is answered in [grilling-log.md](grilling-log.md) (Q1–Q61). The part pages below are the design; the implementation plan is written later.
+**Status (2026-09-30).** Designed in grilling rounds Q1-Q96 (Q94-Q96 still open), audited independently ([38 findings](audit/2026-09-30-design-audit.md)), and revised; [the audit response](audit/2026-09-30-audit-response.md) maps every finding to its change. Awaiting review. The implementation plan is written later.
 
 ## What it is, in one paragraph
 
-A small service that receives payment **events** from Stripe and Razorpay and keeps a database and a Google Sheet in step with them. However often an event is delivered, in whatever order, and whatever breaks along the way (the server, the sheet, the source), it ends with exactly one correct row per **payment**. Every night it proves that the sheet matches the source. It exists because no-code tools get this wrong: Zapier's own help pages admit duplicate rows, and an n8n forum thread shows 100 concurrent events producing 56-63 rows, all marked successful.
+A small service that receives payment **events** from Stripe (and later Razorpay) and keeps a database and a Google Sheet in step with them. However often an event is delivered, in whatever order, and whatever breaks along the way, it ends with exactly one correct row per **payment**, with its fee, net and payment method, plus a **Daily summary**. Every night it proves the last 30 days match the source. It exists because no-code tools get this wrong: Zapier's own help pages admit duplicate rows, and an n8n forum thread shows 100 concurrent events producing 56-63 rows, all marked successful.
+
+## Who it is for
+
+Three **buyers**, one core ([Q66](grilling-log.md)): a small business that wants a live sales sheet; a team whose n8n or Zapier automations lose or double-count events; and a SaaS founder who needs payment and subscription state in their own database. The sheet is the clearest demo. The database sink is the first paid adapter, because that is where the posted jobs are ([next-adapters.md](next-adapters.md)).
 
 ## The whole service, in one picture
 
@@ -16,35 +20,32 @@ A small service that receives payment **events** from Stripe and Razorpay and ke
 flowchart LR
   subgraph SRC["Sources"]
     ST["Stripe"]
-    RZ["Razorpay"]
+    RZ["Razorpay (later)"]
   end
-  subgraph SVC["webhook-sync (one process)"]
+  subgraph SVC["wsync serve: one process, one writer"]
     RC["Receiver<br/>verify · dedupe · store"]
-    SW["Sweeper<br/>catch up from checkpoint"]
+    SW["Sweeper<br/>time slices"]
     LW["Ledger worker<br/>fetch · upsert"]
-    FL["Flusher<br/>batch write"]
-    VF["Verify<br/>nightly proof"]
-    AD["Admin pages · CLI · alerts"]
+    FL["Flusher<br/>batch write · check"]
+    VF["Verify<br/>hourly and nightly"]
   end
-  DB[("Database: SQLite or Postgres<br/>events · jobs · payments ·<br/>attempts · checkpoints")]
-  GS[("Google Sheet<br/>Payments · Sync status")]
-  AL["Slack / Discord<br/>alert URL"]
+  DB[("SQLite<br/>events · jobs · payments")]
+  GS[("Google Sheet<br/>Payments · Daily summary · Sync status")]
+  HC["Heartbeat service<br/>(outside)"]
   ST & RZ -- "deliveries" --> RC
   RC -- "one transaction:<br/>event + ledger job" --> DB
-  SW -- "list events / payments" --> ST & RZ
-  SW -- "missing events,<br/>same path" --> DB
+  SW -- "list what we missed" --> ST & RZ
+  SW -- "same path" --> DB
+  SW -- "ping" --> HC
   DB -- "ledger jobs" --> LW
   LW -- "fetch current state" --> ST & RZ
-  LW -- "one transaction:<br/>payments row + mirror job" --> DB
+  LW -- "one transaction:<br/>row + mirror job" --> DB
   DB -- "mirror jobs" --> FL
-  FL -- "1 read + 1 batchUpdate" --> GS
+  FL -- "2 reads + 1 write" --> GS
   VF -. "compare" .-> ST & DB & GS
-  VF -- "repair = enqueue jobs" --> DB
-  AD --- DB
-  AD --> AL
 ```
 
-## One payment's path, in order
+## One payment's path
 
 ```mermaid
 sequenceDiagram
@@ -57,15 +58,16 @@ sequenceDiagram
   participant G as Google Sheet
   S->>R: POST /webhooks/stripe (payment_intent.succeeded)
   R->>R: size, type, signature, mode, event id
-  R->>D: one transaction: insert event (once) + enqueue ledger job
+  R->>D: one transaction: event (once) + ledger job (or rerun)
   R-->>S: 202 Accepted
-  Note over S,R: a second delivery of the same event gets 200 and changes nothing
-  W->>D: claim ledger job (lease, claim token)
-  W->>S: GET payment_intent (current state)
-  W->>D: one transaction: upsert payments row + enqueue mirror job + complete job
+  Note over S,R: a resend of the same event gets 200 and changes nothing
+  W->>D: claim the payment's one live job
+  W->>S: GET payment_intent with its balance transaction
+  W->>D: one transaction: upsert row + mirror job + complete
   F->>D: claim waiting mirror jobs (up to 200)
-  F->>G: read header row + key column
-  F->>G: one batchUpdate: update rows in place, append new rows, status tab
+  F->>G: read keys by tab id
+  F->>G: one batchUpdate: rows, Daily summary, Sync status
+  F->>G: re-read the keys just written
   F->>D: complete mirror jobs
 ```
 
@@ -73,55 +75,49 @@ sequenceDiagram
 
 | Part | What it does | What it deliberately does not do |
 |---|---|---|
-| **Receiver** | Checks size, content type, signature, **mode** and **event id**; stores the event once; creates its **ledger job** in the same transaction; answers 202 (new) or 200 (**duplicate**). [receiver.md](receiver.md) | Never calls a source's API. Never does work inline. Never answers 500 to bad input. |
-| **Source adapters** | One per **source**: verify a delivery, find its event id, say which payment an event is about, fetch a payment's current state, list events or payments for the sweeper. [sources.md](sources.md) | Never touch the queue, the ledger or a sink. |
-| **Queue** | Six operations on the `jobs` table: enqueue (with **coalescing**), claim, heartbeat, complete, fail, reap. Leases, **fencing**, retry classes, the **dead-letter queue**, **paused sinks**. [queue.md](queue.md) | Knows nothing about payments. Can be replaced by Redis Streams later ([ADR 0004](decisions/0004-queue-in-the-database-behind-an-interface.md)). |
-| **Ledger worker** | Claims a ledger job, fetches the payment, upserts its **business row** with **terminal states** sticky, and creates a **mirror job** only if the row changed. [ledger-worker.md](ledger-worker.md) | Never calls a source's API inside a database transaction. |
-| **Sheets sink** | The **flusher** writes waiting mirror jobs in one batch by key; checks the header row; pauses on a revoked key or a changed layout; **rebuilds** the tab from the ledger. [sheets-sink.md](sheets-sink.md) | Never reads the sheet as truth. Never deletes the buyer's rows. |
-| **Sweeper** | From each source's **checkpoint**, finds events or payments we never received and stores them through the receiver's path. Detects **silent webhooks**. [sweeper.md](sweeper.md) | Never writes business rows directly. |
-| **Verify** | Compares source, ledger and sheet; lists **missing**, **stale** and **orphaned** payments and sheet differences; **repairs** by enqueuing jobs. [verify.md](verify.md) | Never edits a row. |
-| **Admin pages, CLI, alerts** | Overview, events, timelines, dead letters, verify, **admin actions**; `wsync` commands including `doctor`; one outgoing alert URL. [operations.md](operations.md) | No side door: every action goes through the same jobs as automatic work. |
+| **Receiver** | Checks rate, size, type, signature, **mode** and **event id**; stores the event once with its **ledger job** in one transaction; answers 202 or 200. [receiver.md](receiver.md) | Never calls a source. Never does work inline. Never answers 500 to bad input. |
+| **Source adapters** | Verify, describe (payment key, **fingerprint**), fetch a payment's current state, list for the sweeper and verify, check setup. [sources.md](sources.md) | Never touch the queue or a sink. |
+| **Queue** | One live job per payment with a **rerun** flag; leases, **fencing**, three error classes, backoff, the **dead-letter queue**, pausing. [queue.md](queue.md) | Knows nothing about payments beyond the key ([ADR 0004](decisions/0004-queue-in-the-database-behind-an-interface.md)). |
+| **Ledger worker** | Fetches the payment, builds its **business row** with fee, net, method and metadata, upserts it, and makes a **mirror job** only if something changed. [ledger-worker.md](ledger-worker.md) | Never calls a source inside a transaction. Never writes an event's own contents ([ADR 0002](decisions/0002-fetch-current-state-not-event-payload.md)). |
+| **Sheets sink** | The **flusher** writes machine-owned tabs by key in one batch, checks the write landed, keeps the Daily summary; pauses with a reason; **rebuilds** in place. [sheets-sink.md](sheets-sink.md) | Never reads the sheet as truth. Never touches the buyer's own tabs ([ADR 0006](decisions/0006-machine-owned-tabs.md)). |
+| **Sweeper** | Walks the source's history in **time slices** from the **checkpoint**, stores what is missing, detects **silent webhooks**, pings the dead-man's switch. [sweeper.md](sweeper.md) | Never writes business rows directly. |
+| **Verify** | Hourly: ledger against sheet. Nightly: source against ledger, and independent totals. **Repair** by enqueuing jobs. [verify.md](verify.md) | Never edits a row. Never claims more than the last 30 days. |
+| **Operations** | The admin port, `wsync` commands, `doctor`, alerts; hosting, backups, monitoring, handover. [operations.md](operations.md), [hosting.md](hosting.md) | No side door: every action goes through the same jobs. |
 
 ## Rules every part follows
 
 1. **The database is the ledger; the sheet is a mirror.** [ADR 0001](decisions/0001-database-is-the-ledger-sheet-is-a-mirror.md)
-2. **Store first, answer second, work later.** A change and the job it causes are written in one transaction (the **outbox**), so nothing acknowledged can be lost. [ADR 0004](decisions/0004-queue-in-the-database-behind-an-interface.md)
-3. **The current state beats the payload.** Events are hints; the worker fetches what is true now. [ADR 0002](decisions/0002-fetch-current-state-not-event-payload.md)
-4. **Every write is idempotent.** Running any job twice gives the same result as running it once.
-5. **Nothing disappears silently.** Every delivery ends as stored, duplicate, conflict or rejection; every job ends as done, dead with a reason, or resolved by a person; every event is handled or **ignored** with its type recorded.
-6. **Fail closed.** A missing secret, a missing admin token on a public address, or a mode mismatch stops the service from starting.
-7. **Everything traces back to its event.** Every job, attempt, row change and log line carries the event id that caused it.
-8. **One buyer per deployment.** [ADR 0003](decisions/0003-one-buyer-per-deployment.md)
-9. **Permissive licences only.** [ADR 0005](decisions/0005-permissive-licences-only.md)
+2. **Store first, answer second, work later.** A change and the job it causes commit together (the **outbox**).
+3. **The current state beats the event.** Events are hints; the worker fetches what is true now. [ADR 0002](decisions/0002-fetch-current-state-not-event-payload.md)
+4. **One live job per payment.** Work for a payment is never done twice at once. [ADR 0004](decisions/0004-queue-in-the-database-behind-an-interface.md)
+5. **Every write is idempotent.** Running any job twice gives the same result as once.
+6. **Nothing disappears silently.** Every delivery ends as stored, duplicate, conflict or rejection; every job as done, dead with a reason, or resolved by a person; every event as handled or ignored with a reason.
+7. **Fail closed.** A missing secret, a full-access Stripe key, a mode mismatch or a second server stops the service from starting.
+8. **Everything traces back to its event**, including events folded into one job.
+9. **One buyer and one server process per database.** [ADR 0003](decisions/0003-one-buyer-per-deployment.md), [ADR 0007](decisions/0007-one-server-process-per-database.md)
+10. **Permissive licences only.** [ADR 0005](decisions/0005-permissive-licences-only.md)
 
-## What version 1 includes, and what it leaves out
+## What is built when
 
-| In version 1 | Left out on purpose |
+| Stage | Contents |
 |---|---|
-| Stripe (test and live), then Razorpay | Standard Webhooks generic source (designed for in [sources.md](sources.md), built later) |
-| SQLite by default; Postgres via `DATABASE_URL` | Redis (a queue backend could be added later) |
-| Google Sheets mirror | Other mirrors: Airtable, Notion, a client's own database, demo 1's JSON |
-| One payment per row, with refunds and disputes as columns | Subscriptions, invoices, payouts, customers as their own rows |
-| Admin pages, CLI, Slack/Discord alerts | Email alerts, Prometheus metrics, a public live demo |
-| One buyer, one account per source | Stripe Connect, several buyers in one deployment |
+| **Prototype** (8-10 h, for 8 October) | Stripe receiver, queue, fetch, flusher: a GIF of the duplicate storm and the outage catch-up |
+| **Pitch-ready cut** (24-28 h in all) | The prototype finished and tested; sweeper; verify; Daily summary; three scenes; README |
+| **After pitching** | Forwarding sink; admin pages, probes, rebuild and the full alert list; Checkout line items; Razorpay; Hypothesis suites |
+| **When asked** | Database sink with subscriptions; Postgres and several workers (Linux) |
+| **Not planned** | Stripe Connect or several buyers in one deployment; Shopify or WooCommerce orders; a public live demo |
+
+Details and hours in [build-order.md](build-order.md).
 
 ## Reading order
 
 1. [CONTEXT.md](../../CONTEXT.md): the words.
 2. This page.
-3. The parts, in the order an event meets them:
-   1. [data-model.md](data-model.md): every table, and what each column is for
-   2. [receiver.md](receiver.md): from delivery to 202, and every rejection
-   3. [sources.md](sources.md): the Stripe and Razorpay adapters, status order, fetching
-   4. [queue.md](queue.md): the job state machine, leases, retries, dead letters, pausing
-   5. [ledger-worker.md](ledger-worker.md): fetch, upsert, terminal states, the payload fallback
-   6. [sheets-sink.md](sheets-sink.md): the flush, the sheet's layout, tampering, rebuild
-   7. [sweeper.md](sweeper.md): checkpoints, the horizon, silent webhooks
-   8. [verify.md](verify.md): the nightly proof and repair
-4. Running it: [operations.md](operations.md): admin pages, CLI, `doctor`, alerts, config, shutdown, retention, backups.
-5. Proving it: [edge-cases.md](edge-cases.md) (every edge case, how it's handled, which test proves it) and [testing.md](testing.md).
-6. Selling it: [showcase.md](showcase.md): the five scenes, `wsync demo`, the README.
-7. [build-order.md](build-order.md): slices, package layout, the pitch-ready milestone.
-8. [decisions/](decisions/): five ADRs for the choices that are hard to reverse.
-9. [grilling-log.md](grilling-log.md): every question and answer (Q1–Q61).
-10. Research: [feature-inventory.md](../research/feature-inventory.md): what seventeen repos already do, their bugs, and what we take.
+3. The parts, in the order an event meets them: [data-model.md](data-model.md), [receiver.md](receiver.md), [sources.md](sources.md), [queue.md](queue.md), [ledger-worker.md](ledger-worker.md), [sheets-sink.md](sheets-sink.md), [sweeper.md](sweeper.md), [verify.md](verify.md).
+4. Running it: [operations.md](operations.md), [hosting.md](hosting.md).
+5. Proving it: [edge-cases.md](edge-cases.md), [testing.md](testing.md).
+6. Selling it: [showcase.md](showcase.md), [next-adapters.md](next-adapters.md).
+7. [build-order.md](build-order.md).
+8. [decisions/](decisions/): seven ADRs.
+9. [grilling-log.md](grilling-log.md) (Q1-Q93), the [design audit](audit/2026-09-30-design-audit.md) and the [audit response](audit/2026-09-30-audit-response.md).
+10. Research: [feature-inventory.md](../research/feature-inventory.md).

@@ -1,75 +1,88 @@
 # Build order
 
-**What this page contains.** The package layout, the eight slices in build order with what each ends with, the pitch-ready line, what must exist before slice 1, and where ported code comes from.
+**What this page contains.** The three stages (prototype, pitch-ready cut, after pitching), what each step contains and roughly how long it takes, the package layout, and where ported code comes from. The step-by-step implementation plan is written separately, later.
 
-**How to read it.** The picture is the plan. Each slice ends with something that works and is tested; nothing depends on a later slice. The step-by-step implementation plan is written separately, later.
+**How to read it.** The picture is the plan. The full design in the other pages is the target; this page is the order to reach it, with a working, shown result early ([Q67](grilling-log.md), audit F30).
 
-## Slices
+## Why it is staged
+
+The audit estimated the full slices at 85-123 hours. After pitching, demo 1 and demo 3, about 4-8 build hours a week are left for this repository, so building everything before pitching would mean pitching in mid-December at the earliest. Instead a prototype is shown from 8 October, a 24-28 hour cut makes it solid, and the rest follows as buyers ask. This repository's prototype is built before demo 1's MVP; after that, the posts that actually arrive decide where the hours go ([Q68](grilling-log.md)).
 
 ```mermaid
 flowchart LR
-  P0["0. Accounts<br/>Stripe test · Google service account"] --> S1
-  S1["1. Stripe → ledger<br/>receive · verify · store ·<br/>ledger job · payments"] --> S2["2. Queue robustness<br/>leases · fencing · retries ·<br/>dead letters · pause · shutdown"]
-  S2 --> S3["3. Sheets<br/>flusher · layout · rebuild"]
-  S3 --> S4["4. Sweeper and verify"]
-  S4 --> S5["5. Admin pages ·<br/>alerts · doctor"]
-  S5 --> S6["6. Showcase<br/>wsync demo · video · README"]
-  S6 --> PR(["PITCH-READY"])
-  PR --> S7["7. Razorpay"]
-  S7 --> S8["8. Postgres ·<br/>Docker Compose"]
+  P["Prototype<br/>8-10 h<br/>GIF for 8 October"] --> C["Pitch-ready cut<br/>24-28 h in all<br/>tests, 3 scenes, README"]
+  C --> F["Forwarding sink<br/>3-5 h"]
+  C --> OPS["Operations<br/>admin pages, probes,<br/>rebuild, alerts"]
+  C --> RZ["Razorpay"]
+  C --> CK["Checkout line items"]
+  C --> HY["Hypothesis suites"]
+  C -. "first matching post" .-> DS["Database sink<br/>+ subscriptions"]
+  C -. "a client asks" .-> PG["Postgres,<br/>several workers (Linux)"]
   classDef ready fill:#e6f5e6,stroke:#2e7d32,stroke-width:2px
-  class PR ready
+  class C ready
 ```
 
-| Slice | Ends with | Proved by |
-|---|---|---|
-| 0 | Stripe test account and CLI login; Google Cloud service account; a test spreadsheet shared with it (Lalit, about 20 minutes) | `stripe listen` forwards to a local port |
-| 1 | `POST /webhooks/stripe` stores events once with their ledger job; the worker fetches and writes `payments`; migrations; config and fail-closed start | unit tests for signatures and mapping; integration with FakeStripe; invariants 1 and 3 |
-| 2 | claim, heartbeat, fencing, reaper, the three error classes, backoff profiles, dead letters, source pause, graceful shutdown | crash points in the ledger worker; property tests over retries |
-| 3 | the flusher, typed encoding, Sync status tab, header check, sink pause and probe, rebuild | FakeSheets: lost replies, tampering, 429s; invariant 2; burst load check |
-| 4 | the Stripe sweeper with checkpoints and horizon, silent-webhook detection, backfill, replay, verify quick and full, repair | crash point `mid_sweep_page`; outage scenarios; verify against FakeStripe |
-| 5 | admin pages, alerts, admin actions log, `doctor`, pruner, backup | integration tests on the routes; `doctor` against a broken setup |
-| 6 | `wsync demo`, the recorded video, the README with GIFs and numbers | end to end by hand |
-| 7 | Razorpay adapter: signature, header event id, fetch, polling sweep | FakeRazorpay; the same invariants |
-| 8 | Postgres dialect and `--workers N`; `compose.yml` with Caddy and a volume | the integration suite on Postgres in CI; the multi-worker race |
+## The prototype (8-10 h)
 
-**Pitch-ready = slices 1-6**: Stripe, SQLite and Sheets, fully proved and on video ([Q59](grilling-log.md)). Razorpay and Postgres follow while pitching has started. The vault's plan put demos 1 and 2 in 1-7 October with pitching from 8 October. Since then demo 1's milestone moved to mid-to-late November while pitching still starts on 8 October (vault session log, 29-30 Sept), so demo 2 may well be the first demo that is pitch-ready. Either way the proof layer is not cut to hit a date, because the proof layer is the product.
+Steps P1-P3 below without the tests: enough for a 20-second GIF of the duplicate storm and the outage catch-up, attached to the first Stripe-webhook pitches. It is not throwaway: it is the cut's code, finished and tested in the steps that follow.
+
+## The pitch-ready cut (24-28 h, including the prototype)
+
+| Step | Contents | Hours |
+|---|---|---|
+| P0 | Accounts: Stripe test mode, a restricted key, the CLI; a Google Cloud project with a service account; a throwaway sheet. The **recording spike** ([testing.md](testing.md)). | 2-3 |
+| P1 | Config and fail-closed start; the lock file; the writer; migrations; the Stripe receiver (every check, fingerprint, one transaction); the queue with one live job and rerun, lease, token, fenced complete, backoff, dead after N, the reaper | 5-6 |
+| P2 | Fetch with the balance transaction expanded; the mapping including fee, net, settlement, method, metadata keys, disputes; the row-creation rule; the ledger upsert with row hash | 2-3 |
+| P3 | The flusher: read by tab id, one `batchUpdate` by key, typed values and dates, append after the last row, keys only on append, the post-write check; Sync status; the Daily summary tab; stop and alert on a pause-class error, `wsync resume` | 4-5 |
+| P4 | The sweeper by time slices, at startup and every 10 minutes, with the heartbeat ping; `wsync verify` (ledger against sheet; source against ledger; totals) writing its line to Sync status | 3 |
+| P5 | Tests: FakeStripe and FakeSheets replaying the recordings; the five scripted scenarios with the invariants; the duplicate storm and the burst; three subprocess crash points | 3 |
+| P6 | Three scenes with `wsync demo`, the README with its honest limits and the "why not Coupler" answer, `doctor`'s core checks | 5-6 |
+
+**Left out of the cut on purpose:** admin pages (the CLI and Sync status cover it), probes and automatic resume, rebuild, the full alert list (three kinds only), rejection samples beyond counters, the deployment-id check, cell tracking, DST handling, Hypothesis suites, most `doctor` checks, pruning and backup automation (the manual commands are documented), Razorpay, Checkout line items, Postgres.
+
+## After pitching starts
+
+In roughly this order, adjusted to what buyers ask for:
+
+| Item | Hours | Why this place |
+|---|---|---|
+| Forwarding sink ([next-adapters.md](next-adapters.md)) | 3-5 | Turns the duplicate-storm scene into an offer for n8n and Zapier users ([Q77](grilling-log.md)) |
+| Operations: admin pages, reason-specific probes, rebuild in place, the full alert list, pruner and backup, the hosting template, the handover runbook | 14-20 | Needed before the first real client runs it ([hosting.md](hosting.md)) |
+| Checkout line items and order id | 3-5 | The most common small-business Stripe setup leaves Description empty |
+| Razorpay | 8-12 | Indian buyers |
+| Hypothesis suites and the remaining crash points | 4-6 | Deeper proof |
+| Database sink with subscriptions | 8-15 | When the first matching post arrives ([Q78](grilling-log.md)) |
+| Postgres and several workers, Linux only | 6-10 | When a client needs it ([Q75](grilling-log.md)) |
 
 ## Package layout
 
 ```
 webhook-sync/
-├── CONTEXT.md
-├── README.md                     slice 6
-├── THIRD_PARTY_NOTICES.md
-├── webhook-sync.toml.example
-├── .env.example
-├── compose.yml                   slice 8
-├── migrations/
-│   ├── 0001_init.sqlite.sql
-│   └── 0001_init.postgres.sql
+├── CONTEXT.md · README.md · THIRD_PARTY_NOTICES.md
+├── webhook-sync.toml.example · .env.example
+├── migrations/0001_init.sql
+├── deploy/                       platform template, compose.yml with Caddy (after pitching)
 ├── src/webhook_sync/
 │   ├── config.py                 TOML + env, validation, fail closed
-│   ├── db.py                     SQLAlchemy Core engine, dialect switches, migrations runner
-│   ├── receiver/                 FastAPI routes, the checks, the one transaction
-│   ├── sources/                  base.py (the interface), stripe.py, razorpay.py, ratelimit.py
-│   ├── queue/                    the six operations, backoff, error classes, pause
-│   ├── ledger/                   the ledger worker, row building, payload fallback
-│   ├── sinks/                    base.py, sheets.py (ported writer), encoding.py
-│   ├── sweeper/                  checkpoints, sweeps, silent-webhook check
-│   ├── verify/                   the three checks, repair
-│   ├── admin/                    pages, templates, static (Pico.css, htmx)
-│   ├── alerts.py
-│   ├── crashpoints.py            no-ops unless enabled by tests
+│   ├── db/                       writer.py (one connection, lock, BEGIN IMMEDIATE), reader.py, migrate.py, lockfile.py
+│   ├── receiver/                 routes, the checks, the one transaction, rejection counters
+│   ├── sources/                  base.py (the interface), stripe.py, razorpay.py (later), ratelimit.py
+│   ├── queue/                    operations.py, sql_sqlite.py, backoff.py, classes.py, pause.py
+│   ├── ledger/                   the ledger worker, row building
+│   ├── sinks/                    base.py, sheets.py (ported writer), encoding.py, summary.py, forward.py (later)
+│   ├── sweeper/                  slices, checkpoints, heartbeat ping, silent-webhook check
+│   ├── verify/                   the checks, repair
+│   ├── admin/                    admin API; pages later
+│   ├── alerts.py · crashpoints.py
 │   └── cli/                      wsync commands, doctor, demo
 └── tests/
-    ├── fakes/                    fake_stripe.py, fake_razorpay.py, fake_sheets.py
-    ├── fixtures/stripe/          recorded test-mode events
-    ├── unit/ · integration/ · property/ · load/
+    ├── recordings/               from the recording spike
+    ├── fakes/                    fake_stripe.py, fake_sheets.py
+    ├── unit/ · integration/ · crash/ · load/ · live/ (weekly)
     └── conftest.py               settle helper, invariants
 ```
 
-Stack: Python 3.14, uv, FastAPI, uvicorn, SQLAlchemy Core (async) with aiosqlite or psycopg, httpx, stripe, razorpay, gspread and google-auth, Jinja2, htmx; pytest, Hypothesis, respx, time-machine, ruff ([Q8](grilling-log.md), [Q61](grilling-log.md)). All install on Python 3.14 on Windows (checked 2026-09-30).
+Stack: Python 3.14, uv, FastAPI, uvicorn, SQLAlchemy Core (async) with aiosqlite, httpx, stripe, gspread and google-auth, Jinja2 and htmx (later); pytest, respx, time-machine, ruff; Hypothesis later. All install on Python 3.14 on Windows (checked 2026-09-30).
 
 ## Where ported code comes from
 
@@ -77,11 +90,11 @@ Stack: Python 3.14, uv, FastAPI, uvicorn, SQLAlchemy Core (async) with aiosqlite
 
 | Our file | Ported from | Licence | Main changes |
 |---|---|---|---|
-| `receiver/` | hookline `app.py`, `store.py` | MIT | per-source dedupe key; `NOT NULL`; rollback on every path; fail closed; 400 not 500; duplicate-header check |
-| `queue/` | driftless `jobs.sql`, `queue.go` | Apache-2.0 | Python and SQLAlchemy; SQLite support; claim tokens and heartbeats; error classes; retry through enqueue; backoff on reaped jobs |
-| `sweeper/` | driftless `sweep/sweeper.go` | Apache-2.0 | page and checkpoint in one transaction; source clock for the checkpoint; Razorpay polling |
-| `sinks/sheets.py` | sync-engine `destination-google-sheets/src/writer.ts` | Apache-2.0 | abort on a failed read; typed `updateCells` instead of `pasteData`; header check; 50,000-character cut; no sheet-side version guard |
-| `queue/backoff.py` | Svix retry schedule idea; AWS jitter article | MIT / formula | schedule profiles; 0.5-1.5 factor; `Retry-After` never clamped |
+| `receiver/` | hookline `app.py`, `store.py` | MIT | per-source dedupe key; `NOT NULL`; fingerprint conflicts; rollback on every path; fail closed; 400 not 500; duplicate-header check |
+| `queue/` | driftless `jobs.sql`, `queue.go` | Apache-2.0 | Python on SQLite; one live job with rerun (driftless's own requeue idea); claim tokens and heartbeats; error classes; row-by-row reaper with backoff |
+| `sweeper/` | driftless `sweep/sweeper.go` | Apache-2.0 | time slices on the source clock; empty slices advance; Razorpay polling |
+| `sinks/sheets.py` | sync-engine `destination-google-sheets/src/writer.ts` | Apache-2.0 | abort on a failed read; read by sheet id; typed `updateCells` instead of `pasteData`; keys only on append; post-write check; no sheet-side version guard |
+| `queue/backoff.py` | Svix retry schedule idea | MIT | two profiles; a 0.5-1.5 factor; `Retry-After` never clamped |
 
 ## Where to go next
 
