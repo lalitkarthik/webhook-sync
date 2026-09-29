@@ -33,7 +33,7 @@ flowchart LR
 | 7 | Razorpay adapter: signature, header event id, fetch, polling sweep | FakeRazorpay; the same invariants |
 | 8 | Postgres dialect and `--workers N`; `compose.yml` with Caddy and a volume | the integration suite on Postgres in CI; the multi-worker race |
 
-**Pitch-ready = slices 1-6**: Stripe, SQLite and Sheets, fully proved and on video ([Q59](grilling-log.md)). Razorpay and Postgres follow while pitching has started. The plan's dates (demos 1 and 2 in 1-7 October, pitching from 8 October) are tight for this; if demo 1 takes the week, demo 2 starts pitching a few days later rather than cutting the proof layer, because the proof layer is the product.
+**Pitch-ready = slices 1-6**: Stripe, SQLite and Sheets, fully proved and on video ([Q59](grilling-log.md)). Razorpay and Postgres follow while pitching has started. The vault's plan put demos 1 and 2 in 1-7 October with pitching from 8 October. Since then demo 1's milestone moved to mid-to-late November while pitching still starts on 8 October (vault session log, 29-30 Sept), so demo 2 may well be the first demo that is pitch-ready. Either way the proof layer is not cut to hit a date, because the proof layer is the product.
 
 ## Package layout
 
