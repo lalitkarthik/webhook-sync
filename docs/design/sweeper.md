@@ -20,6 +20,8 @@ So a server that is down for an afternoon, a bad deploy, or a restored backup ca
 
 Runs at startup (after a random 0-30 s delay, so restarting many copies doesn't hit Stripe at once) and every 10 minutes. It is a singleton, so two processes never sweep together.
 
+**The first start** ([Q64](grilling-log.md)). With no checkpoint yet, the sweeper looks back `initial_lookback_days` (default 30, Stripe's events horizon), so a new buyer's sheet starts with the last month's payments. `0` starts empty; older history comes from `backfill`. The choice is logged loudly on first start.
+
 ```mermaid
 flowchart TD
   S["start sweep"] --> H{"checkpoint older<br/>than 30 days?"}
@@ -72,7 +74,6 @@ The alert says: "Events are reaching us only through the sweeper. Check the webh
 
 ## Open questions
 
-- **The first checkpoint** ([edge-cases.md](edge-cases.md) OQ14, needs Lalit's OK). Proposed: on a first start the sweeper looks back 30 days (`initial_lookback_days = 30`), so a new buyer's sheet starts with the last month's payments; `0` starts empty; older history by `backfill`.
 
 - Whether the sweep interval should shorten after an outage is detected. Written: no; 10 minutes, plus "Sweep now".
 

@@ -87,6 +87,7 @@ One outgoing URL (`alerts.url`), sent a Slack- and Discord-compatible JSON messa
 | database writes failing | a write fails for a reason other than a short lock: disk full, read-only file, lost Postgres connection |
 | clock skew | our clock more than 60 s from a source's `Date` header (checked on accepted deliveries) |
 | backup failed | the nightly `wsync backup` did not produce a file |
+| unknown currency | a payment in a currency the exponent table doesn't know; its sheet row is held back ([Q62](grilling-log.md)) |
 
 ## Configuration and secrets
 
@@ -117,6 +118,9 @@ mask_email = true
 days = 30
 nightly_at = "02:00"
 auto_repair = true
+
+[sweeper]
+initial_lookback_days = 30          # first start only; 0 = start empty
 
 [retention]
 payload_days = 90

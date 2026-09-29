@@ -36,7 +36,9 @@ flowchart TD
   MAP --> LD["load the current payments row<br/>for each job (not the event)"]
   LD --> BLD["build ONE batchUpdate:<br/>appendDimension for new rows,<br/>updateCells for changed + new rows,<br/>updateCells for Sync status"]
   BLD --> WR["WRITE, one call"]
-  WR -- ok --> DONE["complete every job<br/>(fenced, one transaction)"]
+  WR -- ok --> CHK["CHECK, one call:<br/>re-read the keys of the rows just written"]
+  CHK -- "a key moved" --> PB["pause sink:<br/>'sheet changed during write'"]
+  CHK -- "all in place" --> DONE["complete every job<br/>(fenced, one transaction)"]
   WR -- "error" --> FAIL["fail every job with the class<br/>(retry / pause / dead)"]
   WR -. "reply lost" .-> FAIL
 ```
@@ -49,7 +51,8 @@ flowchart TD
 6. **Load the ledger's current row** for each job. The sheet is written from `payments`, never from an event, so ordering was settled once, in the ledger, and the sheet needs no version guard ([ADR 0001](decisions/0001-database-is-the-ledger-sheet-is-a-mirror.md)).
 7. **Build one `spreadsheets.batchUpdate`**: `appendDimension` for as many rows as are new, then `updateCells` for every changed and new row, then `updateCells` for Sync status. A `batchUpdate` is all or nothing, so the sheet is never half-written. If it would exceed about 1.8 MB (Google's limit is 2 MB), it is split into several, each complete in itself.
 8. **Write once**, with a 30 s timeout (gspread's default is no timeout at all).
-9. **Complete the jobs** in one fenced transaction.
+9. **Check the write landed** ([Q63](grilling-log.md)): re-read the key cells of the rows just written. If a buyer sorted or moved rows between our read and our write, a payment's values could have landed on another payment's row; if any key isn't where we wrote it, the sink pauses with "sheet changed during write" and the admin page offers Rebuild. This turns a silent wrong row into a visible pause.
+10. **Complete the jobs** in one fenced transaction.
 
 **When the write succeeds but the reply is lost.** The jobs fail as `retry`. The next flush reads the key column again, finds the rows it wrote, and updates them in place. Because every write is an upsert by key, doing it twice changes nothing: this is what makes the flush idempotent. A new row can't be appended twice, because the second flush sees its key.
 
@@ -59,7 +62,9 @@ flowchart TD
 |---|---|
 | Cells are written with typed `updateCells` values: text as `stringValue`, amounts as `numberValue`. Never user-entered. | A `stringValue` is stored exactly as given: `=HYPERLINK(…)` stays text, `+919876…` stays a phone number, `007` keeps its zeros. gspread's `update_cell` forces user-entered input, which does all three wrongly ([Q23](grilling-log.md)). |
 | No `pasteData` or tab-separated text | sync-engine's `pasteData` turns newlines into spaces, and its handling of `=`, leading zeros and dates isn't documented. |
-| Amounts: `Decimal(amount_minor) / 10^exponent`, sent as a number, with a number format set per currency exponent | 19.99 USD, 1999 JPY, 1.999 KWD ([Q19](grilling-log.md)); numbers, so the buyer can sum them |
+| Amounts: `Decimal(amount_minor) / 10^exponent`, sent as a number, with a number format set per currency exponent. The exponent comes from ISO 4217 plus a per-source override table (Stripe documents a few currencies whose API minor units differ). Codes are upper-cased. | 19.99 USD, 1999 JPY, 1.999 KWD ([Q19](grilling-log.md)); numbers, so the buyer can sum them |
+| Unknown currency code | The ledger row is still written (minor units are exact), but the mirror job goes `dead` with an alert, so no amount 100× off reaches the sheet ([Q62](grilling-log.md)) |
+| Amount past 15 significant digits | Written as text: a Sheets number can't hold it exactly ([Q62](grilling-log.md)) |
 | Times: text in the configured time zone, e.g. `2026-09-30 14:05:12 IST` | Sheets can't re-read it as a date in its own locale ([Q20](grilling-log.md)) |
 | Any cell over 50,000 characters is cut, with `…[truncated]` at the end | Sheets' hard limit per cell; one oversized cell blocks sync-engine's flush for good |
 | Newlines, tabs, emoji: kept | Typed values store them as they are |
@@ -94,7 +99,7 @@ The buyer never sees a half-written Payments tab, and their old tab, with any co
 
 ## The API budget
 
-Sheets allows 60 reads and 60 writes a minute per user ([Q32](grilling-log.md)). A flush costs one read and one write whatever its size, and runs at most every 3 s, so the busiest possible minute is 20 reads and 20 writes. A 200-event burst takes a handful of calls. When idle, the only calls are the 10-minute status update and, while paused, one probe a minute. Verify reads the whole tab in a few calls at night.
+Sheets allows 60 reads and 60 writes a minute per user ([Q32](grilling-log.md)). A flush costs two reads (before and after) and one write whatever its size, and runs at most every 3 s, so the busiest possible minute is 40 reads and 20 writes. A 200-event burst takes a handful of calls. When idle, the only calls are the 10-minute status update and, while paused, one probe a minute. Verify reads the whole tab in a few calls at night.
 
 **Auth.** A Google service account, with the scope `https://www.googleapis.com/auth/spreadsheets` only. gspread's default scopes include full Drive access, which the service doesn't need. The buyer shares the one spreadsheet with the service account's email; `doctor` checks that it can read the header.
 
@@ -112,7 +117,7 @@ Sheets allows 60 reads and 60 writes a minute per user ([Q32](grilling-log.md)).
 
 ## Open questions
 
-- **A buyer sorts the sheet during a flush** ([edge-cases.md](edge-cases.md) OQ11, needs Lalit's OK). Between the read and the write, a sort would send updates to the wrong rows. Proposed: after each write, re-read the keys of the rows just written; if any moved, pause with "sheet changed during write" and offer Rebuild. That adds one read per flush (at most 40 a minute, still under quota).
+- Whether to tag rows with developer metadata (which moves with a sorted row) so updates can't land on the wrong row at all, instead of detecting it afterwards ([Q63](grilling-log.md)). Written: detect and pause; revisit if buyers sort often.
 
 - A buyer who downloads the sheet as CSV and opens it in Excel could still trigger a formula stored as text. Written: out of scope for the sheet; the README warns about it. Revisit if a buyer exports regularly.
 - Whether the config should allow renaming our column headers per buyer. Written: yes, labels are configurable, and the header check compares against the configured labels.

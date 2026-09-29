@@ -70,8 +70,8 @@ flowchart TD
 | # | Case | What happens | Decided in | Proved by |
 |---|---|---|---|---|
 | D1 | Zero-decimal (JPY 1999) and three-decimal (KWD 1999) currencies | Ledger keeps **minor units** plus currency. Sheet shows 1999 and 1.999, computed with `Decimal` from the ISO 4217 exponent table. No floats. | [Q19](grilling-log.md) | unit |
-| D2 | Currency where Stripe's minor units differ from ISO 4217, a code missing from the table, or lower-case `usd` | OQ6. | [OQ6](#open-questions) | unit |
-| D3 | Amount 0; negative or non-integer amount; amount past what a Sheets number holds exactly | 0 is stored and shown (0.00, or 0 for JPY). Negative or non-integer is bad data: ledger job dead now, first-dead alert. Exact integer always kept in the ledger; sheet precision: OQ6. | [Q19](grilling-log.md), [Q28](grilling-log.md), [Q42](grilling-log.md), [OQ6](#open-questions) | unit |
+| D2 | Currency where Stripe's minor units differ from ISO 4217, a code missing from the table, or lower-case `usd` | Per-source exponent override table; codes upper-cased. Unknown code: ledger row written, mirror job dead with an alert, so no wrong amount reaches the sheet. | [Q62](grilling-log.md) | unit |
+| D3 | Amount 0; negative or non-integer amount; amount past what a Sheets number holds exactly | 0 is stored and shown (0.00, or 0 for JPY). Negative or non-integer is bad data: ledger job dead now, first-dead alert. Exact integer always kept in the ledger; amounts past 15 significant digits go to the sheet as text. | [Q19](grilling-log.md), [Q28](grilling-log.md), [Q42](grilling-log.md), [Q62](grilling-log.md) | unit |
 | D4 | Times shown to the buyer, including the repeated hour of a DST change | UTC in the ledger. Sheet gets text in the buyer's zone with its abbreviation (`2026-10-25 02:30 CEST`, then `02:30 CET`), so the hour is unambiguous and Sheets can't reinterpret it. | [Q20](grilling-log.md) | unit |
 | D5 | Text cell starting with `=`, `+`, `-` or `@` (`=IMPORTXML(…)`, `+91…`) | Written as a typed `stringValue`, never user-entered: never runs, never becomes a number. Applies to text cells; amounts are numbers. | [Q23](grilling-log.md) | integration (FakeSheets); e2e (manual) for real coercion |
 | D6 | Description with emoji, newlines or tabs | Kept as is (typed values, JSON over UTF-8). Logs are UTF-8 forced, so an emoji can't crash a Windows console. | [Q23](grilling-log.md), [operations.md](operations.md) | integration (FakeSheets) |
@@ -110,7 +110,7 @@ flowchart TD
 | G1 | Burst of 200 events | At most 10 Sheets API calls: two per **flush** (one read, one `batchUpdate`). | [Q32](grilling-log.md), [Q53](grilling-log.md) | load |
 | G2 | Header or key read fails; 429 or 5xx on the write | Flush aborts. `batchUpdate` is all or nothing, so nothing is half-written. Jobs stay waiting with `run_after`. Five retryable failures in a row pause the sink. | [Q29](grilling-log.md), [Q30](grilling-log.md), [Q32](grilling-log.md) | integration (FakeSheets) |
 | G3 | Write lands but the reply is lost, or the process dies before marking jobs done | Next flush re-reads the keys and updates in place. No duplicate rows. | [Q32](grilling-log.md) | crash point `after_sheet_write_before_done` |
-| G4 | Buyer sorts or filters between flushes | Fine: rows are found by key on every flush. Sort during a flush: OQ11. | [Q33](grilling-log.md), [OQ11](#open-questions) | integration (FakeSheets) |
+| G4 | Buyer sorts or filters between flushes | Fine: rows are found by key on every flush. Sort during a flush: the post-write key check pauses the sink with "sheet changed during write" and offers Rebuild. | [Q33](grilling-log.md), [Q63](grilling-log.md) | integration (FakeSheets) |
 | G5 | Buyer edits one of our cells; adds columns to the right | Our cell is overwritten at the payment's next change, and the Sync status tab says so. Their columns are kept. | [Q33](grilling-log.md), [Q35](grilling-log.md) | integration (FakeSheets) |
 | G6 | Buyer inserts, renames or deletes one of our columns | **Paused sink**, reason "layout changed"; **Rebuild** offered. | [Q30](grilling-log.md), [Q33](grilling-log.md) | integration (FakeSheets) |
 | G7 | Buyer deletes a row; copies a key row | Deleted row comes back on the next change or rebuild, and verify reports it. Duplicate key: the first is updated, the rest reported. We never delete the buyer's rows. | [Q33](grilling-log.md), [Q41](grilling-log.md) | integration (FakeSheets) |
@@ -129,7 +129,7 @@ flowchart TD
 | H2 | Service down for days; for 25 days; past the 30-day **horizon** | Startup sweep from the checkpoint minus 60 s. Warning alert at 25 days. Past 30 days, PaymentIntents are listed by creation date (full backfill), and the event trail has a gap. | [Q38](grilling-log.md), [Q42](grilling-log.md) | integration (FakeStripe) |
 | H3 | Crash in the middle of a sweep | Each page commits with its **checkpoint**; the restart continues from the last saved page. | [Q38](grilling-log.md) | crash point `mid_sweep_page` |
 | H4 | Sweep while the Stripe API is down | The pass fails and the checkpoint stays; the next pass, 10 min later, covers the wider window. | [Q38](grilling-log.md) | integration (FakeStripe) |
-| H5 | First start, no checkpoint yet | OQ14. | [OQ14](#open-questions) | integration (FakeStripe) |
+| H5 | First start, no checkpoint yet | Looks back `initial_lookback_days` (30); `0` starts empty; older history by `backfill`. | [Q64](grilling-log.md) | integration (FakeStripe) |
 | H6 | Razorpay: a payment created while we page (offset paging shifts) | 10-min overlap; every payment returned gets a ledger job; fetch mode makes repeats harmless. The event trail has gaps, and the README says so. | [Q39](grilling-log.md) | integration (signed Razorpay samples) |
 | H7 | Manual replay of an event older than the horizon, or whose payload was pruned | Works: replay enqueues a ledger job for the event's payment, and fetch mode needs only the id. An event never stored and older than 30 days can only come back through `backfill`. | [Q43](grilling-log.md), [sweeper.md](sweeper.md) | integration (FakeStripe) |
 | H8 | Verify finds a payment **missing** or **stale**; the sheet has a key twice or missing; per-currency count or sum differs | Shown on the verify page and one line on the Sync status tab; alert. **Repair** only enqueues ledger or mirror jobs, never edits rows. | [Q41](grilling-log.md), [Q42](grilling-log.md) | property (invariants) |
@@ -164,11 +164,11 @@ flowchart TD
 | J6 | Personal data inside stored raw payloads | Payloads pruned after 90 days; `payments` rows kept. | [Q21](grilling-log.md), [Q44](grilling-log.md) | integration (FakeStripe) |
 | J7 | Flood of junk requests at the webhook endpoint | Each is a cheap 400 before any work. `rejections` is capped at 100,000 rows, oldest dropped first, with a counter on the admin page. | [Q15](grilling-log.md), [data-model.md](data-model.md) | load |
 
-## Open questions
+## Settled open questions
 
-This catalogue first raised 25 open questions (OQ1-OQ25). Twenty-two were settled while the part pages were written, each as the proposed default; the rows above now point at the page that settles them. Three are real choices and wait for Lalit:
+This catalogue first raised 25 open questions (OQ1-OQ25). Twenty-two were settled while the part pages were written, each as the proposed default; the rows above point at the page that settles them. The last three were real choices; Lalit accepted the proposed defaults on 2026-09-30 ([Q62-Q64](grilling-log.md)):
 
-| # | Question | Written default (proposed, needs Lalit's OK) | Rows |
+| # | Question | Decision | Rows |
 |---|---|---|---|
 | OQ6 | **Currencies the table doesn't cover.** Stripe documents a few currencies whose API minor units differ from ISO 4217; a code can be unknown; a huge amount can exceed what a Sheets number holds exactly (15 significant digits). | A per-source exponent override table, checked against Stripe's currency page before building. Codes upper-cased. An unknown code still writes the ledger row (minor units are exact), but its mirror job goes dead with an alert, so no wrong amount reaches the sheet. Amounts past 15 significant digits are written as text. | D2, D3 |
 | OQ11 | **A buyer sorts the sheet during a flush.** Between our read and our write (about a second), a sort would send updates to the wrong rows: a payment's values land on another payment's row. | After each write, re-read the key column for the rows just written (one more read, still under quota: at most 40 reads a minute). If any key moved, pause the sink with "sheet changed during write" and offer Rebuild. Later option: tag rows with developer metadata, which moves with a sorted row. | G4 |
