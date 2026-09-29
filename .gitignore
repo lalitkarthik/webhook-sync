@@ -1,0 +1,16 @@
+# Secrets never leave this machine
+.env
+*.pem
+service-account*.json
+credentials*.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Local data
+*.db
+*.db-journal
+*.sqlite3
+out/
