@@ -4,7 +4,7 @@
 
 **How to read it.** Questions are grouped in the rounds they were asked in. Each round only asks questions whose answers don't depend on anything still open. Words in **bold** are defined in [CONTEXT.md](../../CONTEXT.md).
 
-**Status.** Nine rounds, Q1-Q96; Q1-Q93 answered 2026-09-30, rounds 7 and 8 after an [independent audit](audit/2026-09-30-design-audit.md). Nothing here is built. Where a later answer changed an earlier one, the earlier row says so.
+**Status.** Nine rounds, Q1-Q96, all answered 2026-09-30; rounds 7 and 8 after an [independent audit](audit/2026-09-30-design-audit.md). Nothing here is built. Where a later answer changed an earlier one, the earlier row says so.
 
 ```mermaid
 flowchart LR
@@ -171,9 +171,9 @@ Answered 2026-09-30; every recommendation accepted. The audit's other findings n
 
 ## Round 9: questions from updating the edge-case catalogue
 
-Raised 2026-09-30 while matching [edge-cases.md](edge-cases.md) to the revised pages. *Open*; each has a proposed default.
+Raised 2026-09-30 while matching [edge-cases.md](edge-cases.md) to the revised pages. Answered the same day: the proposed defaults were accepted.
 
-| # | Question | Proposed default | Why it matters |
+| # | Question | Decision | Why |
 |---|---|---|---|
 | Q94 | A column a buyer adds to the right of ours (edge case OQ3) | The header check compares only our configured columns, so the extra column is left alone; Sync status and `doctor` warn that a rebuild won't keep it next to its rows. | Machine-owned tabs say not to, but buyers will. |
 | Q95 | A daylight-saving time zone in the date headers (OQ4) | Name the zone, "Created (Europe/Berlin)"; accept one ambiguous hour a year in the sheet; the ledger keeps UTC. | Typed dates can't carry a changing abbreviation. |

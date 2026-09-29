@@ -4,7 +4,7 @@
 
 **How to read it.** Read the first five sections, then follow the reading order at the bottom. Words in **bold** are defined in [CONTEXT.md](../../CONTEXT.md). Everything here is a **decision, not a description**: none of it is built. The questions behind each decision are in [grilling-log.md](grilling-log.md).
 
-**Status (2026-09-30).** Designed in grilling rounds Q1-Q96 (Q94-Q96 still open), audited independently ([38 findings](audit/2026-09-30-design-audit.md)), and revised; [the audit response](audit/2026-09-30-audit-response.md) maps every finding to its change. Awaiting review. The implementation plan is written later.
+**Status (2026-09-30).** Designed in nine grilling rounds (Q1-Q96), audited independently ([38 findings](audit/2026-09-30-design-audit.md)), and revised; [the audit response](audit/2026-09-30-audit-response.md) maps every finding to its change. Awaiting review. The implementation plan is written later.
 
 ## What it is, in one paragraph
 

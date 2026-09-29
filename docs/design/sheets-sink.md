@@ -64,7 +64,7 @@ flowchart TD
 | Rule | Why |
 |---|---|
 | Typed `updateCells` values: text as `stringValue`, amounts and dates as `numberValue`; never user-entered | A `stringValue` is stored as given: `=HYPERLINK(…)` stays text, `+919876…` stays a phone number, `007` keeps its zeros ([Q23](grilling-log.md)) |
-| Dates are date serials in the buyer's time zone with a `yyyy-mm-dd hh:mm:ss` format; the zone is in the header, "Created (IST)" | Date filters, pivots and monthly totals work; typed numbers aren't re-parsed by locale ([Q87](grilling-log.md)) |
+| Dates are date serials in the buyer's time zone with a `yyyy-mm-dd hh:mm:ss` format; the zone is in the header: its abbreviation where it has no daylight saving ("Created (IST)"), its name where it does ("Created (Europe/Berlin)"), accepting one ambiguous hour a year in the sheet while the ledger keeps UTC ([Q95](grilling-log.md)) | Date filters, pivots and monthly totals work; typed numbers aren't re-parsed by locale ([Q87](grilling-log.md)) |
 | Amounts: `Decimal(minor) / 10^exponent`, with a number format per exponent. The exponent comes from ISO 4217 plus a per-source override table; codes upper-cased | 19.99 USD, 1999 JPY, 1.999 KWD ([Q19](grilling-log.md)) |
 | An unknown currency code holds back that sheet row: its mirror job goes `dead` with an alert | No amount 100 times off reaches the sheet ([Q62](grilling-log.md)) |
 | Amounts past 15 significant digits are written as text | A Sheets number can't hold them exactly |
@@ -78,6 +78,7 @@ flowchart TD
 | sort or filter through a filter view | Nothing changes for anyone else. |
 | sort the Payments tab itself | Works, more slowly: a move during a flush is caught by the check and repaired. |
 | edit one of our cells | Overwritten when that payment next changes; verify reports it first. |
+| add a column to the right of ours | Left alone: the header check compares only our configured columns. Sync status and `doctor` warn that a rebuild rewrites rows in ledger order, so the column won't stay next to its rows ([Q94](grilling-log.md)). |
 | insert, rename, move or delete one of our columns | The header check fails; the sink pauses with "layout changed" and offers **Rebuild**. |
 | delete a row | It comes back when the payment next changes or on a rebuild; verify reports it. |
 | rename a tab | Followed by its id. |

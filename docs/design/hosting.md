@@ -61,7 +61,7 @@ Written into each client's repository. The five calls most likely to come:
 | "The sheet stopped updating" | A paused sink: someone moved a column, unshared the sheet, or the key expired | `wsync status`; fix the cause; `wsync resume` or `wsync rebuild-sheet` |
 | "Rows look wrong after I sorted" | The tab was sorted directly | Use filter views; the check repairs moved rows; `wsync verify --repair` |
 | "I'm getting alerts every hour" | An endpoint missing a subscribed type, or a real dead job | `wsync doctor`; fix the Stripe endpoint; `wsync dead list` |
-| "The heartbeat check emailed me" | The process or host is down | The host's dashboard: restart; then `wsync sweep` catches up |
+| "The heartbeat check emailed me" | The process or host is down, or the source's API is unreachable ([Q96](grilling-log.md)) | `/health` answers? Check the source's status page. It doesn't? The host's dashboard: restart. Then `wsync sweep` catches up |
 | "The hosting bill" | The platform plan | The plan named in the quote |
 
 ## After 30 April 2027

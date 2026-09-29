@@ -67,7 +67,7 @@ The alert says: "Events are reaching us only through the sweeper. Check the webh
 
 ## The dead-man's switch
 
-Every alert above comes from inside the running process, so a dead process, a full disk or a stopped server says nothing. After every successful sweep, the sweeper pings a **heartbeat URL** (Healthchecks.io's free tier, or any equivalent). If the pings stop, that outside service emails or messages the buyer and Lalit. An outside uptime check on `/health` covers the receiver ([Q81](grilling-log.md), [hosting.md](hosting.md)).
+Every alert above comes from inside the running process, so a dead process, a full disk or a stopped server says nothing. After every successful sweep, the sweeper pings a **heartbeat URL** (Healthchecks.io's free tier, or any equivalent). If the pings stop, that outside service emails or messages the buyer and Lalit. The ping follows successful sweeps only, so a source whose API is down for over 30 minutes also stops it; the runbook says so ([Q96](grilling-log.md)). An outside uptime check on `/health` covers the receiver ([Q81](grilling-log.md), [hosting.md](hosting.md)).
 
 ## Manual backfill and replay
 
