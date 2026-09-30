@@ -9,4 +9,4 @@ The first design let buyers add columns next to ours, edit our cells and sort th
 - new rows landed either a thousand rows down or on top of a buyer's total row (F07);
 - the rebuild detached the buyer's own columns from their rows, and a crash mid-swap left the service writing to the old tab while verify agreed with it (F06).
 
-One rule removes all three. The cost is a small change of habit for the buyer, explained in one line of the header note: "Managed by webhook-sync. Sort and filter with Data › Filter views; put your own work in another tab." Sorting the tab directly still works; the post-write check notices a moved row and repairs it, only more slowly.
+One rule removes all three. The cost is a small change of habit for the buyer, explained in one line of the header note: "Managed by webhook-sync. Sort and filter with Data › Create filter view; put your own work in another tab." Sorting the tab directly still works; the post-write check notices a moved row and repairs it, only more slowly.

@@ -52,7 +52,7 @@ A row is created only once a payment reaches `processing`, `authorized`, `failed
 | Payment key | From `body.data.object`: a `payment_intent`'s own `id`, or the `payment_intent` field of a `charge`, `refund` or `dispute`. If that is empty (a legacy charge), the event is ignored with reason `no_payment_intent`, and verify reports the count (F38). |
 | Fingerprint | `type`, `data.object.id`, `created`, `livemode` |
 
-**Handled event types** ([Q12](grilling-log.md), refined by the audit, F10, F35): `payment_intent.processing`, `.succeeded`, `.payment_failed`, `.canceled`, `.amount_capturable_updated`; `charge.refunded`; `refund.created`, `refund.updated`, `refund.failed`; `charge.dispute.created`, `.updated`, `.closed`, `.funds_withdrawn`, `.funds_reinstated`. `payment_intent.created` and `.requires_action` are stored and ignored. Everything else is ignored with reason `unhandled_type`.
+**Handled event types** ([Q12](grilling-log.md), refined by the audit, F10, F35): `payment_intent.processing`, `.succeeded`, `.payment_failed`, `.canceled`, `.amount_capturable_updated`; `charge.refunded`; `charge.updated` (the fee arrives on it, [Q97](grilling-log.md)); `refund.created`, `refund.updated`, `refund.failed`; `charge.dispute.created`, `.updated`, `.closed`, `.funds_withdrawn`, `.funds_reinstated`. `payment_intent.created` and `.requires_action` are stored and ignored. Everything else is ignored with reason `unhandled_type`.
 
 **Fetch.** One call: `GET /v1/payment_intents/{id}?expand[]=latest_charge.balance_transaction`. If `latest_charge.disputed` is true, a second: `GET /v1/disputes?payment_intent={id}`. The adapter pins the Stripe API version in code, so a new version can't change the shapes we read.
 
@@ -61,7 +61,7 @@ A row is created only once a payment reaches `processing`, `authorized`, `failed
 | status | `canceled` → canceled; `requires_capture` → authorized; `processing` → processing; `requires_payment_method` with `last_payment_error` → failed; `succeeded` with `latest_charge.amount_refunded` 0, between, or equal to `amount_received` → succeeded, partially_refunded, refunded |
 | amount, authorized | `amount_received`; `amount` when it differs (a partial capture) |
 | refunded | `latest_charge.amount_refunded` |
-| fee, net, settlement | the balance transaction's `fee`, `net`, `amount` and `currency` (the settlement currency, e.g. INR for a USD sale) |
+| fee, net, settlement | the balance transaction's `fee`, `net`, `amount` and `currency` (the settlement currency, e.g. INR for a USD sale). Card fees settle asynchronously: the balance transaction is often still empty at `payment_intent.succeeded` and arrives with `charge.updated`, which Stripe promises within an hour. Until then the three columns are **pending**, not unknown ([Q97](grilling-log.md), G2) |
 | method | `latest_charge.payment_method_details.type`, plus `card.brand` |
 | metadata | the configured keys of the PaymentIntent's `metadata` |
 | customer, description | `receipt_email` or `latest_charge.billing_details.email`; `billing_details.name`; `description` |
@@ -86,7 +86,7 @@ A row is created only once a payment reaches `processing`, `authorized`, `failed
 
 **Handled event types:** `payment.authorized`, `payment.captured`, `payment.failed`; `refund.created`, `refund.processed`, `refund.failed`; `payment.dispute.created`, `.won`, `.lost`, `.closed`, `.under_review`, `.action_required`.
 
-**Fetch.** `GET /v1/payments/{id}`. Status: `authorized` → authorized; `captured` with `refund_status` null, `partial` or `full` → succeeded, partially_refunded, refunded; `refunded` → refunded; `failed` → failed. Fee and fee tax (GST) from `fee` and `tax`; method from `method`; metadata from `notes`. A payment fetch **never clears** the dispute column: dispute state comes only from dispute events and the disputes poll, so coalescing a dispute event with a later refund event can't lose it (F10).
+**Fetch.** `GET /v1/payments/{id}`. Status: `authorized` → authorized; `captured` with `refund_status` null, `partial` or `full` → succeeded, partially_refunded, refunded; `refunded` → refunded; `failed` → failed. Fee and fee tax (GST) from `fee` and `tax`; the fee already includes the tax, so net is `amount − fee`, and a payment still `created` makes no row (G41); method from `method`; metadata from `notes`. A payment fetch **never clears** the dispute column: dispute state comes only from dispute events and the disputes poll, so coalescing a dispute event with a later refund event can't lose it (F10).
 
 **Sweep and polling** ([Q86](grilling-log.md), F13). Razorpay has no events list, and its lists filter by **creation** time. Each sweep therefore:
 1. lists `GET /v1/payments` and `GET /v1/refunds` created in the slice, storing each payment's state as a synthetic event (`origin = 'sweep'`, id `sweep:<payment id>:<state hash>`) with a ledger job;
@@ -95,7 +95,7 @@ A row is created only once a payment reaches `processing`, `authorized`, `failed
 
 Changes to older payments reach the ledger through nightly verify (30 days). The README states the gap.
 
-**Keys.** Razorpay keys can't be restricted to reading. The handover note says so: they live only in the server's environment and are rotated at handover ([Q85](grilling-log.md)).
+**Keys.** Razorpay keys can't be restricted to reading. The handover note says so: they live only in the server's environment and are rolled at handover with Razorpay's 24-hour overlap, because the buyer's checkout uses the same key set and must be updated inside that window ([Q85](grilling-log.md), [Q102](grilling-log.md)).
 
 ## API reads per month
 

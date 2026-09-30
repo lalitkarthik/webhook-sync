@@ -21,11 +21,13 @@ flowchart LR
 |---|---|---|---|
 | **Ledger against sheet** | hourly, and nightly | every `payments` row against its Payments row (each key exactly once, every column equal to what the flusher would write) and every Daily summary row against the ledger | a few Sheets reads, no source calls |
 | **Source against ledger** | nightly | every payment created in the window (default 30 days), listed with its current state, against its `payments` row | one Stripe read per 100 payments |
-| **Independent totals** | nightly | for the window, the sum of the source's balance transactions of type charge and refund against the ledger's gross, fees and refunds | a few reads |
+| **Independent totals** | nightly | the source's balance transactions in the window, grouped by `reporting_category` (charge, refund, dispute, fee, partial capture reversal and the rest), in the settlement currency and windowed by each balance transaction's own time, against the ledger's figures built the same way ([Q99](grilling-log.md)) | a few reads |
 
 The hourly check needs no source calls, because Stripe has no totals endpoint and summing would mean listing every payment each hour against the read allowance (F18, [Q89](grilling-log.md)).
 
 The independent totals use a different Stripe object from the one the ledger is built from. That catches a mapping bug (which a row-by-row comparison through the same mapping can't see) and payments outside the PaymentIntent model (F38).
+
+Summing only the types `charge` and `refund` would be wrong three ways: newer payment methods book `payment` and `payment_refund`, a partial capture books a `refund` for the part not captured, and failures and disputes have types of their own (G30).
 
 ## What it can find
 
@@ -39,7 +41,7 @@ The independent totals use a different Stripe object from the one the ledger is 
 | totals differ | The independent totals disagree | None: a person looks; the difference is shown per currency |
 | not found at source; unknown columns | Rows flagged by the ledger worker | None; listed so a person knows |
 
-Payments with a live job, or changed since the run started, are skipped, so work in progress is never reported as stale.
+Payments with a live job, changed since the run started, or under an hour old with the fee still pending ([Q97](grilling-log.md)) are skipped, so work in progress is never reported as stale.
 
 ## Repair
 

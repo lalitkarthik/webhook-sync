@@ -10,7 +10,7 @@ The audit estimated the full slices at 85-123 hours. After pitching, demo 1 and 
 
 ```mermaid
 flowchart LR
-  P["Prototype<br/>8-10 h<br/>GIF for 8 October"] --> C["Pitch-ready cut<br/>24-28 h in all<br/>tests, 3 scenes, README"]
+  P["Prototype<br/>10-12 h<br/>GIF for 8 October"] --> C["Pitch-ready cut<br/>24-28 h in all<br/>tests, 3 scenes, README"]
   C --> F["Forwarding sink<br/>3-5 h"]
   C --> OPS["Operations<br/>admin pages, probes,<br/>rebuild, alerts"]
   C --> RZ["Razorpay"]
@@ -22,9 +22,9 @@ flowchart LR
   class C ready
 ```
 
-## The prototype (8-10 h)
+## The prototype (10-12 h)
 
-Steps P1-P3 below without the tests: enough for a 20-second GIF of the duplicate storm and the outage catch-up, attached to the first Stripe-webhook pitches. It is not throwaway: it is the cut's code, finished and tested in the steps that follow.
+Steps P1-P3 below without the tests, plus a **minimal sweeper**: one walk of Stripe's events list in time slices, at startup and on demand, with its checkpoint. `stripe listen` never retries a delivery it failed to forward, so without the sweeper the outage scene can't be shot ([Q98](grilling-log.md), G5). Together they are enough for a 20-second GIF of the duplicate storm and the outage catch-up, attached to the first Stripe-webhook pitches. It is not throwaway: it is the cut's code, finished and tested in the steps that follow.
 
 ## The pitch-ready cut (24-28 h, including the prototype)
 
@@ -34,7 +34,7 @@ Steps P1-P3 below without the tests: enough for a 20-second GIF of the duplicate
 | P1 | Config and fail-closed start; the lock file; the writer; migrations; the Stripe receiver (every check, fingerprint, one transaction); the queue with one live job and rerun, lease, token, fenced complete, backoff, dead after N, the reaper | 5-6 |
 | P2 | Fetch with the balance transaction expanded; the mapping including fee, net, settlement, method, metadata keys, disputes; the row-creation rule; the ledger upsert with row hash | 2-3 |
 | P3 | The flusher: read by tab id, one `batchUpdate` by key, typed values and dates, append after the last row, keys only on append, the post-write check; Sync status; the Daily summary tab; stop and alert on a pause-class error, `wsync resume` | 4-5 |
-| P4 | The sweeper by time slices, at startup and every 10 minutes, with the heartbeat ping; `wsync verify` (ledger against sheet; source against ledger; totals) writing its line to Sync status | 3 |
+| P4 | The sweeper finished (the prototype has its slice walk): every 10 minutes, the horizon and full backfill, the heartbeat ping; `wsync verify` (ledger against sheet; source against ledger; totals) writing its line to Sync status | 3 |
 | P5 | Tests: FakeStripe and FakeSheets replaying the recordings; the five scripted scenarios with the invariants; the duplicate storm and the burst; three subprocess crash points | 3 |
 | P6 | Three scenes with `wsync demo`, the README with its honest limits and the "why not Coupler" answer, `doctor`'s core checks | 5-6 |
 
@@ -93,7 +93,7 @@ Stack: Python 3.14, uv, FastAPI, uvicorn, SQLAlchemy Core (async) with aiosqlite
 | `receiver/` | hookline `app.py`, `store.py` | MIT | per-source dedupe key; `NOT NULL`; fingerprint conflicts; rollback on every path; fail closed; 400 not 500; duplicate-header check |
 | `queue/` | driftless `jobs.sql`, `queue.go` | Apache-2.0 | Python on SQLite; one live job with rerun (driftless's own requeue idea); claim tokens and heartbeats; error classes; row-by-row reaper with backoff |
 | `sweeper/` | driftless `sweep/sweeper.go` | Apache-2.0 | time slices on the source clock; empty slices advance; Razorpay polling |
-| `sinks/sheets.py` | sync-engine `destination-google-sheets/src/writer.ts` | Apache-2.0 | abort on a failed read; read by sheet id; typed `updateCells` instead of `pasteData`; keys only on append; post-write check; no sheet-side version guard |
+| `sinks/sheets.py` | sync-engine `destination-google-sheets/src/writer.ts` | Apache-2.0, "Copyright 2025 Supabase" (G24) | abort on a failed read; read by sheet id; typed `updateCells` instead of `pasteData`; keys only on append; post-write check; no sheet-side version guard |
 | `queue/backoff.py` | Svix retry schedule idea | MIT | two profiles; a 0.5-1.5 factor; `Retry-After` never clamped |
 
 ## Where to go next
