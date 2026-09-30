@@ -11,7 +11,10 @@ A **fake** built from the design's own beliefs agrees with the design's bugs. Th
 **The recording spike** (slice 0, 2-3 h), against Stripe test mode and a throwaway spreadsheet:
 - one payment delivered, `stripe events resend` twice, and the same event from `/v1/events`, to diff the bytes;
 - a two-page events listing, to see its order;
-- a partial refund and a failed refund, to see `amount_refunded`;
+- a partial refund and a failed refund (test card 4000000000005126), to see `amount_refunded`;
+- a card payment's `payment_intent.succeeded` and its later `charge.updated`, to time the fee's arrival ([Q97](grilling-log.md));
+- a charge in UGX and one in ISK, to see their minor units ([Q100](grilling-log.md));
+- a read with a key lacking Balance read, to see whether only the expanded balance transaction returns 403 (G1);
 - a dispute (Stripe's test cards create one), to see the dispute states;
 - Sheets answers after a tab rename, an unshare, a sort between two calls, a deleted tab, and a 429.
 

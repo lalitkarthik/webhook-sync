@@ -15,7 +15,7 @@ Three audiences, one core ([Q66](grilling-log.md)):
 
 ## The prototype GIF (for pitches from 8 October)
 
-About 20 seconds, from the 8-10 h prototype ([Q67](grilling-log.md), [Q93](grilling-log.md)):
+About 20 seconds, from the 10-12 h prototype ([Q67](grilling-log.md), [Q93](grilling-log.md), [Q98](grilling-log.md)):
 1. **Duplicate storm.** One payment; `stripe events resend` five times. The sheet keeps one row; the duplicates counter reads 4.
 2. **Outage and catch-up.** Server stopped; three payments made; server started. The rows appear, with Via = `sweep`.
 

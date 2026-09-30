@@ -88,7 +88,7 @@ A payment whose fetch returns 404, usually deleted test data. The row is marked,
 _Avoid_: orphan (verify's word for the same row seen from the other side)
 
 **Fee** / **Net**:
-What the source kept for processing a payment, and what the buyer receives: net = amount − fee. Both in minor units, in the settlement currency.
+What the source kept for processing a payment, and what the buyer receives: net = amount − fee. Both in minor units, in the settlement currency. **Pending** until the source has created its balance transaction; Stripe card fees arrive with `charge.updated`, usually within an hour.
 
 **Terminal state**:
 A payment status nothing can move it out of. Only `canceled` is terminal: a failed payment can still succeed, and a refunded one goes back to partially refunded if a refund fails.

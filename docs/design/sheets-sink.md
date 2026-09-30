@@ -6,7 +6,7 @@
 
 ## What the buyer sees
 
-Three **machine-owned** tabs: the service writes every cell, and buyers read, sort and filter them through **filter views** (Data › Filter views), which change only their own view. Their own work goes in their own tabs, looking rows up by payment id ([ADR 0006](decisions/0006-machine-owned-tabs.md)).
+Three **machine-owned** tabs: the service writes every cell, and buyers read, sort and filter them through **filter views** (Data › Create filter view), which change only their own view. Their own work goes in their own tabs, looking rows up by payment id ([ADR 0006](decisions/0006-machine-owned-tabs.md)).
 
 **Payments**: one row per payment. Default columns, declared in config ([Q69](grilling-log.md)):
 
@@ -14,13 +14,13 @@ Three **machine-owned** tabs: the service writes every cell, and buyers read, so
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | pi_3Nx… | stripe | 2026-09-30 14:05:12 | succeeded | 19.99 | USD | 0.00 | 1,672.04 | 72.60 | 1,599.44 | INR | card visa | | a***@gmail.com | Pro plan | A-1042 | delivery | | 2026-09-30 14:05:15 |
 
-- **Amount** and **Refunded** are in the currency the customer paid in. **Settled**, **Fee** and **Net** are in the currency the buyer is paid out in (**Settled in**), which is where fees are charged; for a buyer paid in the same currency the two match.
+- **Amount** and **Refunded** are in the currency the customer paid in. **Settled**, **Fee** and **Net** are in the currency the buyer is paid out in (**Settled in**), which is where fees are charged; for a buyer paid in the same currency the two match. They show `pending` until Stripe's balance transaction arrives, usually within an hour ([Q97](grilling-log.md)).
 - **Payment ID** is first and frozen, with the header row. Stripe ids start `pi_` and Razorpay ids `pay_`, so one column holds both.
 - `order_id` stands for the configured metadata keys: one column each.
 - **Via** (`delivery` or `sweep`) is optional, on for the demo's outage scene. **Note** says "not found at source" or names unknown columns.
-- The header note: "Managed by webhook-sync. Sort and filter with Data › Filter views; put your own work in another tab."
+- The header note: "Managed by webhook-sync. Sort and filter with Data › Create filter view; put your own work in another tab."
 
-**Daily summary**: one row per day, per currency paid in, per currency paid out, from payments that succeeded (fully or partly refunded included): count, gross and refunds in the currency paid in; settled, fees and net (before refunds) in the currency paid out. Days are the buyer's local days by payment date, and refunds count on the day of the payment they belong to; the tab header says both. Buyers get correct totals without summing raw rows that include failed attempts (F10). Refund-date accounting, and net after refunds, come with a refunds tab later.
+**Daily summary**: one row per day, per currency paid in, per currency paid out, from payments that succeeded (fully or partly refunded included): count, gross and refunds in the currency paid in; settled, fees and net (before refunds) in the currency paid out. Days are the buyer's local days by payment date, and refunds count on the day of the payment they belong to; the tab header says both. A payment whose fee is still pending counts in count, gross and refunds, but not yet in settled, fees and net; Sync status shows how many are pending ([Q97](grilling-log.md)). Buyers get correct totals without summing raw rows that include failed attempts (F10). Refund-date accounting, and net after refunds, come with a refunds tab later.
 
 **Sync status**: last successful flush, rows written, jobs waiting and dead, whether the sink is paused and why, the last verify line, this deployment's id.
 
@@ -65,8 +65,8 @@ flowchart TD
 |---|---|
 | Typed `updateCells` values: text as `stringValue`, amounts and dates as `numberValue`; never user-entered | A `stringValue` is stored as given: `=HYPERLINK(…)` stays text, `+919876…` stays a phone number, `007` keeps its zeros ([Q23](grilling-log.md)) |
 | Dates are date serials in the buyer's time zone with a `yyyy-mm-dd hh:mm:ss` format; the zone is in the header: its abbreviation where it has no daylight saving ("Created (IST)"), its name where it does ("Created (Europe/Berlin)"), accepting one ambiguous hour a year in the sheet while the ledger keeps UTC ([Q95](grilling-log.md)) | Date filters, pivots and monthly totals work; typed numbers aren't re-parsed by locale ([Q87](grilling-log.md)) |
-| Amounts: `Decimal(minor) / 10^exponent`, with a number format per exponent. The exponent comes from ISO 4217 plus a per-source override table; codes upper-cased | 19.99 USD, 1999 JPY, 1.999 KWD ([Q19](grilling-log.md)) |
-| An unknown currency code holds back that sheet row: its mirror job goes `dead` with an alert | No amount 100 times off reaches the sheet ([Q62](grilling-log.md)) |
+| Amounts: `Decimal(minor) / 10^exponent`, with a number format per exponent. The exponent comes from ISO 4217 plus a per-source override table; codes upper-cased | 19.99 USD, 1999 JPY ([Q19](grilling-log.md)) |
+| An unknown currency code holds back that sheet row: its mirror job goes `dead` with an alert. The table is built from Stripe's zero-decimal and special-case lists; BHD, JOD, KWD, OMR, TND, UGX and ISK count as unknown until the spike records a real charge in each ([Q100](grilling-log.md), G15) | No amount 100 times off reaches the sheet ([Q62](grilling-log.md)) |
 | Amounts past 15 significant digits are written as text | A Sheets number can't hold them exactly |
 | Cells over 50,000 characters are cut, ending `…[truncated]` | Sheets' hard limit per cell |
 | Email masked when configured: `a***@gmail.com` | [Q21](grilling-log.md) |
@@ -104,7 +104,7 @@ A crash at any point leaves the sink paused with "rebuild incomplete" until the 
 
 Sheets allows 60 reads and 60 writes a minute per user. A flush costs **two reads and one write** whatever its size, and runs at most every 3 s: at worst 40 reads and 20 writes a minute. Calls grow with how long work keeps arriving, not with the number of events. 200 payments arriving over 30 seconds take about ten flushes, so around 30 calls; 200 events never cost 200 calls (F19). The README prints the number measured in rehearsal. Google says over-quota calls may be billed later in 2026, so a 429 always backs off.
 
-**Auth** ([Q90](grilling-log.md)). A Google service account with the `spreadsheets` scope only; the buyer shares the one spreadsheet with its address. If the buyer's Google organisation blocks service-account keys (the default for organisations created since May 2024), OAuth with a dedicated Google user's refresh token instead. `doctor` says which is in use and explains either error in plain words.
+**Auth** ([Q90](grilling-log.md)). A Google service account with the `spreadsheets` scope only; the buyer shares the one spreadsheet with its address. Sharing with the service account works unless the buyer's Workspace admin has turned off sharing outside the domain; the admin's allowlist takes only Workspace domains, so it can't admit a service account. For that buyer, or one whose Google organisation blocks service-account keys (the default for organisations created since May 2024), the fallback is an **Internal** OAuth app created in the buyer's own Workspace, with a dedicated user's refresh token: an Internal app needs no Google review, and its tokens don't expire after 7 days as a "Testing" app's do ([Q101](grilling-log.md), G3). `doctor` says which is in use and explains the sharing-blocked and key-blocked errors in plain words.
 
 ## Failures and their class
 
@@ -115,7 +115,7 @@ Sheets allows 60 reads and 60 writes a minute per user. A flush costs **two read
 | 404, or a 400 naming a sheet id, grid or range (tab deleted between read and write) | `pause`, "tab missing" (F08) |
 | Header differs from config | `pause`, "layout changed" |
 | A 400 naming one request's cell value | Split the batch in halves until the row is found; that job goes `dead`, the rest are written |
-| Spreadsheet past 80 % of 10 million cells | Alert; at the limit, `pause`, "sheet full" |
+| Spreadsheet past 80 % of the configured cell limit (default 20 million, Google's limit since September 2026), or the API's own cell-limit error | Alert at 80 %; at the limit or on that error, `pause`, "sheet full" (G22) |
 | Another deployment's id on Sync status within 10 minutes | `pause`, "another deployment writes here" |
 
 ## Where to go next

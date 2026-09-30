@@ -68,7 +68,7 @@ What a handover runs to prove the setup works, and the first thing to run when s
 | Stripe key is a **restricted** key with every needed read permission; each key's mode matches the config | `sk_live_` used, a permission missing (named), `rk_live_` with `mode = "test"` ([Q85](grilling-log.md)) |
 | Stripe's webhook endpoint for this URL is subscribed to every handled type; its API version matches the pinned one | a type not ticked (fail); a version differs (warning) (F29) |
 | Our clock within 30 s of the source's `Date` header | Stripe signatures fail beyond 5 minutes |
-| The spreadsheet is reachable and shared, the tabs and header match, the deployment id is ours; which Google auth is in use | unshared, wrong id, columns moved; the organisation blocks keys (explained in plain words, [Q90](grilling-log.md)) |
+| The spreadsheet is reachable and shared, the tabs and header match, the deployment id is ours; which Google auth is in use | unshared, wrong id, columns moved; the organisation blocks outside sharing or keys (explained in plain words, [Q90](grilling-log.md), [Q101](grilling-log.md)) |
 | Database writable, migrations current, schema not newer than the code, WAL and `synchronous=FULL` on, on a local disk | read-only, network drive or synced folder (OneDrive, Dropbox, Google Drive) |
 | Admin tokens long enough if the admin port is public | |
 | The heartbeat URL and the backup destination are set and reachable | [hosting.md](hosting.md) |
@@ -133,9 +133,9 @@ url = ""                            # Slack or Discord incoming-webhook URL; emp
 
 ## Starting and stopping
 
-**Start:** take the lock file → validate config (fail closed, [receiver.md](receiver.md)) → refuse if the database's schema is newer than this code → apply migrations → return any `running` jobs whose `claimed_by` is a previous run of this instance to waiting, with the attempt counted and normal backoff, as the reaper does (a job that crashes the process every time must still reach `dead`) → start loops → start accepting deliveries.
+**Start:** take the lock file (`filelock` with a short timeout and `fallback_to_soft=False`; the OS releases it when the process dies, G12) → validate config (fail closed, [receiver.md](receiver.md)) → refuse if the database's schema is newer than this code → apply migrations → return any `running` jobs whose `claimed_by` is a previous run of this instance to waiting, with the attempt counted and normal backoff, as the reaper does (a job that crashes the process every time must still reach `dead`) → start loops → start accepting deliveries.
 
-**Stop** ([Q37](grilling-log.md)): answer 503 to new deliveries → stop claiming → give running jobs up to 20 s → release the leases of anything unfinished (back to waiting, attempt refunded) → release the lock file → exit. Results are recorded with a fresh connection, never one tied to a cancelled request. Platforms and Compose are given a 30 s stop grace period.
+**Stop** ([Q37](grilling-log.md)): one signal handler of our own stops both listeners, public and admin, since uvicorn's own handlers would replace each other (G13) → answer 503 to new deliveries → stop claiming → give running jobs up to 20 s → release the leases of anything unfinished (back to waiting, attempt refunded) → release the lock file → exit. Results are recorded with a fresh connection, never one tied to a cancelled request. Platforms and Compose are given a 30 s stop grace period.
 
 ## Logs and health
 
@@ -150,7 +150,7 @@ url = ""                            # Slack or Discord incoming-webhook URL; emp
 |---|---|
 | WAL mode | Readers don't wait for the writer |
 | `synchronous=FULL` | A commit is on disk before we answer 202, so a power cut can't lose an acknowledged event ([Q50](grilling-log.md)) |
-| One writer connection behind an async lock, `BEGIN IMMEDIATE` issued explicitly | Writes queue in our code, in order; the audit measured a pool shedding load as "database is locked" (F14). The storm test asserts zero 503s and a p99 under 2 s ([Q83](grilling-log.md)) |
+| One writer connection behind an async lock, `BEGIN IMMEDIATE` issued explicitly; `autocommit` pinned to `LEGACY_TRANSACTION_CONTROL` | Python has said its default will change, and a hand-issued `BEGIN` fails under the new one (G11). Writes queue in our code, in order; the audit measured a pool shedding load as "database is locked" (F14). The storm test asserts zero 503s and a p99 under 2 s ([Q83](grilling-log.md)) |
 | A read-only connection (`mode=ro`) for pages, verify and exports | Reads never take the write lock |
 | `busy_timeout=5000` | Only matters for a command-line process writing while no server runs |
 | A local disk | WAL is unsafe on network drives and in synced folders |

@@ -77,7 +77,7 @@ The ledger. Written only by the ledger worker. The Payments tab is a copy.
 | `status`, `source_status` | Our status (`processing`, `authorized`, `failed`, `succeeded`, `partially_refunded`, `refunded`, `canceled`) and the source's own word | One vocabulary across sources ([sources.md](sources.md)) |
 | `amount_minor`, `authorized_minor`, `currency` | Amount received, in **minor units**; the amount authorised when it differs (partial capture); currency | Revenue isn't overstated after a partial capture (F10) |
 | `refunded_minor` | Total refunded so far | |
-| `fee_minor`, `net_minor`, `settlement_minor`, `settlement_currency` | What the source kept, what the buyer receives, and the paid-out amount and currency | The first things a bookkeeper asks for ([Q69](grilling-log.md)) |
+| `fee_minor`, `net_minor`, `settlement_minor`, `settlement_currency` | What the source kept, what the buyer receives, and the paid-out amount and currency; null while **pending**, before the source has created its balance transaction ([Q97](grilling-log.md)) | The first things a bookkeeper asks for ([Q69](grilling-log.md)) |
 | `fee_tax_minor` | Tax on the fee (Razorpay reports GST on its fee) | An input credit Indian accountants claim |
 | `method` | `card` (with brand), `upi`, `netbanking`, `wallet`, … | Standard in Indian sales reports |
 | `metadata` | The configured metadata keys (Stripe `metadata`, Razorpay `notes`), as JSON | Joins the sheet to the buyer's own order ids |

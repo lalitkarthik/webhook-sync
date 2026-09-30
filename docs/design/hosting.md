@@ -27,7 +27,7 @@ flowchart LR
 
 - **Default:** a platform that runs an always-on container with a persistent volume, deployed from a template in the repo. The platform's own HTTPS URL works without the buyer owning a domain. Which platform is chosen when the first client needs it, against the table above and its price that month; the template is written for that one.
 - **Alternative:** the buyer's own small VM with Docker Compose and Caddy, which needs a DNS name pointing at the machine.
-- **Cost:** every quote states the monthly hosting cost at that day's list price (roughly $5-12 a month for the smallest always-on option). The buyer owns and pays for the account from the start (plan: "the client owns every account").
+- **Cost:** every quote states the monthly hosting cost at that day's list price (about $4-9 a month for the smallest always-on option in October 2026, G37). The buyer owns and pays for the account from the start (plan: "the client owns every account").
 
 ## Upgrades
 
@@ -50,7 +50,7 @@ Every in-process alert is silent when the process is dead. Two outside checks, b
 - **Roles.** The buyer decides what is collected and why: the data fiduciary under India's DPDP Act, the controller under the GDPR. The service runs on the buyer's infrastructure. Lalit handles personal data only during setup and support, as the buyer's processor, under a one-paragraph data-processing clause in the quote.
 - **Less data.** Stored payloads are stripped of fields no adapter reads (addresses, phone numbers, IP addresses, payment-method details) and kept 30 days. Backups follow the same retention and are encrypted.
 - **Support access** only through the buyer's own screen share or a time-limited account on their host, never by copying data out. (The vault's client-data rule applies.)
-- **Keys.** Stripe keys are restricted to reading. Razorpay keys can't be restricted: they live only in the host's environment and are rotated at handover.
+- **Keys.** Stripe keys are restricted to reading. Razorpay keys can't be restricted: they live only in the host's environment and are rolled at handover with Razorpay's 24-hour overlap, because the buyer's checkout uses the same key set ([Q102](grilling-log.md)).
 
 ## The handover runbook
 

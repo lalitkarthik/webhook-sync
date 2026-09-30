@@ -4,7 +4,7 @@
 
 **How to read it.** Read the first five sections, then follow the reading order at the bottom. Words in **bold** are defined in [CONTEXT.md](../../CONTEXT.md). Everything here is a **decision, not a description**: none of it is built. The questions behind each decision are in [grilling-log.md](grilling-log.md).
 
-**Status (2026-09-30).** Designed in nine grilling rounds (Q1-Q96), audited independently ([38 findings](audit/2026-09-30-design-audit.md)), and revised; [the audit response](audit/2026-09-30-audit-response.md) maps every finding to its change. Awaiting review. The implementation plan is written later.
+**Status (2026-09-30).** Designed in ten grilling rounds (Q1-Q102), audited independently ([38 findings](audit/2026-09-30-design-audit.md)), revised, and checked against primary sources ([research-gaps.md](research-gaps.md), 2026-10-01); [the audit response](audit/2026-09-30-audit-response.md) maps every finding to its change. Awaiting review. The implementation plan is written later.
 
 ## What it is, in one paragraph
 
@@ -101,7 +101,7 @@ sequenceDiagram
 
 | Stage | Contents |
 |---|---|
-| **Prototype** (8-10 h, for 8 October) | Stripe receiver, queue, fetch, flusher: a GIF of the duplicate storm and the outage catch-up |
+| **Prototype** (10-12 h, for 8 October) | Stripe receiver, queue, fetch, flusher, a minimal sweeper: a GIF of the duplicate storm and the outage catch-up |
 | **Pitch-ready cut** (24-28 h in all) | The prototype finished and tested; sweeper; verify; Daily summary; three scenes; README |
 | **After pitching** | Forwarding sink; admin pages, probes, rebuild and the full alert list; Checkout line items; Razorpay; Hypothesis suites |
 | **When asked** | Database sink with subscriptions; Postgres and several workers (Linux) |

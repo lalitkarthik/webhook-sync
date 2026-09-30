@@ -12,13 +12,14 @@ Webhooks are best-effort. A source gives up on a failed delivery eventually, and
 |---|---|---|
 | Stripe, live mode | about 3 days | stops; the event is never sent again |
 | Stripe, test mode | 3 times over a few hours | stops |
+| `stripe listen` (the demo) | never: the CLI acknowledges to Stripe, then forwards once | the event is only in the events list (G5) |
 | Razorpay | 24 hours | **disables the webhook** |
 
 A server that is down for an afternoon, a bad deploy or a restored backup can therefore lose events for good. The **sweeper** asks the source what happened and stores anything missing ([Q38](grilling-log.md)).
 
 ## Stripe: time slices
 
-The sweeper runs at startup (after a random 0-30 s delay) and every 10 minutes. It walks source time in **time slices** of up to 6 hours, and moves the **checkpoint** only after a whole slice is stored ([Q72](grilling-log.md)).
+The sweeper runs at startup (after a random 0-30 s delay) and every 10 minutes. It walks source time in **time slices** of up to 6 hours, and moves the **checkpoint** only after a whole slice is stored ([Q72](grilling-log.md)). The prototype builds the slice walk, at startup and on demand; the timer, the horizon and the heartbeat follow in P4 ([Q98](grilling-log.md)).
 
 ```mermaid
 flowchart TD
