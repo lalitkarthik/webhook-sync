@@ -61,7 +61,7 @@ Use primary sources (official docs, source code, specs) and save each note to
 | `firecrawl search` / `firecrawl scrape <url>` | Pages WebFetch cannot read (heavy JavaScript, blocks) | `FIRECRAWL_API_KEY` set; the session-start script installs the CLI. Credits are limited: use it last. |
 | A local clone (`git clone --depth 1`) | Reading a library's source | GitHub is always reachable |
 
-One research subagent at a time, and it must not start agents of its own.
+Research subagents run in parallel when their questions are independent; none may start agents of its own.
 
 ## Smoke test for a new environment
 
