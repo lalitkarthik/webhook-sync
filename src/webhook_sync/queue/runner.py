@@ -115,7 +115,7 @@ class StageRunner:
             beating.cancel()
         return len(claimed)
 
-    async def _run(self, job: ClaimedJob, leases: "_Leases") -> None:
+    async def _run(self, job: ClaimedJob, leases: _Leases) -> None:
         try:
             await self._attempt(job, leases)
         except LeaseLost:
@@ -124,7 +124,7 @@ class StageRunner:
         finally:
             leases.release(job.id)
 
-    async def _attempt(self, job: ClaimedJob, leases: "_Leases") -> None:
+    async def _attempt(self, job: ClaimedJob, leases: _Leases) -> None:
         try:
             done = await leases.guard(job.id, self._work(job))
         except StageFailed as failed:
@@ -162,14 +162,15 @@ async def run_reaper(
     sleep: Sleep = asyncio.sleep,
 ) -> None:
     """The reaper: every 30 s, return jobs whose lease has expired (queue.md). Runs until
-    cancelled; a failed pass is logged and the next one tried."""
+    cancelled; a failed pass is logged and the next one tried. The first pass is 30 s in:
+    start has just reclaimed every running job, so none can have expired before then."""
     rng = rng or random.Random()
     while True:
+        await sleep(REAP_EVERY.total_seconds())
         try:
             await reap(writer, retry_profile=retry_profile, now=utc_now(), rng=rng)
         except Exception:
             log.exception("reaper pass failed; trying again at the next pass")
-        await sleep(REAP_EVERY.total_seconds())
 
 
 IDLE_WAIT = timedelta(seconds=1)
@@ -195,9 +196,7 @@ class _Leases:
         while self._held:
             await self._sleep(HEARTBEAT_EVERY.total_seconds())
             try:
-                lost = await heartbeat(
-                    self._writer, sorted(self._held), self._token, now=utc_now()
-                )
+                lost = await heartbeat(self._writer, sorted(self._held), self._token, now=utc_now())
             except Exception:
                 log.exception("heartbeat failed; trying again at the next beat")
                 continue

@@ -9,12 +9,14 @@ import asyncio
 import random
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from support import ReadRows
 from time_machine import TimeMachineFixture
 
 from webhook_sync.clock import utc_now
+from webhook_sync.config import Config
 from webhook_sync.db.writer import Transaction, Writer
 from webhook_sync.queue import (
     ClaimedJob,
@@ -29,6 +31,8 @@ from webhook_sync.queue import (
     reap,
     run_reaper,
 )
+from webhook_sync.queue import runner as runner_module
+from webhook_sync.receiver.app import create_app
 
 NINE = datetime(2026, 10, 2, 9, 0, tzinfo=UTC)
 INSTANCE = "wsync-test@2026-10-02T08:59:00.000000Z"
@@ -154,9 +158,7 @@ async def test_a_retry_error_puts_the_job_back_to_waiting_after_its_backoff(
     ]
 
 
-async def test_a_retry_after_is_honoured_as_a_minimum(
-    writer: Writer, read_rows: ReadRows
-) -> None:
+async def test_a_retry_after_is_honoured_as_a_minimum(writer: Writer, read_rows: ReadRows) -> None:
     await enqueue_job(writer)
     failure = Failure("HTTP 429", "retry", retry_after=timedelta(hours=1))
 
@@ -354,15 +356,17 @@ async def test_a_stage_working_past_60_seconds_keeps_its_job_by_heartbeating_eve
 ) -> None:
     await enqueue_job(writer)
     slept: list[float] = []
+    ninety_seconds_on = asyncio.Event()
 
     async def time_passes(seconds: float) -> None:
         slept.append(seconds)
         frozen_clock.shift(timedelta(seconds=seconds))
+        if utc_now() >= NINE + timedelta(seconds=90):
+            ninety_seconds_on.set()
         await asyncio.sleep(0)
 
     async def slow(job: ClaimedJob) -> Done:
-        while utc_now() < NINE + timedelta(seconds=90):
-            await asyncio.sleep(0)
+        await ninety_seconds_on.wait()
         assert await reap_now(writer) == []
         return Done()
 
@@ -429,6 +433,30 @@ async def test_the_reaper_runs_every_30_seconds_and_takes_back_a_lease_once_it_e
     assert await read_rows("SELECT finished_at, outcome FROM attempts") == [
         {"finished_at": "2026-10-02T09:01:30.000000Z", "outcome": "reaped"}
     ]
+
+
+async def test_the_served_app_runs_the_reaper(
+    writer: Writer,
+    read_rows: ReadRows,
+    frozen_clock: TimeMachineFixture,
+    config: Config,
+    data_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(runner_module, "REAP_EVERY", timedelta(milliseconds=10))
+    await enqueue_job(writer)
+    await claim_one(writer)
+    frozen_clock.move_to(NINE + timedelta(seconds=61), tick=False)
+
+    app = create_app(config, data_dir)
+    async with app.router.lifespan_context(app):
+        for _ in range(500):  # wait (in real time) for the reaper's first pass
+            if await read_rows("SELECT outcome FROM attempts"):
+                break
+            await asyncio.sleep(0.01)
+
+    assert await read_rows("SELECT status FROM jobs") == [{"status": "waiting"}]
+    assert await read_rows("SELECT outcome FROM attempts") == [{"outcome": "reaped"}]
 
 
 async def test_a_stopped_runner_finishes_the_job_it_holds_and_claims_no_more(
