@@ -1,0 +1,49 @@
+{
+  "recorded_at": "2026-10-02T20:12:48+00:00",
+  "request": "GET /v1/payments/pay_Tj63Ohj3DwqGru?expand[]=refunds&expand[]=card",
+  "http": 200,
+  "headers": {
+    "content-type": "application/json",
+    "date": "Fri, 02 Oct 2026 20:12:48 GMT",
+    "uber-trace-id": "0d0e78b85e7c1814f0daec2e42eb6ea5:e0bb92a85c521ce9:0000000000000000:1"
+  },
+  "body": {
+    "id": "pay_Tj63Ohj3DwqGru",
+    "entity": "payment",
+    "amount": 100,
+    "currency": "INR",
+    "status": "created",
+    "order_id": "order_Tj5xIxZwVKuYHE",
+    "invoice_id": null,
+    "international": false,
+    "method": "netbanking",
+    "refunds": {
+      "entity": "collection",
+      "count": 0,
+      "items": []
+    },
+    "amount_refunded": 0,
+    "refund_status": null,
+    "captured": false,
+    "description": "Q1b",
+    "card_id": null,
+    "card": null,
+    "bank": "CNRB",
+    "wallet": null,
+    "email": "customer@example.com",
+    "notes": {
+      "purpose": "wsync research Q1, 2026-10-02"
+    },
+    "fee": null,
+    "tax": null,
+    "error_code": null,
+    "error_description": null,
+    "error_source": null,
+    "error_step": null,
+    "error_reason": null,
+    "acquirer_data": {
+      "bank_transaction_id": null
+    },
+    "created_at": 1790956537
+  }
+}
