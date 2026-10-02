@@ -6,6 +6,7 @@ the one clock (A14); the sleeps are injected, so tests drive the runner without 
 """
 
 import asyncio
+import logging
 import random
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -13,8 +14,10 @@ from dataclasses import dataclass
 from webhook_sync.clock import utc_now
 from webhook_sync.config import RetryProfile
 from webhook_sync.db.writer import Transaction, Writer
-from webhook_sync.queue.operations import ClaimedJob, Failure, claim, complete, fail
+from webhook_sync.queue.operations import ClaimedJob, Failure, LeaseLost, claim, complete, fail
 from webhook_sync.queue.pause import Pauses
+
+log = logging.getLogger("webhook_sync.queue")
 
 type Sleep = Callable[[float], Awaitable[None]]
 
@@ -84,6 +87,13 @@ class StageRunner:
         return len(claimed)
 
     async def _run(self, job: ClaimedJob) -> None:
+        try:
+            await self._attempt(job)
+        except LeaseLost:
+            # The reaper or another worker has the job: this attempt's result is discarded.
+            log.warning("lease lost: result discarded", extra={"job_id": job.id})
+
+    async def _attempt(self, job: ClaimedJob) -> None:
         try:
             done = await self._work(job)
         except StageFailed as failed:

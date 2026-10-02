@@ -15,7 +15,7 @@ from support import ReadRows
 from time_machine import TimeMachineFixture
 
 from webhook_sync.clock import utc_now
-from webhook_sync.db.writer import Writer
+from webhook_sync.db.writer import Transaction, Writer
 from webhook_sync.queue import (
     ClaimedJob,
     Done,
@@ -314,3 +314,35 @@ async def test_one_row_that_cannot_be_reaped_does_not_stop_the_reaper_reaping_th
     ]
     [logged] = [r for r in caplog.records if r.getMessage() == "job not reaped"]
     assert logged.__dict__["job_id"] == bad
+
+
+async def write_stand_in(tx: Transaction) -> None:
+    """The stage's own write (a stand-in for the ledger's), committed with `complete`."""
+    await tx.execute("CREATE TABLE IF NOT EXISTS ledger_stand_in (written INTEGER)")
+    await tx.execute("INSERT INTO ledger_stand_in VALUES (1)")
+
+
+async def test_a_stage_that_outlives_its_lease_without_heartbeating_is_reaped_and_its_late_completion_discarded(  # noqa: E501
+    writer: Writer, read_rows: ReadRows, frozen_clock: TimeMachineFixture
+) -> None:
+    job_id = await enqueue_job(writer)
+    started, finish = asyncio.Event(), asyncio.Event()
+
+    async def stalls(job: ClaimedJob) -> Done:
+        started.set()
+        await finish.wait()
+        return Done(writes=write_stand_in)
+
+    running = asyncio.create_task(runner_for(writer, stalls, sleep=never_returns).run_once())
+    await started.wait()
+    frozen_clock.move_to(NINE + timedelta(seconds=61), tick=False)
+    assert await reap_now(writer) == [job_id]
+    finish.set()
+    await running
+
+    assert await read_rows("SELECT status, attempts FROM jobs") == [
+        {"status": "waiting", "attempts": 1}
+    ]
+    assert await read_rows("SELECT outcome FROM attempts") == [{"outcome": "reaped"}]
+    tables = await read_rows("SELECT name FROM sqlite_master WHERE name = 'ledger_stand_in'")
+    assert tables == []
