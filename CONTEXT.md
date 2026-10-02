@@ -138,6 +138,10 @@ A worker taking a waiting job to run it. A claim gives the job a **lease** (an e
 **Heartbeat**:
 A running worker pushing its lease forward while it is still working.
 
+**Stage runner**:
+The loop that runs one stage's jobs: it claims, heartbeats, completes or fails each job, reaps expired leases and releases unfinished ones at shutdown. A stage (the ledger worker, the flusher) plugs in only the work itself.
+_Avoid_: worker pool, consumer
+
 **Reaper**:
 The loop that returns jobs whose lease has expired to waiting.
 

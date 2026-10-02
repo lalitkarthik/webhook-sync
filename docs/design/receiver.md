@@ -25,7 +25,7 @@ flowchart TD
   DH -- no --> SIG{"signature valid for any secret?<br/>timestamp within ±5 min?"}
   SIG -- no --> R400b["400 bad_signature /<br/>stale_timestamp / future_timestamp"]
   SIG -- yes --> PJ{"a JSON object with an event id,<br/>and the configured mode?"}
-  PJ -- no --> R400c["400 malformed / missing_id / wrong_mode"]
+  PJ -- no --> R400c["400 malformed / missing_id /<br/>wrong_mode / wrong_account"]
   PJ -- yes --> TX["writer: BEGIN IMMEDIATE<br/>insert event if absent"]
   TX --> NEW{"inserted?"}
   NEW -- yes --> TY{"type handled?"}
@@ -48,7 +48,7 @@ flowchart TD
 | 4 | `Content-Type` is `application/json` (any parameters) or any `…+json` type | 415 `not_json` | Cheap, and says clearly what went wrong. |
 | 5 | No security header appears twice: `stripe-signature`, `x-razorpay-signature`, `x-razorpay-event-id`, `webhook-id`, `webhook-timestamp`, `webhook-signature` | 400 `duplicate_header` | Standard Webhooks verifies the last copy while FastAPI reads the first: a dedupe bypass (feature inventory). |
 | 6 | Signature matches any of the source's secrets; Stripe's timestamp within 5 minutes **either side** of our clock | 400 `bad_signature`, `stale_timestamp`, `future_timestamp` | On the **raw bytes**, before parsing. stripe-python checks only the past, and only when given a tolerance, so both bounds are passed and checked. |
-| 7 | Body is a JSON **object** with an event id where the source keeps it ([sources.md](sources.md)); the mode matches the configured mode | 400 `malformed`, `missing_id`, `wrong_mode` | The dedupe key is never empty. Test events never reach live books. Razorpay events carry no mode; its key prefix is checked at startup instead. |
+| 7 | Body is a JSON **object** with an event id where the source keeps it ([sources.md](sources.md)); the mode matches the configured mode; for Razorpay, a body `account_id` matches the configured account ([Q121](grilling-log.md)) | 400 `malformed`, `missing_id`, `wrong_mode`, `wrong_account` | The dedupe key is never empty. Test events never reach live books. Razorpay events carry no mode; its key prefix is checked at startup instead. |
 | 8 | The transaction | 503 on a database error | See below. |
 
 **Every check is wrapped.** Every studied library raises something other than "invalid signature" on some bad input (`UnicodeDecodeError`, `TypeError`, `ValueError`). Each adapter's `verify` catches everything and returns a reason, so malformed input never becomes a 500.
@@ -73,7 +73,7 @@ COMMIT;
 
 It is all local and takes milliseconds. The event and its job commit together or not at all (the **outbox**), so a crash can't leave a stored event without work. If two deliveries of one event arrive together, the primary key lets one insert win and the other answers 200.
 
-**Duplicates and conflicts** ([Q71](grilling-log.md)). Stripe renders one event with different bytes on different occasions (the endpoint's API version, a `pending_webhooks` count that changes), so comparing raw bytes would flag nearly every resend (F02). The comparison is on the **fingerprint**: type, object id, creation time and mode. A different fingerprint under a known id is a **conflict**: the first event is kept, the delivery is answered 200, and an alert names both.
+**Duplicates and conflicts** ([Q71](grilling-log.md)). Stripe renders one event with different bytes on different occasions (the endpoint's API version, a `pending_webhooks` count that changes), so comparing raw bytes would flag nearly every resend (F02). The comparison is on the **fingerprint**: type, object id, creation time and mode. A different fingerprint under a known id is a **conflict**: the first event is kept, the delivery is answered 200, and an alert names both. Until alerts are built, a conflict is logged at error level and counted in `deliveries` ([Q116](grilling-log.md)).
 
 **Razorpay replays** ([Q86](grilling-log.md)). Razorpay's event id travels in a header outside its signature, so a captured delivery could be resent under any id. The unique index on the signed body's hash makes such a replay a duplicate (F12).
 
@@ -89,7 +89,7 @@ It is all local and takes milliseconds. The event and its job commit together or
 
 A 500 is never sent on purpose; if one happens it is a bug and is logged with the request id. The one exception is the demo below.
 
-**The demo fail-first switch** ([Q106](grilling-log.md)). `wsync serve --demo-fail-first N` stores each new event and its job exactly as above, then answers 500 to the first N attempts per event id, so Razorpay's own retries make the duplicate-storm scene: what a real "stored, but the answer was lost" looks like. Each attempt's arrival time, event id and signed-body SHA-256 are logged, which is also how the recording spike measures retries (G38, G48). Startup refuses the switch unless the source's key starts `rzp_test_` and the spreadsheet is on the demo allow-list.
+**The demo fail-first switch** ([Q106](grilling-log.md)). `wsync serve --demo-fail-first N` stores each new event and its job exactly as above, then answers 500 to the first N attempts per event id, so Razorpay's own retries make the duplicate-storm scene: what a real "stored, but the answer was lost" looks like. Each attempt's arrival time, event id and signed-body SHA-256 are logged, which is also how the recording spike measures retries (G38, G48). Startup refuses the switch unless the source's key starts `rzp_test_` and the spreadsheet is in `[demo] spreadsheet_ids`. The attempt count lives in memory, and each 500 is recorded in `deliveries` ([Q120](grilling-log.md)).
 
 ## Rejections
 

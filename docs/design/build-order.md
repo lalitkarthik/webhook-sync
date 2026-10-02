@@ -78,7 +78,7 @@ In roughly this order, adjusted to what buyers ask for:
 webhook-sync/
 ├── CONTEXT.md · README.md · THIRD_PARTY_NOTICES.md
 ├── webhook-sync.toml.example · .env.example
-├── migrations/0001_init.sql
+├── migrations/0001_init.sqlite.sql
 ├── deploy/                       platform template, compose.yml with Caddy (after pitching)
 ├── src/webhook_sync/
 │   ├── config.py                 TOML + env, validation, fail closed
