@@ -1,0 +1,31 @@
+{
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$(git rev-parse --show-toplevel 2>/dev/null)/scripts/claude/context-guard.py\"; [ -f \"$f\" ] || f=\"$CLAUDE_PROJECT_DIR/scripts/claude/context-guard.py\"; [ -f \"$f\" ] && python \"$f\"; exit 0",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$(git rev-parse --show-toplevel 2>/dev/null)/scripts/claude/context-guard.py\"; [ -f \"$f\" ] || f=\"$CLAUDE_PROJECT_DIR/scripts/claude/context-guard.py\"; [ -f \"$f\" ] && python \"$f\"; exit 0",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
