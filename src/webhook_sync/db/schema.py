@@ -66,3 +66,12 @@ jobs = sa.Table(
     sa.Column("updated_at", sa.Text, nullable=False),
     sa.Column("resolved_note", sa.Text),
 )
+
+rejection_counts = sa.Table(
+    "rejection_counts",
+    metadata,
+    sa.Column("source", sa.Text, primary_key=True),
+    sa.Column("reason", sa.Text, primary_key=True),
+    sa.Column("minute", sa.Text, primary_key=True),
+    sa.Column("count", sa.Integer, nullable=False),
+)

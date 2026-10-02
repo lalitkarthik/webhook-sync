@@ -1,6 +1,7 @@
 """Every rejected request answered with its reason, and counted (seam 1: the HTTP app)."""
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -181,10 +182,59 @@ async def test_with_two_secrets_a_body_signed_with_either_passes(
     )
     body, headers = sign_razorpay(razorpay_sample("payment.captured"), secret=secret)
 
-    app = create_app(rotating, data_dir)
+    async with started_app(rotating, data_dir) as client:
+        response = await client.post("/webhooks/razorpay", content=body, headers=headers)
+
+    assert response.status_code == status_code
+
+
+@asynccontextmanager
+async def started_app(config: Config, data_dir: Path) -> AsyncGenerator[httpx.AsyncClient]:
+    """The app started from `config` and driven over ASGI; leaving the block shuts it down."""
+    app = create_app(config, data_dir)
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://wsync.test") as client:
-            response = await client.post("/webhooks/razorpay", content=body, headers=headers)
+            yield client
 
-    assert response.status_code == status_code
+
+async def reject(client: httpx.AsyncClient, reason: str) -> None:
+    """Send one request that the receiver rejects with `reason`."""
+    body, headers = sign_razorpay(razorpay_sample("payment.captured"))
+    match reason:
+        case "bad_signature":
+            headers["x-razorpay-signature"] = "0" * 64
+        case "not_json":
+            headers["content-type"] = "text/plain"
+        case "missing_id":
+            del headers["x-razorpay-event-id"]
+        case _:
+            raise ValueError(reason)
+    response = await client.post("/webhooks/razorpay", content=body, headers=headers)
+    assert response.json() == {"rejection": reason}
+
+
+async def test_rejections_are_written_once_a_minute_as_one_row_per_reason(
+    client: httpx.AsyncClient, read_rows: ReadRows, time_machine: TimeMachineFixture
+) -> None:
+    time_machine.move_to(NINE, tick=False)
+    for reason in ["bad_signature"] * 3 + ["not_json"] * 2 + ["missing_id"]:
+        await reject(client, reason)
+    junk_wrote = (
+        await read_rows("SELECT * FROM rejection_counts"),
+        await read_rows("SELECT * FROM events"),
+        await read_rows("SELECT * FROM deliveries"),
+    )
+
+    time_machine.move_to(datetime(2026, 10, 2, 9, 1, 5, tzinfo=UTC), tick=False)
+    await reject(client, "bad_signature")
+
+    assert junk_wrote == ([], [], [])
+    rows = await read_rows("SELECT reason, minute, count FROM rejection_counts ORDER BY reason")
+    assert rows == [
+        {"reason": reason, "minute": "2026-10-02T09:00:00.000000Z", "count": count}
+        for reason, count in [("bad_signature", 3), ("missing_id", 1), ("not_json", 2)]
+    ]
+    assert {row["source"] for row in await read_rows("SELECT source FROM rejection_counts")} == {
+        "razorpay"
+    }

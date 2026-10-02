@@ -21,6 +21,7 @@ from webhook_sync.db.migrations import apply_pending
 from webhook_sync.db.writer import Writer
 from webhook_sync.receiver.checks import check_content_type, check_security_headers, read_body
 from webhook_sync.receiver.rate_cap import RateCap
+from webhook_sync.receiver.rejections import RejectionCounters
 from webhook_sync.receiver.store import store_delivery
 from webhook_sync.sources.base import EventDescription, Rejection, SourceAdapter, VerifiedDelivery
 from webhook_sync.sources.razorpay import EVENT_ID_HEADER, RazorpayAdapter
@@ -30,12 +31,14 @@ log = logging.getLogger("webhook_sync.receiver")
 
 @dataclass
 class Receiver:
-    """What the routes share: the config, the writer, the source adapters and the rate cap."""
+    """What the routes share: the config, the writer, the source adapters, the rate cap and the
+    rejection counters."""
 
     config: Config
     writer: Writer
     razorpay: SourceAdapter
     rate_cap: RateCap
+    rejections: RejectionCounters
 
 
 def create_app(config: Config, data_dir: Path) -> FastAPI:
@@ -56,6 +59,7 @@ def create_app(config: Config, data_dir: Path) -> FastAPI:
                     webhook_secrets=config.razorpay_secrets.webhook_secrets,
                 ),
                 rate_cap=RateCap(),
+                rejections=RejectionCounters(),
             )
             yield
         finally:
@@ -73,8 +77,11 @@ def create_app(config: Config, data_dir: Path) -> FastAPI:
         received_at = utc_now()
         receiver: Receiver = request.app.state.receiver
         adapter = receiver.razorpay
+        if receiver.rejections.has_closed_minutes():
+            await _write_rejection_counts(receiver)
         checked = await _check(request, receiver.rate_cap, adapter)
         if isinstance(checked, Rejection):
+            receiver.rejections.count(adapter.name, checked.reason)
             return _rejected(adapter.name, checked, request.headers.get(EVENT_ID_HEADER))
         verified, description = checked
 
@@ -116,6 +123,14 @@ def create_app(config: Config, data_dir: Path) -> FastAPI:
         return JSONResponse({"result": stored.result}, status_code=stored.status_code)
 
     return app
+
+
+async def _write_rejection_counts(receiver: Receiver) -> None:
+    """Write the closed minutes' rejection counts; a failure keeps them for the next try."""
+    try:
+        await receiver.rejections.write_closed_minutes(receiver.writer)
+    except sqlite3.Error:
+        log.exception("rejection counts not written: database error")
 
 
 async def _check(
