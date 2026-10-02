@@ -33,7 +33,7 @@ from webhook_sync.queue import (
     enqueue,
 )
 from webhook_sync.queue.runner import Sleep
-from webhook_sync.sources.base import BusinessRow, NotFound, SourceAdapter
+from webhook_sync.sources.base import BusinessRow, NotFound, SourceAdapter, UnusableState
 
 log = logging.getLogger("webhook_sync.ledger")
 
@@ -119,14 +119,17 @@ def ledger_work(
         source = sources[job.source]
         fetched = await source.fetch(job.payment_key)
         if isinstance(fetched, Failure):
-            _log_fetch(job, "failed", fetched.error_class)
+            _log_fetch(job, "failed", fetched.error_class, fetched.http_status)
             raise StageFailed(fetched)
         if isinstance(fetched, NotFound):
-            _log_fetch(job, "not_found")
-            row: BusinessRow | NotFound | None = fetched
+            row: BusinessRow | NotFound | None = fetched  # logged once the row is read
         else:
+            try:
+                row = source.to_row(fetched.state)
+            except UnusableState as error:
+                _log_fetch(job, "failed", "dead")
+                raise StageFailed(Failure(str(error), "dead")) from error
             _log_fetch(job, "fetched")
-            row = source.to_row(fetched.state)
 
         async def writes(tx: Transaction) -> None:
             await write_row(
@@ -161,6 +164,7 @@ async def write_row(
         return  # not yet attempted: no row (F10)
     stored = await _stored_row(tx, job)
     if isinstance(row, NotFound):
+        _log_fetch(job, "not_found", None if stored else "dead", row.http_status)
         if stored is None:
             raise StageFailed(Failure(NOT_FOUND_WITHOUT_ROW, "dead", http_status=row.http_status))
         columns = {name: stored[name] for name in HASHED_COLUMNS}
@@ -261,8 +265,15 @@ async def _via(tx: Transaction, job: ClaimedJob) -> str | None:
     return "sweep" if rows[0]["origin"] in _SWEPT_ORIGINS else "delivery"
 
 
-def _log_fetch(job: ClaimedJob, outcome: str, error_class: str | None = None) -> None:
-    """One line per fetch outcome: never a key, a body, an email or a phone number."""
+def _log_fetch(
+    job: ClaimedJob,
+    outcome: str,
+    error_class: str | None = None,
+    http_status: int | None = None,
+) -> None:
+    """One line per fetch outcome (`fetched`, `not_found` or `failed`), with the error class
+    and the source's HTTP status when it failed: never a key, a body, an email or a phone
+    number."""
     log.info(
         "payment fetch",
         extra={
@@ -271,5 +282,6 @@ def _log_fetch(job: ClaimedJob, outcome: str, error_class: str | None = None) ->
             "source": job.source,
             "outcome": outcome,
             "error_class": error_class,
+            "http_status": http_status,
         },
     )

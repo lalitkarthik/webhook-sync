@@ -8,6 +8,8 @@ else unexpected goes to dead with its reason; fetches stay under 10 a second. Jo
 """
 
 import asyncio
+import json
+import logging
 import random
 from collections.abc import AsyncIterator, Iterator
 from datetime import UTC, datetime, timedelta
@@ -31,6 +33,7 @@ from webhook_sync.clock import utc_now
 from webhook_sync.db.schema import jobs
 from webhook_sync.db.writer import Writer
 from webhook_sync.ledger import ledger_runner
+from webhook_sync.logs import JsonFormatter
 from webhook_sync.queue import Pauses, StageRunner, enqueue
 from webhook_sync.sources.razorpay import RazorpayAdapter, api_client
 
@@ -271,9 +274,8 @@ async def test_a_refused_key_pauses_the_source_and_refunds_the_attempt(
     pauses: Pauses,
     status: int,
 ) -> None:
-    fetch = razorpay.get(FETCH_PATH).respond(
-        status, json={"error": {"code": "BAD_REQUEST_ERROR", "description": "Authentication failed"}}
-    )
+    refused = {"error": {"code": "BAD_REQUEST_ERROR", "description": "Authentication failed"}}
+    fetch = razorpay.get(FETCH_PATH).respond(status, json=refused)
     await enqueue_ledger_job(writer, "evt_first")
     await ledger.run_once()
     await enqueue_ledger_job(writer, "evt_other", payment_key="pay_Tj9sm13R8h2378")
@@ -513,3 +515,75 @@ async def test_an_eleventh_fetch_in_the_same_instant_waits_for_the_bucket(
 
     assert fetch.call_count == 11
     assert len(await read_rows("SELECT * FROM payments")) == 11
+
+
+@pytest.mark.parametrize(
+    ("answer", "logged"),
+    [
+        (
+            httpx.Response(200, json=captured()),
+            {"outcome": "fetched"},
+        ),
+        (
+            httpx.Response(400, json=not_found()),
+            {"outcome": "not_found", "error_class": "dead", "http_status": 400},
+        ),
+        (
+            httpx.Response(429, json=TOO_MANY, headers={"Retry-After": "120"}),
+            {"outcome": "failed", "error_class": "retry", "http_status": 429},
+        ),
+        (
+            httpx.Response(401, json={}),
+            {"outcome": "failed", "error_class": "pause", "http_status": 401},
+        ),
+        (
+            httpx.Response(200, json={**captured(), "amount": -100}),
+            {"outcome": "failed", "error_class": "dead"},
+        ),
+    ],
+    ids=["fetched", "not-found", "throttled", "refused", "bad-amount"],
+)
+async def test_each_outcome_logs_one_line_with_its_class_and_status_and_no_personal_data(
+    writer: Writer,
+    ledger: StageRunner,
+    razorpay: respx.MockRouter,
+    caplog: pytest.LogCaptureFixture,
+    answer: httpx.Response,
+    logged: dict[str, Any],
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    razorpay.get(FETCH_PATH).mock(return_value=answer)
+    job_id = await enqueue_ledger_job(writer, "evt_first")
+
+    await ledger.run_once()
+
+    lines = [
+        json.loads(JsonFormatter().format(record))
+        for record in caplog.records
+        if record.getMessage() == "payment fetch"
+    ]
+    assert [
+        {k: v for k, v in line.items() if k not in ("time", "level", "logger", "message")}
+        for line in lines
+    ] == [{"job_id": job_id, "payment_key": PAYMENT, "source": "razorpay", **logged}]
+    ours = [record for record in caplog.records if record.name.startswith("webhook_sync")]
+    everything = "\n".join(json.dumps(vars(record), default=str) for record in ours)
+    for secret in (TEST_KEY_ID, TEST_KEY_SECRET, "customer@example.com", "BAD_REQUEST_ERROR"):
+        assert secret not in everything
+
+
+async def test_a_bad_amount_is_a_dead_failure_with_its_reason(
+    writer: Writer, ledger: StageRunner, razorpay: respx.MockRouter, read_rows: ReadRows
+) -> None:
+    razorpay.get(FETCH_PATH).respond(200, json={**captured(), "amount": 499.5})
+    await enqueue_ledger_job(writer, "evt_first")
+
+    await ledger.run_once()
+
+    [job] = await read_rows(LEDGER_JOB)
+    assert (job["status"], job["last_error"], job["last_error_class"]) == (
+        "dead",
+        "bad amount from Razorpay: 499.5 is not a non-negative integer",
+        "dead",
+    )
+    assert await read_rows(ATTEMPTS) == [{"number": 1, "outcome": "dead"}]

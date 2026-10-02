@@ -36,6 +36,7 @@ from webhook_sync.sources.base import (
     NotFound,
     PaymentStatus,
     Rejection,
+    UnusableState,
     VerifiedDelivery,
 )
 
@@ -208,7 +209,10 @@ class RazorpayAdapter:
     ) -> dict[str, Any] | NotFound | Failure:
         """One API call, once the bucket gives a token: the answer's JSON object, or what its
         failure means (A12)."""
-        while not self._bucket.allow(self.name):
+        # The bucket refills with the one clock's time, so it is polled, a token's time apart.
+        while True:
+            if self._bucket.allow(self.name):
+                break
             await asyncio.sleep(1 / CALLS_PER_SECOND)
         try:
             # The whole call, not only each read, ends at the timeout: a trickle can't hang it.
@@ -413,7 +417,7 @@ def _status(source_status: str, *, captured: bool) -> PaymentStatus:
         return "succeeded" if captured else "canceled"
     status = _STATUSES.get(source_status)
     if status is None:
-        raise ValueError(f"unmapped Razorpay payment status {source_status!r}")
+        raise UnusableState(f"unmapped Razorpay payment status {source_status!r}")
     return status
 
 
@@ -440,9 +444,9 @@ def _method(state: Mapping[str, Any]) -> str | None:
     return f"{method} ({detail})" if isinstance(detail, str) and detail else method
 
 
-class BadAmount(ValueError):
+class BadAmount(UnusableState):
     """The source answered an amount that is negative or not an integer: bad data, never
-    written. The stage runner sends the job to dead with this message (A14, edge case D4)."""
+    written. The ledger worker sends the job to dead with this message (A14, edge case D4)."""
 
 
 def _amount(value: object) -> int:

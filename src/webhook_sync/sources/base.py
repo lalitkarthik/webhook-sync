@@ -112,6 +112,12 @@ class NotFound:
     http_status: int
 
 
+class UnusableState(ValueError):
+    """`to_row` can't map the source's answer (an amount that is negative or not an integer, a
+    status it doesn't know): bad data, never written. The job goes to dead with this message
+    (queue.md's `dead` class)."""
+
+
 type FetchResult = Fetched | NotFound | Failure
 """What `fetch` returns: the current state, `NotFound`, or a failure with its error class
 (queue.md)."""
