@@ -17,14 +17,18 @@ from webhook_sync.queue.operations import (
 )
 from webhook_sync.queue.pause import Pauses, PauseTarget
 from webhook_sync.queue.retry import backoff, max_attempts
+from webhook_sync.queue.runner import Done, StageRunner, Work
 
 __all__ = [
     "ClaimedJob",
+    "Done",
     "ErrorClass",
     "Failure",
     "LeaseLost",
     "PauseTarget",
     "Pauses",
+    "StageRunner",
+    "Work",
     "backoff",
     "claim",
     "complete",
