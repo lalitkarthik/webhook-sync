@@ -27,6 +27,7 @@ from webhook_sync.queue import (
     claim,
     enqueue,
     reap,
+    run_reaper,
 )
 
 NINE = datetime(2026, 10, 2, 9, 0, tzinfo=UTC)
@@ -400,3 +401,74 @@ async def test_a_heartbeat_that_finds_the_lease_lost_stops_the_work_without_writ
         {"status": "waiting", "attempts": 1}
     ]
     assert await read_rows("SELECT outcome FROM attempts") == [{"outcome": "reaped"}]
+
+
+async def test_the_reaper_runs_every_30_seconds_and_takes_back_a_lease_once_it_expires(
+    writer: Writer, read_rows: ReadRows, frozen_clock: TimeMachineFixture
+) -> None:
+    await enqueue_job(writer)
+    await claim_one(writer)  # its lease runs to 09:01:00
+    slept: list[float] = []
+    fourth_pass_done = asyncio.Event()
+
+    async def time_passes(seconds: float) -> None:
+        slept.append(seconds)
+        if len(slept) == 4:
+            fourth_pass_done.set()
+            await asyncio.Event().wait()
+        frozen_clock.shift(timedelta(seconds=seconds))
+
+    reaper = asyncio.create_task(
+        run_reaper(writer, retry_profile="production", rng=random.Random(7), sleep=time_passes)
+    )
+    await asyncio.wait_for(fourth_pass_done.wait(), timeout=5)
+    reaper.cancel()
+
+    assert slept == [30, 30, 30, 30]
+    assert await read_rows("SELECT status FROM jobs") == [{"status": "waiting"}]
+    assert await read_rows("SELECT finished_at, outcome FROM attempts") == [
+        {"finished_at": "2026-10-02T09:01:30.000000Z", "outcome": "reaped"}
+    ]
+
+
+async def test_a_stopped_runner_finishes_the_job_it_holds_and_claims_no_more(
+    writer: Writer, read_rows: ReadRows
+) -> None:
+    await enqueue_job(writer, "pay_A")
+    await enqueue_job(writer, "pay_B")
+    runner: StageRunner
+
+    async def stops_the_runner(job: ClaimedJob) -> Done:
+        runner.stop()
+        return Done()
+
+    runner = runner_for(writer, stops_the_runner)
+    await asyncio.wait_for(runner.run(), timeout=5)
+
+    rows = await read_rows("SELECT payment_key, status FROM jobs ORDER BY id")
+    assert rows == [
+        {"payment_key": "pay_A", "status": "done"},
+        {"payment_key": "pay_B", "status": "waiting"},
+    ]
+
+
+async def test_a_running_runner_waits_when_nothing_is_due_then_claims_new_work(
+    writer: Writer, read_rows: ReadRows
+) -> None:
+    waits: list[float] = []
+    runner: StageRunner
+
+    async def idle(seconds: float) -> None:
+        waits.append(seconds)
+        if len(waits) == 1:
+            await enqueue_job(writer)
+
+    async def work(job: ClaimedJob) -> Done:
+        runner.stop()
+        return Done()
+
+    runner = runner_for(writer, work, sleep=idle)
+    await asyncio.wait_for(runner.run(), timeout=5)
+
+    assert waits[0] == 1
+    assert await read_rows("SELECT status FROM jobs") == [{"status": "done"}]

@@ -24,6 +24,7 @@ from webhook_sync.queue.operations import (
     complete,
     fail,
     heartbeat,
+    reap,
 )
 from webhook_sync.queue.pause import Pauses
 
@@ -80,6 +81,17 @@ class StageRunner:
         self._retry_profile: RetryProfile = retry_profile
         self._rng = rng or random.Random()
         self._sleep = sleep
+        self._stopping = False
+
+    async def run(self) -> None:
+        """Claim and run due jobs until `stop`; wait a second whenever nothing is due."""
+        while not self._stopping:
+            if await self.run_once() == 0 and not self._stopping:
+                await self._sleep(IDLE_WAIT.total_seconds())
+
+    def stop(self) -> None:
+        """Stop claiming: `run` returns once the batch it holds is finished (shutdown, #14)."""
+        self._stopping = True
 
     async def run_once(self) -> int:
         """Claim the due jobs (up to the limit) and run each; returns how many were claimed."""
@@ -137,6 +149,31 @@ class StageRunner:
             rng=self._rng,
         )
 
+
+REAP_EVERY = timedelta(seconds=30)
+"""How often the reaper takes back expired leases."""
+
+
+async def run_reaper(
+    writer: Writer,
+    *,
+    retry_profile: RetryProfile,
+    rng: random.Random | None = None,
+    sleep: Sleep = asyncio.sleep,
+) -> None:
+    """The reaper: every 30 s, return jobs whose lease has expired (queue.md). Runs until
+    cancelled; a failed pass is logged and the next one tried."""
+    rng = rng or random.Random()
+    while True:
+        try:
+            await reap(writer, retry_profile=retry_profile, now=utc_now(), rng=rng)
+        except Exception:
+            log.exception("reaper pass failed; trying again at the next pass")
+        await sleep(REAP_EVERY.total_seconds())
+
+
+IDLE_WAIT = timedelta(seconds=1)
+"""How long a runner waits before claiming again when nothing was due."""
 
 HEARTBEAT_EVERY = timedelta(seconds=20)
 """How often a running batch pushes its leases forward (a third of the 60 s lease)."""
