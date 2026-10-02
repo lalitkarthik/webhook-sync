@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from support import TEST_ACCOUNT
+from support import TEST_ACCOUNT, TEST_SPREADSHEET_ID
 
 from webhook_sync.config import load_config
 
@@ -10,10 +10,14 @@ MINIMAL_TOML = f"""
 [service]
 public_listen = "127.0.0.1:9090"
 data_dir = "state"
+timezone = "Asia/Kolkata"
 
 [sources.razorpay]
 mode = "test"
 account = "{TEST_ACCOUNT}"
+
+[sinks.sheets]
+spreadsheet_id = "{TEST_SPREADSHEET_ID}"
 """
 
 DOTENV = """

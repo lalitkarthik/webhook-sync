@@ -18,6 +18,7 @@ from support import (
     TEST_ACCOUNT,
     TEST_KEY_ID,
     TEST_KEY_SECRET,
+    TEST_SPREADSHEET_ID,
     TEST_WEBHOOK_SECRET,
     razorpay_sample,
     sign_razorpay,
@@ -57,8 +58,10 @@ def server(tmp_path: Path) -> Iterator[Server]:
     config_dir = tmp_path / "conf"
     config_dir.mkdir()
     (config_dir / "webhook-sync.toml").write_text(
-        f'[service]\npublic_listen = "127.0.0.1:{port}"\ndata_dir = "data"\n\n'
-        f'[sources.razorpay]\nmode = "test"\naccount = "{TEST_ACCOUNT}"\n'
+        f'[service]\npublic_listen = "127.0.0.1:{port}"\ndata_dir = "data"\n'
+        f'timezone = "Asia/Kolkata"\n\n'
+        f'[sources.razorpay]\nmode = "test"\naccount = "{TEST_ACCOUNT}"\n\n'
+        f'[sinks.sheets]\nspreadsheet_id = "{TEST_SPREADSHEET_ID}"\n'
     )
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
