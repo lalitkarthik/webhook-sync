@@ -28,6 +28,7 @@ RETRY_PROFILES: tuple[RetryProfile, ...] = ("production", "demo")
 DEFAULT_PUBLIC_LISTEN = "0.0.0.0:8080"
 DEFAULT_ADMIN_LISTEN = "127.0.0.1:8081"
 DEFAULT_DATA_DIR = "data"
+DEFAULT_TIMEZONE = "Asia/Kolkata"  # Q20
 
 
 class ConfigError(Exception):
@@ -38,7 +39,7 @@ class ConfigError(Exception):
 class ServiceConfig:
     public_listen: str
     data_dir: Path
-    timezone: ZoneInfo
+    timezone: ZoneInfo = field(default_factory=lambda: ZoneInfo(DEFAULT_TIMEZONE))
     admin_listen: str = DEFAULT_ADMIN_LISTEN
     retry_profile: RetryProfile = "production"
 
@@ -314,7 +315,7 @@ def _listen(service: Mapping[str, Any], key: str, default: str) -> str:
 
 
 def _timezone(service: Mapping[str, Any]) -> ZoneInfo:
-    name = _string(service, "timezone", "service")
+    name = _string(service, "timezone", "service", default=DEFAULT_TIMEZONE)
     try:
         return ZoneInfo(name)
     except ZoneInfoNotFoundError, ValueError:

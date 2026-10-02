@@ -151,10 +151,11 @@ def test_a_bad_timezone_is_refused(tmp_path: Path, timezone: str) -> None:
     assert "service.timezone" in refusal(write_toml(tmp_path, document))
 
 
-def test_a_missing_timezone_is_refused(tmp_path: Path) -> None:
+def test_the_timezone_defaults_to_asia_kolkata(tmp_path: Path) -> None:
     document = VALID_TOML.replace('timezone = "Asia/Kolkata"', "")
 
-    assert "service.timezone" in refusal(write_toml(tmp_path, document))
+    with start(write_toml(tmp_path, document), fixture_secrets()) as config:
+        assert config.service.timezone.key == "Asia/Kolkata"
 
 
 def test_sources_stripe_is_refused_while_stripe_is_parked(tmp_path: Path) -> None:
