@@ -3,7 +3,9 @@
 For one claimed ledger job: fetch the payment's current state with no transaction open (the
 runner heartbeats meanwhile), map it to its business row, and return the writes, which the
 runner commits in one transaction with the job's fenced `complete`. A row is written only when
-its `row_hash` changes; a payment not yet attempted gets none.
+its `row_hash` changes; a payment not yet attempted gets none. A payment the source doesn't
+know keeps its row flagged `not_found_at`, or with no row ends dead (A5). A failed fetch or an
+answer `to_row` can't use fails the job with its error class.
 """
 
 import asyncio

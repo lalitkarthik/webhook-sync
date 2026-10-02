@@ -123,10 +123,15 @@ LEDGER_JOB = (
 ATTEMPTS = "SELECT number, outcome FROM attempts ORDER BY id"
 
 
+@pytest.mark.parametrize("recording", ["not-found-well-formed", "not-found-malformed"])
 async def test_an_unknown_payment_with_no_row_ends_dead_naming_a_mix_up(
-    writer: Writer, ledger: StageRunner, razorpay: respx.MockRouter, read_rows: ReadRows
+    writer: Writer,
+    ledger: StageRunner,
+    razorpay: respx.MockRouter,
+    read_rows: ReadRows,
+    recording: str,
 ) -> None:
-    razorpay.get(FETCH_PATH).respond(400, json=not_found())
+    razorpay.get(FETCH_PATH).respond(400, json=recorded_fetch(recording))
     await enqueue_ledger_job(writer, "evt_unknown")
 
     await ledger.run_once()

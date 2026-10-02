@@ -8,8 +8,11 @@ start. Every exception becomes a rejection reason, never a 500.
 Fetch: one call, `GET /v1/payments/{id}?expand[]=refunds&expand[]=card`, made directly with
 async httpx (basic auth, a 10 s timeout, A11), never the synchronous SDK. When the expanded
 refunds fill Razorpay's default page of 10, `GET /v1/payments/{id}/refunds` is paged for the full
-list (A6). `payment_row` maps the
-answer to a business row, a pure function (sources.md, "Fetch").
+list (A6). Every call first takes a token from a 10-a-second bucket, and its answer is classified
+by HTTP status (A12): 400 "The id provided does not exist" is `NotFound`; 401 and 403 pause the
+source; 429, 5xx, timeouts and connection errors retry, `Retry-After` a minimum; anything else,
+or a 2xx that isn't a JSON object, is dead with its reason. `payment_row` maps the answer to a
+business row, a pure function (sources.md, "Fetch").
 """
 
 import asyncio
