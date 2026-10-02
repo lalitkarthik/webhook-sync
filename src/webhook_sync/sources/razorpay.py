@@ -16,12 +16,14 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
+from email.utils import parsedate_to_datetime
 from typing import Any, cast
 
 import httpx
 from razorpay import Utility  # pyright: ignore[reportMissingTypeStubs]
 from razorpay.errors import SignatureVerificationError  # pyright: ignore[reportMissingTypeStubs]
 
+from webhook_sync.clock import utc_now
 from webhook_sync.config import Mode
 from webhook_sync.queue import Failure
 from webhook_sync.sources.base import (
@@ -123,6 +125,23 @@ def _error_description(response: httpx.Response) -> str | None:
     return description if isinstance(description, str) else None
 
 
+def _retry_after(value: str | None) -> timedelta | None:
+    """A `Retry-After` header as a wait: whole seconds, or an HTTP date from now (A12). None
+    when absent or unreadable; a date already past is no wait."""
+    if value is None:
+        return None
+    value = value.strip()
+    if value.isdigit():
+        return timedelta(seconds=int(value))
+    try:
+        when = parsedate_to_datetime(value)
+    except TypeError, ValueError:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)  # an HTTP date is always GMT
+    return max(when - utc_now(), timedelta(0))
+
+
 class RazorpayAdapter:
     name = "razorpay"
 
@@ -191,6 +210,13 @@ class RazorpayAdapter:
                 f"Razorpay answered HTTP {status}",
                 "pause",
                 pause_target="source",
+                http_status=status,
+            )
+        if status == 429 or status >= 500:
+            return Failure(
+                f"Razorpay answered HTTP {status}",
+                "retry",
+                retry_after=_retry_after(response.headers.get("retry-after")),
                 http_status=status,
             )
         if not response.is_success:

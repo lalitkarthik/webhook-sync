@@ -299,3 +299,59 @@ async def test_a_refused_key_pauses_the_source_and_refunds_the_attempt(
         },
     ]
     assert await read_rows(ATTEMPTS) == [{"number": 1, "outcome": "pause"}]
+
+
+TOO_MANY = {"error": {"code": "BAD_REQUEST_ERROR", "description": "Too many requests"}}
+SERVER_ERROR = {
+    "error": {
+        "code": "SERVER_ERROR",
+        "description": "We are facing some trouble completing your request at the moment.",
+    }
+}
+
+
+@pytest.mark.parametrize(
+    "retry_after", ["120", "Fri, 02 Oct 2026 20:32:00 GMT"], ids=["seconds", "http-date"]
+)
+async def test_a_throttled_fetch_retries_no_sooner_than_retry_after(
+    writer: Writer,
+    ledger: StageRunner,
+    razorpay: respx.MockRouter,
+    read_rows: ReadRows,
+    retry_after: str,
+) -> None:
+    razorpay.get(FETCH_PATH).respond(429, json=TOO_MANY, headers={"Retry-After": retry_after})
+    await enqueue_ledger_job(writer, "evt_first")
+
+    await ledger.run_once()
+
+    [job] = await read_rows(LEDGER_JOB)
+    assert (job["status"], job["attempts"], job["last_error_class"]) == ("waiting", 1, "retry")
+    assert job["run_after"] >= "2026-10-02T20:32:00.000000Z"
+    assert await read_rows(ATTEMPTS) == [{"number": 1, "outcome": "retry"}]
+    assert await read_rows("SELECT * FROM payments") == []
+
+
+@pytest.mark.parametrize("status", [429, 500, 502, 503, 504])
+async def test_throttling_and_server_errors_retry_after_the_backoff(
+    writer: Writer,
+    ledger: StageRunner,
+    razorpay: respx.MockRouter,
+    read_rows: ReadRows,
+    status: int,
+) -> None:
+    razorpay.get(FETCH_PATH).respond(status, json=TOO_MANY if status == 429 else SERVER_ERROR)
+    await enqueue_ledger_job(writer, "evt_first")
+
+    await ledger.run_once()
+
+    [job] = await read_rows(LEDGER_JOB)
+    assert (job["status"], job["attempts"], job["last_error"], job["last_error_class"]) == (
+        "waiting",
+        1,
+        f"Razorpay answered HTTP {status}",
+        "retry",
+    )
+    # The first production wait is 5 s, times a jitter between 0.5 and 1.5.
+    assert "2026-10-02T20:30:02.5" <= job["run_after"] <= "2026-10-02T20:30:07.5"
+    assert await read_rows(ATTEMPTS) == [{"number": 1, "outcome": "retry"}]
