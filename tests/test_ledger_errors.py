@@ -404,3 +404,47 @@ async def test_an_unexpected_answer_sends_the_job_to_dead_with_its_reason(
     assert (job["status"], job["last_error"], job["last_error_class"]) == ("dead", reason, "dead")
     assert await read_rows(ATTEMPTS) == [{"number": 1, "outcome": "dead"}]
     assert await read_rows("SELECT * FROM payments") == []
+
+
+PARTLY_REFUNDED = "pay_Tj9gmEfed6kRqO"
+
+
+def with_ten_refunds() -> dict[str, Any]:
+    """The partly refunded payment with a full expanded page of refunds: the rest are paged."""
+    recorded = recorded_fetch(f"payment-captured-partly-refunded-{PARTLY_REFUNDED}")
+    template = recorded["refunds"]["items"][0]
+    items = [{**template, "id": f"rfnd_Test{n:010d}", "amount": 100} for n in range(10)]
+    return {**recorded, "refunds": {"entity": "collection", "count": 10, "items": items}}
+
+
+@pytest.mark.parametrize(
+    ("answer", "status", "error_class"),
+    [
+        (httpx.Response(429, json=TOO_MANY, headers={"Retry-After": "120"}), "waiting", "retry"),
+        (httpx.Response(503, json=SERVER_ERROR), "waiting", "retry"),
+        (httpx.Response(401, json={}), "waiting", "pause"),
+        (httpx.Response(200, text="not json"), "dead", "dead"),
+    ],
+    ids=["429", "503", "401", "200-not-json"],
+)
+async def test_a_refunds_page_is_classified_as_the_main_fetch_is(
+    writer: Writer,
+    ledger: StageRunner,
+    razorpay: respx.MockRouter,
+    read_rows: ReadRows,
+    answer: httpx.Response,
+    status: str,
+    error_class: str,
+) -> None:
+    razorpay.get(f"/v1/payments/{PARTLY_REFUNDED}").respond(200, json=with_ten_refunds())
+    razorpay.get(f"/v1/payments/{PARTLY_REFUNDED}/refunds").mock(return_value=answer)
+    await enqueue_ledger_job(writer, "evt_first", payment_key=PARTLY_REFUNDED)
+
+    await ledger.run_once()
+
+    [job] = await read_rows(LEDGER_JOB)
+    assert (job["status"], job["last_error_class"]) == (status, error_class)
+    if answer.status_code == 429:
+        assert job["run_after"] >= "2026-10-02T20:32:00.000000Z"
+    assert await read_rows(ATTEMPTS) == [{"number": 1, "outcome": error_class}]
+    assert await read_rows("SELECT * FROM payments") == []
