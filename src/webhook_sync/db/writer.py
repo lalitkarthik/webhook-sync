@@ -8,7 +8,7 @@ One aiosqlite connection in manual-transaction mode behind an async lock; the wr
 import asyncio
 import sqlite3
 from collections.abc import AsyncGenerator, Mapping
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any, Self
 
@@ -64,12 +64,19 @@ class Writer:
 
     @asynccontextmanager
     async def transaction(self) -> AsyncGenerator[Transaction]:
-        """`BEGIN IMMEDIATE` … `COMMIT`, or `ROLLBACK` if the block raises."""
+        """`BEGIN IMMEDIATE` … `COMMIT`, or `ROLLBACK` if anything raises or is cancelled.
+
+        A cancelled await does not stop a statement aiosqlite's thread has already started, so
+        a `BEGIN` or `COMMIT` cut short may still run. The `ROLLBACK` is queued behind it (the
+        thread runs statements in order), so the next transaction never finds one left open;
+        "no transaction is active" means there was nothing to undo.
+        """
         async with self._lock:
-            await self._connection.execute("BEGIN IMMEDIATE")
             try:
+                await self._connection.execute("BEGIN IMMEDIATE")
                 yield Transaction(self._connection)
+                await self._connection.execute("COMMIT")
             except BaseException:
-                await self._connection.execute("ROLLBACK")
+                with suppress(sqlite3.OperationalError):
+                    await self._connection.execute("ROLLBACK")
                 raise
-            await self._connection.execute("COMMIT")

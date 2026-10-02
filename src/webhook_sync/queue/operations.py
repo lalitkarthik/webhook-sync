@@ -7,6 +7,7 @@ transaction, so the change and the job it causes commit together (the outbox).
 import logging
 import random
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Literal
@@ -345,6 +346,52 @@ async def reclaim(
     return await _take_back(writer, running, retry_profile=retry_profile, now=now, rng=rng)
 
 
+async def release(writer: Writer, *, now: datetime) -> list[int]:
+    """At shutdown, once the stage runners have stopped: put every job still running back.
+
+    Each goes back to waiting, due at once, with its attempt refunded (the shutdown, not the
+    job, cut it short), its claim token cleared and an `attempts` row `released`. One server
+    per database (ADR 0007) makes every running job this server's. Each row is released on its
+    own fresh transaction; one that fails is logged and left for the next start to reclaim.
+    Returns the ids released.
+    """
+    running = sa.select(jobs.c.id).where(jobs.c.status == "running")
+
+    async def release_one(tx: Transaction, which: sa.Select[tuple[int]]) -> bool:
+        rows = await tx.execute(sa.select(jobs).where(jobs.c.id.in_(which.scalar_subquery())))
+        if not rows:
+            return False
+        [job] = rows
+        at = to_db_text(now)
+        await tx.execute(
+            sa.update(jobs)
+            .where(jobs.c.id == job["id"], jobs.c.claim_token == job["claim_token"])
+            .values(
+                status="waiting",
+                attempts=jobs.c.attempts - 1,
+                rerun=0,
+                run_after=at,
+                claim_token=None,
+                lease_until=None,
+                updated_at=at,
+            )
+        )
+        await tx.execute(
+            sa.insert(attempts).values(
+                job_id=job["id"],
+                number=job["attempts"],
+                started_at=None,
+                finished_at=at,
+                outcome="released",
+                error=None,
+                duration_ms=None,
+            )
+        )
+        return True
+
+    return await _one_at_a_time(writer, running, release_one, "job not released")
+
+
 async def _take_back(
     writer: Writer,
     which: sa.Select[tuple[int]],
@@ -354,17 +401,32 @@ async def _take_back(
     rng: random.Random,
 ) -> list[int]:
     """Reap the running jobs `which` selects, each in its own transaction."""
+
+    async def reap_one(tx: Transaction, one: sa.Select[tuple[int]]) -> bool:
+        return await _reap_one(tx, one, retry_profile, now, rng)
+
+    return await _one_at_a_time(writer, which, reap_one, "job not reaped")
+
+
+async def _one_at_a_time(
+    writer: Writer,
+    which: sa.Select[tuple[int]],
+    move: Callable[[Transaction, sa.Select[tuple[int]]], Awaitable[bool]],
+    failed: str,
+) -> list[int]:
+    """Move each job `which` selects in its own transaction; a row that fails is logged with
+    `failed` and left, and the others still moved. Returns the ids moved."""
     async with writer.transaction() as tx:
         ids = [row["id"] for row in await tx.execute(which.order_by(jobs.c.id))]
-    taken: list[int] = []
+    moved: list[int] = []
     for job_id in ids:
         try:
             async with writer.transaction() as tx:
-                if await _reap_one(tx, which.where(jobs.c.id == job_id), retry_profile, now, rng):
-                    taken.append(job_id)
+                if await move(tx, which.where(jobs.c.id == job_id)):
+                    moved.append(job_id)
         except Exception:
-            log.exception("job not reaped", extra={"job_id": job_id})
-    return taken
+            log.exception(failed, extra={"job_id": job_id})
+    return moved
 
 
 async def _reap_one(

@@ -8,12 +8,15 @@ import argparse
 import asyncio
 import logging
 import random
+import signal
 import sys
-from collections.abc import Generator, Mapping
+from collections.abc import Callable, Generator, Mapping
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
+from typing import override
 
 import uvicorn
+from fastapi import FastAPI
 
 from webhook_sync.clock import utc_now
 from webhook_sync.config import Config, ConfigError, RetryProfile, load_config, locate_data_dir
@@ -22,7 +25,7 @@ from webhook_sync.db.migrations import SchemaTooNew, apply_pending
 from webhook_sync.db.writer import Writer
 from webhook_sync.logs import configure_logging
 from webhook_sync.queue import reclaim
-from webhook_sync.receiver.app import create_app
+from webhook_sync.receiver.app import create_app, shut_down
 from webhook_sync.receiver.demo import check_demo_switch
 
 log = logging.getLogger("webhook_sync.serve")
@@ -68,11 +71,76 @@ def serve(args: argparse.Namespace) -> int:
         with start(args.config, demo_fail_first=args.demo_fail_first) as config:
             host, port = split_listen(config.service.public_listen)
             app = create_app(config, config.service.data_dir, args.demo_fail_first)
-            uvicorn.run(app, host=host, port=port, log_config=None, access_log=False)
+            asyncio.run(_serve_until_stopped(app, host, port))
     except StartRefused as refusal:
         print(f"wsync serve: {refusal}", file=sys.stderr)
         return EXIT_REFUSED
     return 0
+
+
+STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM)
+"""Ctrl-C and a platform's stop: both run the one shutdown (operations.md, Q37)."""
+
+
+class _Listener(uvicorn.Server):
+    """uvicorn without its own signal handlers: ours runs the shutdown, then stops it (G13)."""
+
+    @override
+    @contextmanager
+    def capture_signals(self) -> Generator[None]:
+        yield
+
+
+async def _serve_until_stopped(app: FastAPI, host: str, port: int) -> None:
+    """Serve until SIGTERM or SIGINT, then shut down in operations.md's order: the app answers
+    503 to new deliveries, stops claiming, gives running jobs up to 20 s, releases the rest and
+    writes the rejection counts while it still listens; then the listener stops and the app's
+    lifespan ends. The caller releases the lock once this returns."""
+    listener = _Listener(
+        uvicorn.Config(app, host=host, port=port, log_config=None, access_log=False)
+    )
+    stopping: list[asyncio.Task[None]] = []
+
+    async def stop() -> None:
+        try:
+            if listener.started:  # otherwise the lifespan's end runs the shutdown
+                await shut_down(app)
+        except Exception:
+            log.exception("shutdown step failed; stopping anyway")
+        finally:
+            listener.should_exit = True
+
+    def on_signal() -> None:
+        if stopping:
+            return  # already shutting down
+        log.info("shutting down: new deliveries answered 503")
+        stopping.append(asyncio.create_task(stop()))
+
+    with _handling_stop_signals(asyncio.get_running_loop(), on_signal):
+        await listener.serve()
+
+
+@contextmanager
+def _handling_stop_signals(
+    loop: asyncio.AbstractEventLoop, handler: Callable[[], None]
+) -> Generator[None]:
+    """Run `handler` on the loop at SIGINT or SIGTERM, restoring the old handlers afterwards.
+
+    Windows' Proactor loop has no `add_signal_handler`, so there a plain `signal.signal`
+    handler hands over to the loop (Ctrl-C arrives as SIGINT)."""
+    restore: list[Callable[[], object]] = []
+    for sig in STOP_SIGNALS:
+        try:
+            loop.add_signal_handler(sig, handler)
+            restore.append(lambda sig=sig: loop.remove_signal_handler(sig))
+        except NotImplementedError:
+            previous = signal.signal(sig, lambda _sig, _frame: loop.call_soon_threadsafe(handler))
+            restore.append(lambda sig=sig, previous=previous: signal.signal(sig, previous))
+    try:
+        yield
+    finally:
+        for undo in restore:
+            undo()
 
 
 @contextmanager
