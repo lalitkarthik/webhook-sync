@@ -8,7 +8,7 @@ the one clock (A14); the sleeps are injected, so tests drive the runner without 
 import asyncio
 import logging
 import random
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
@@ -25,6 +25,7 @@ from webhook_sync.queue.operations import (
     fail,
     heartbeat,
     reap,
+    release,
 )
 from webhook_sync.queue.pause import Pauses
 
@@ -154,6 +155,44 @@ class StageRunner:
             now=utc_now(),
             rng=self._rng,
         )
+
+
+SHUTDOWN_GRACE = timedelta(seconds=20)
+"""How long running jobs get to finish at shutdown before their leases are released."""
+
+
+class Runners:
+    """The server's stage runners: started together, and stopped together at shutdown."""
+
+    def __init__(
+        self, writer: Writer, runners: Sequence[StageRunner], *, sleep: Sleep = asyncio.sleep
+    ) -> None:
+        self._writer = writer
+        self._runners = list(runners)
+        self._sleep = sleep
+        self._tasks: list[asyncio.Task[None]] = []
+
+    def start(self) -> None:
+        self._tasks = [asyncio.create_task(runner.run()) for runner in self._runners]
+
+    async def stop(self) -> list[int]:
+        """Stop claiming, give running jobs up to 20 s, cancel what is still working, then
+        release every job left running on a fresh transaction (queue.md, A13). Returns the ids
+        released."""
+        for runner in self._runners:
+            runner.stop()
+        if self._tasks:
+            finished = asyncio.gather(*self._tasks, return_exceptions=True)
+            grace = asyncio.ensure_future(self._sleep(SHUTDOWN_GRACE.total_seconds()))
+            await asyncio.wait([finished, grace], return_when=asyncio.FIRST_COMPLETED)
+            grace.cancel()
+            for task in self._tasks:
+                task.cancel()
+            await asyncio.wait([finished, grace])
+        released = await release(self._writer, now=utc_now())
+        if released:
+            log.info("unfinished jobs released at shutdown: %d", len(released))
+        return released
 
 
 REAP_EVERY = timedelta(seconds=30)
