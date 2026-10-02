@@ -58,7 +58,7 @@ A delivery refused before storing: bad signature, stale or future timestamp, wro
 _Avoid_: error, failure (those are for work after storing)
 
 **Ignored event**:
-A verified event of a type we don't handle. Stored and answered 202, like any new event, but it creates no work.
+A verified event of a type we don't handle, or of a handled type that names no payment. Stored with its reason and answered 202, like any new event, but it creates no work.
 _Avoid_: skipped, unsupported
 
 **Mode**:
