@@ -73,8 +73,9 @@ def _statements(script: str) -> list[str]:
         if sqlite3.complete_statement(pending):
             statements.append(pending.strip())
             pending = ""
-    if pending.strip() and not all(
-        part.strip().startswith("--") or not part.strip() for part in pending.splitlines()
-    ):
+    leftover = [
+        line for line in pending.splitlines() if line.strip() and not line.strip().startswith("--")
+    ]
+    if leftover:
         raise ValueError("migration ends with an incomplete statement")
     return statements
