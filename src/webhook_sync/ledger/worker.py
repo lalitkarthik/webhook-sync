@@ -11,7 +11,7 @@ import hashlib
 import json
 import logging
 import random
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
 
@@ -30,6 +30,7 @@ from webhook_sync.queue import (
     StageFailed,
     StageRunner,
     Work,
+    enqueue,
 )
 from webhook_sync.queue.runner import Sleep
 from webhook_sync.sources.base import BusinessRow, SourceAdapter
@@ -83,19 +84,21 @@ def ledger_runner(
     writer: Writer,
     sources: Mapping[str, SourceAdapter],
     *,
+    mirror_sinks: Sequence[str],
     claimed_by: str,
     pauses: Pauses,
     retry_profile: RetryProfile,
     rng: random.Random | None = None,
     sleep: Sleep = asyncio.sleep,
 ) -> StageRunner:
-    """The ledger stage (stage and sink `ledger`) on P1's stage runner."""
+    """The ledger stage (stage and sink `ledger`) on P1's stage runner. Each real change to a
+    row enqueues one mirror job per sink in `mirror_sinks`, the configured sinks (A19)."""
     return StageRunner(
         writer,
         stage="ledger",
         sink="ledger",
         limit=LEDGER_CLAIM_LIMIT,
-        work=ledger_work(sources),
+        work=ledger_work(sources, mirror_sinks=mirror_sinks, retry_profile=retry_profile),
         claimed_by=claimed_by,
         pauses=pauses,
         retry_profile=retry_profile,
@@ -104,7 +107,12 @@ def ledger_runner(
     )
 
 
-def ledger_work(sources: Mapping[str, SourceAdapter]) -> Work:
+def ledger_work(
+    sources: Mapping[str, SourceAdapter],
+    *,
+    mirror_sinks: Sequence[str],
+    retry_profile: RetryProfile,
+) -> Work:
     """The ledger stage's work, fetching each job's payment from its source adapter."""
 
     async def work(job: ClaimedJob) -> Done:
@@ -117,7 +125,9 @@ def ledger_work(sources: Mapping[str, SourceAdapter]) -> Work:
         row = source.to_row(fetched.state)
 
         async def writes(tx: Transaction) -> None:
-            await write_row(tx, job, row, now=utc_now())
+            await write_row(
+                tx, job, row, mirror_sinks=mirror_sinks, retry_profile=retry_profile, now=utc_now()
+            )
 
         return Done(writes=writes)
 
@@ -125,9 +135,16 @@ def ledger_work(sources: Mapping[str, SourceAdapter]) -> Work:
 
 
 async def write_row(
-    tx: Transaction, job: ClaimedJob, row: BusinessRow | None, *, now: datetime
+    tx: Transaction,
+    job: ClaimedJob,
+    row: BusinessRow | None,
+    *,
+    mirror_sinks: Sequence[str],
+    retry_profile: RetryProfile,
+    now: datetime,
 ) -> None:
-    """Upsert the payment's business row if its hash changed, in the runner's transaction."""
+    """Upsert the payment's business row if its hash changed, and enqueue one mirror job per
+    sink, all in the runner's transaction with the job's fenced `complete` (A2, A19)."""
     if row is None:
         return  # not yet attempted: no row (F10)
     stored = await _stored_row(tx, job)
@@ -155,6 +172,18 @@ async def write_row(
             set_={name: insert.excluded[name] for name in values},
         )
     )
+    for sink in mirror_sinks:
+        await enqueue(
+            tx,
+            stage="mirror",
+            sink=sink,
+            source=job.source,
+            account=job.account,
+            payment_key=job.payment_key,
+            event_id=job.caused_by_event_id,
+            retry_profile=retry_profile,
+            now=now,
+        )
 
 
 async def _stored_row(tx: Transaction, job: ClaimedJob) -> Mapping[str, Any] | None:

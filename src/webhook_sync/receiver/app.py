@@ -91,6 +91,7 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
             ledger = ledger_runner(
                 writer,
                 {receiver.razorpay.name: receiver.razorpay},
+                mirror_sinks=config.sinks,
                 claimed_by=claimed_by,
                 pauses=pauses,
                 retry_profile=config.service.retry_profile,
