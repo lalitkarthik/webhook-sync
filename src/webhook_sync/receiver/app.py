@@ -57,6 +57,7 @@ def create_app(config: Config, data_dir: Path) -> FastAPI:
                 writer=writer,
                 razorpay=RazorpayAdapter(
                     mode=config.razorpay.mode,
+                    account=config.razorpay.account,
                     webhook_secrets=config.razorpay_secrets.webhook_secrets,
                 ),
                 rate_cap=RateCap(),
@@ -93,6 +94,11 @@ def create_app(config: Config, data_dir: Path) -> FastAPI:
             receiver.rejections.count(adapter.name, checked.reason)
             return _rejected(adapter.name, checked, request.headers.get(EVENT_ID_HEADER))
         verified, description = checked
+        if description.account_id is None:
+            log.warning(
+                "delivery names no account: stored under the configured account",
+                extra={"source": adapter.name, "event_id": verified.event_id},
+            )
 
         try:
             stored = await store_delivery(
@@ -118,6 +124,18 @@ def create_app(config: Config, data_dir: Path) -> FastAPI:
                 },
             )
             return JSONResponse({"error": "database_error"}, status_code=503)
+        if stored.result == "conflict":
+            # Until alerts exist, a conflict is logged at error level and counted (Q116).
+            log.error(
+                "delivery conflicts with the stored event: first event kept",
+                extra={
+                    "source": adapter.name,
+                    "event_id": stored.event_id,
+                    "payment_key": description.payment_key,
+                    "fingerprint": description.fingerprint,
+                    "stored_fingerprint": stored.stored_fingerprint,
+                },
+            )
         log.info(
             "delivery stored",
             extra={
@@ -127,6 +145,10 @@ def create_app(config: Config, data_dir: Path) -> FastAPI:
                 "result": stored.result,
                 "status_code": stored.status_code,
                 "reason": description.ignore_reason,
+                # A body-hash replay is stored under the first event's id; the header's id (A17).
+                "header_event_id": (
+                    verified.event_id if verified.event_id != stored.event_id else None
+                ),
             },
         )
         return JSONResponse({"result": stored.result}, status_code=stored.status_code)

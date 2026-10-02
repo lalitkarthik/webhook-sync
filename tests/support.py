@@ -25,8 +25,8 @@ def razorpay_sample(event_type: str) -> dict[str, Any]:
     """Razorpay's documented sample body for an event type, as a dict.
 
     The files in tests/fixtures/razorpay are copied verbatim from razorpay.com/docs/webhooks
-    (payments, disputes, orders); tests using them are marked `unrecorded` (Q113) until P0's
-    recordings land. The top-level `account_id` is set to TEST_ACCOUNT, the configured account.
+    (payments, refunds, disputes, orders); tests using them are marked `unrecorded` (Q113) until
+    P0's recordings land. The top-level `account_id` is set to TEST_ACCOUNT, the configured account.
     """
     body: dict[str, Any] = json.loads((RAZORPAY_SAMPLES / f"{event_type}.json").read_text())
     body["account_id"] = TEST_ACCOUNT
