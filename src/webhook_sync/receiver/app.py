@@ -4,11 +4,12 @@ Built from a config object and a data directory. Its lifespan opens the writer a
 pending migrations before the first request, and closes the writer at the end.
 """
 
+import asyncio
 import logging
 import sqlite3
 import time
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -51,7 +52,7 @@ def create_app(config: Config, data_dir: Path) -> FastAPI:
             applied = await apply_pending(writer)
             if applied:
                 log.info("migrations applied: %s", ", ".join(f"{v:04d}" for v in applied))
-            app.state.receiver = Receiver(
+            receiver = Receiver(
                 config=config,
                 writer=writer,
                 razorpay=RazorpayAdapter(
@@ -61,7 +62,15 @@ def create_app(config: Config, data_dir: Path) -> FastAPI:
                 rate_cap=RateCap(),
                 rejections=RejectionCounters(),
             )
-            yield
+            app.state.receiver = receiver
+            minutely = asyncio.create_task(_write_rejection_counts_every_minute(receiver))
+            try:
+                yield
+            finally:
+                minutely.cancel()
+                with suppress(asyncio.CancelledError):
+                    await minutely
+                await write_all_rejection_counts(receiver)
         finally:
             await writer.close()
 
@@ -131,6 +140,21 @@ async def _write_rejection_counts(receiver: Receiver) -> None:
         await receiver.rejections.write_closed_minutes(receiver.writer)
     except sqlite3.Error:
         log.exception("rejection counts not written: database error")
+
+
+async def _write_rejection_counts_every_minute(receiver: Receiver) -> None:
+    """While no request arrives to write them, closed minutes are written about once a minute."""
+    while True:
+        await asyncio.sleep(61 - utc_now().second)  # just past the next minute
+        await _write_rejection_counts(receiver)
+
+
+async def write_all_rejection_counts(receiver: Receiver) -> None:
+    """The shutdown's last write: every count, the open minute's included."""
+    try:
+        await receiver.rejections.write_all(receiver.writer)
+    except sqlite3.Error:
+        log.exception("rejection counts lost at shutdown: database error")
 
 
 async def _check(

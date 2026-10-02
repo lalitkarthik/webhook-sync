@@ -238,3 +238,22 @@ async def test_rejections_are_written_once_a_minute_as_one_row_per_reason(
     assert {row["source"] for row in await read_rows("SELECT source FROM rejection_counts")} == {
         "razorpay"
     }
+
+
+async def test_the_open_minutes_rejections_are_written_at_shutdown_and_add_up_after_a_restart(
+    config: Config, data_dir: Path, read_rows: ReadRows, time_machine: TimeMachineFixture
+) -> None:
+    time_machine.move_to(NINE, tick=False)
+    async with started_app(config, data_dir) as client:
+        await reject(client, "not_json")
+        await reject(client, "not_json")
+    after_shutdown = await read_rows("SELECT reason, minute, count FROM rejection_counts")
+
+    async with started_app(config, data_dir) as client:
+        await reject(client, "not_json")
+
+    minute = "2026-10-02T09:00:00.000000Z"
+    assert after_shutdown == [{"reason": "not_json", "minute": minute, "count": 2}]
+    assert await read_rows("SELECT reason, minute, count FROM rejection_counts") == [
+        {"reason": "not_json", "minute": minute, "count": 3}
+    ]
