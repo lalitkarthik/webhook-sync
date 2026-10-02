@@ -6,7 +6,9 @@ attempts; each is a `deliveries` row with status 500 and a log line (A6, Q120).
 
 import hashlib
 import logging
+import sqlite3
 from collections.abc import AsyncIterator
+from contextlib import closing
 from pathlib import Path
 
 import httpx
@@ -21,6 +23,7 @@ from support import (
 )
 
 from webhook_sync.config import Config
+from webhook_sync.db.files import database_path
 from webhook_sync.receiver.app import create_app
 
 pytestmark = pytest.mark.unrecorded
@@ -111,3 +114,41 @@ async def test_without_the_switch_a_new_event_is_202_and_logs_no_attempt(
     assert response.status_code == 202
     [stored] = [r for r in caplog.records if r.getMessage() == "delivery stored"]
     assert "attempt" not in stored.__dict__
+
+
+async def test_an_attempt_answered_503_by_a_database_error_is_not_counted(
+    demo_client: httpx.AsyncClient,
+    read_rows: ReadRows,
+    data_dir: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with closing(sqlite3.connect(database_path(data_dir))) as connection, connection:
+        connection.execute(
+            "CREATE TRIGGER fail_deliveries BEFORE INSERT ON deliveries "
+            "BEGIN SELECT RAISE(ABORT, 'forced failure'); END"
+        )
+    body, headers = sign_razorpay(razorpay_sample("payment.captured"), event_id="evt_rolled01")
+    failed = await demo_client.post("/webhooks/razorpay", content=body, headers=headers)
+    assert failed.status_code == 503
+    with closing(sqlite3.connect(database_path(data_dir))) as connection, connection:
+        connection.execute("DROP TRIGGER fail_deliveries")
+
+    with caplog.at_level(logging.INFO):
+        statuses = [
+            (
+                await demo_client.post("/webhooks/razorpay", content=body, headers=headers)
+            ).status_code
+            for _ in range(5)
+        ]
+
+    assert statuses == [500, 500, 500, 500, 200]
+    stored = [r for r in caplog.records if r.getMessage() == "delivery stored"]
+    assert [r.__dict__["attempt"] for r in stored] == [1, 2, 3, 4, 5]
+    deliveries = await read_rows("SELECT result, status_code FROM deliveries ORDER BY id")
+    assert [tuple(d.values()) for d in deliveries] == [
+        ("new", 500),
+        ("duplicate", 500),
+        ("duplicate", 500),
+        ("duplicate", 500),
+        ("duplicate", 200),
+    ]

@@ -97,7 +97,7 @@ async def store_delivery(
         else:
             stored = await _repeat(tx, source, delivery, description.fingerprint)
         if fail_first is not None:
-            attempt = fail_first.attempt(source, stored.event_id)
+            attempt = fail_first.next_attempt(source, stored.event_id)
             stored = replace(
                 stored, status_code=fail_first.answer(attempt, stored.status_code), attempt=attempt
             )
@@ -111,6 +111,8 @@ async def store_delivery(
                 duration_ms=round((time.perf_counter() - started) * 1000),
             )
         )
+    if fail_first is not None:  # committed: a rolled-back attempt is not counted
+        fail_first.record(source, stored.event_id)
     return stored
 
 

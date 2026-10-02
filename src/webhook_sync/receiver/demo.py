@@ -30,11 +30,14 @@ class FailFirst:
     n: int
     _attempts: dict[tuple[str, str], int] = field(default_factory=dict[tuple[str, str], int])
 
-    def attempt(self, source: str, event_id: str) -> int:
-        """Count one more attempt of this event and return its number, the first being 1."""
+    def next_attempt(self, source: str, event_id: str) -> int:
+        """The number this event's next attempt would have, the first being 1; counts nothing."""
+        return self._attempts.get((source, event_id), 0) + 1
+
+    def record(self, source: str, event_id: str) -> None:
+        """Count one attempt of this event; called only once its delivery row is committed."""
         key = (source, event_id)
         self._attempts[key] = self._attempts.get(key, 0) + 1
-        return self._attempts[key]
 
     def answer(self, attempt: int, status_code: int) -> int:
         """The status this attempt is answered with: 500 up to `n`, then the normal one."""
