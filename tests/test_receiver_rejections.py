@@ -85,6 +85,23 @@ async def test_a_streamed_body_over_1_mb_without_a_length_is_413_too_large(
     assert response.json() == {"rejection": "too_large"}
 
 
+@pytest.mark.parametrize("content_length", [b"\xb2", b"\xb9\xb2", b"-1", b"1e9", b" 2"])
+async def test_a_garbage_content_length_is_ignored_and_the_body_still_checked(
+    client: httpx.AsyncClient, content_length: bytes
+) -> None:
+    body, headers = sign_razorpay(b"{}")
+    raw_headers = [(k.encode(), v.encode()) for k, v in headers.items()]
+
+    response = await client.post(
+        "/webhooks/razorpay",
+        content=body,
+        headers=httpx.Headers([*raw_headers, (b"content-length", content_length)]),
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"rejection": "malformed"}
+
+
 async def test_a_body_of_exactly_1_mb_is_read_and_checked(client: httpx.AsyncClient) -> None:
     body, headers = sign_razorpay(b"{}" + b" " * (ONE_MB - 2))
 

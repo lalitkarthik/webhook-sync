@@ -14,7 +14,8 @@ MAX_BODY_BYTES = 1024 * 1024
 async def read_body(request: Request) -> bytes | Rejection:
     """Check 3: the raw body, read once; over 1 MB is 413 `too_large`, found while streaming."""
     declared = request.headers.get("content-length", "")
-    if declared.isdigit() and int(declared) > MAX_BODY_BYTES:
+    # An unparseable declared length is ignored ('²' is a Unicode digit); the stream still counts.
+    if declared.isascii() and declared.isdigit() and int(declared) > MAX_BODY_BYTES:
         return Rejection("too_large", 413)
     body = bytearray()
     async for chunk in request.stream():
