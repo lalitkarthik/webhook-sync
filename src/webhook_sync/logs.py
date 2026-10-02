@@ -21,6 +21,8 @@ LOGGED_FIELDS = (
     "status_code",
     "reason",
     "header_event_id",
+    "fingerprint",
+    "stored_fingerprint",
 )
 
 

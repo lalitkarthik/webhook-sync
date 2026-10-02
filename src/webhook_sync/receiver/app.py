@@ -118,6 +118,18 @@ def create_app(config: Config, data_dir: Path) -> FastAPI:
                 },
             )
             return JSONResponse({"error": "database_error"}, status_code=503)
+        if stored.result == "conflict":
+            # Until alerts exist, a conflict is logged at error level and counted (Q116).
+            log.error(
+                "delivery conflicts with the stored event: first event kept",
+                extra={
+                    "source": adapter.name,
+                    "event_id": stored.event_id,
+                    "payment_key": description.payment_key,
+                    "fingerprint": description.fingerprint,
+                    "stored_fingerprint": stored.stored_fingerprint,
+                },
+            )
         log.info(
             "delivery stored",
             extra={
