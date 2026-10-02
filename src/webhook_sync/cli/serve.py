@@ -64,8 +64,13 @@ def start(config_path: Path, environ: Mapping[str, str] | None = None) -> Genera
     with ExitStack() as held:
         try:
             data_dir = locate_data_dir(config_path)
-            data_dir.mkdir(parents=True, exist_ok=True)
-            held.enter_context(hold_lock(data_dir))
+            try:
+                data_dir.mkdir(parents=True, exist_ok=True)
+                held.enter_context(hold_lock(data_dir))
+            except OSError as error:
+                raise ConfigError(
+                    f"service.data_dir {data_dir} cannot be used: {error.strerror}"
+                ) from None
             config = load_config(config_path, environ)
             asyncio.run(_prepare_database(config.service.data_dir))
         except (ConfigError, LockHeld, SchemaTooNew) as error:

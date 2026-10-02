@@ -151,6 +151,27 @@ def test_a_bad_timezone_is_refused(tmp_path: Path, timezone: str) -> None:
     assert "service.timezone" in refusal(write_toml(tmp_path, document))
 
 
+def test_a_config_path_that_is_a_directory_is_refused_naming_it(tmp_path: Path) -> None:
+    assert str(tmp_path) in refusal(tmp_path)
+
+
+def test_a_config_file_that_is_not_utf8_is_refused_naming_it(tmp_path: Path) -> None:
+    path = tmp_path / "webhook-sync.toml"
+    path.write_bytes(VALID_TOML.encode("utf-8") + b"# caf\xe9\n")
+
+    assert str(path) in refusal(path)
+
+
+@pytest.mark.parametrize("data_dir", ["occupied", "occupied/data"])
+def test_a_data_dir_that_cannot_be_a_directory_is_refused_naming_the_key(
+    tmp_path: Path, data_dir: str
+) -> None:
+    (tmp_path / "occupied").write_text("a file, not a directory", encoding="utf-8")
+    document = VALID_TOML.replace('data_dir = "data"', f'data_dir = "{data_dir}"')
+
+    assert "service.data_dir" in refusal(write_toml(tmp_path, document))
+
+
 def test_the_timezone_defaults_to_asia_kolkata(tmp_path: Path) -> None:
     document = VALID_TOML.replace('timezone = "Asia/Kolkata"', "")
 

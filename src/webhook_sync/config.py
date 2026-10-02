@@ -210,6 +210,10 @@ def _read_toml(path: Path) -> dict[str, Any]:
         return tomllib.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         raise ConfigError(f"config file not found: {path}") from None
+    except UnicodeDecodeError:
+        raise ConfigError(f"config file {path} is not UTF-8 text") from None
+    except OSError as error:
+        raise ConfigError(f"config file {path} cannot be read: {error.strerror}") from None
     except tomllib.TOMLDecodeError as error:
         raise ConfigError(f"{path} is not valid TOML: {error}") from None
 
