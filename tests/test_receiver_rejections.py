@@ -1,0 +1,362 @@
+"""Every rejected request answered with its reason, and counted (seam 1: the HTTP app)."""
+
+import json
+import random
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import replace
+from datetime import UTC, datetime
+from pathlib import Path
+
+import httpx
+import pytest
+from support import ReadRows, razorpay_sample, sign_razorpay
+from time_machine import TimeMachineFixture
+
+from webhook_sync.config import Config
+from webhook_sync.receiver.app import create_app
+
+pytestmark = pytest.mark.unrecorded
+
+NINE = datetime(2026, 10, 2, 9, 0, 10, tzinfo=UTC)
+
+
+async def test_the_51st_request_in_one_second_from_one_source_is_429(
+    client: httpx.AsyncClient, time_machine: TimeMachineFixture
+) -> None:
+    time_machine.move_to(NINE, tick=False)
+    body, headers = sign_razorpay(razorpay_sample("payment.captured"))
+
+    statuses = [
+        (await client.post("/webhooks/razorpay", content=body, headers=headers)).status_code
+        for _ in range(51)
+    ]
+
+    assert statuses[0] == 202
+    assert 429 not in statuses[:50]
+    assert statuses[50] == 429
+
+
+async def test_the_rate_cap_refills_at_50_a_second(
+    client: httpx.AsyncClient, time_machine: TimeMachineFixture
+) -> None:
+    time_machine.move_to(NINE, tick=False)
+    body, headers = sign_razorpay(b"{}")
+    for _ in range(50):
+        await client.post("/webhooks/razorpay", content=body, headers=headers)
+
+    time_machine.shift(0.02)  # one token's worth
+    refilled = await client.post("/webhooks/razorpay", content=body, headers=headers)
+    capped = await client.post("/webhooks/razorpay", content=body, headers=headers)
+
+    assert refilled.status_code == 400
+    assert capped.status_code == 429
+    assert capped.json() == {"rejection": "rate_capped"}
+
+
+ONE_MB = 1024 * 1024
+
+
+async def test_a_body_over_1_mb_is_413_too_large_even_with_another_content_type(
+    client: httpx.AsyncClient,
+) -> None:
+    body, headers = sign_razorpay(b" " * (ONE_MB + 1))
+
+    response = await client.post(
+        "/webhooks/razorpay", content=body, headers={**headers, "content-type": "text/plain"}
+    )
+
+    assert response.status_code == 413
+    assert response.json() == {"rejection": "too_large"}
+
+
+async def test_a_streamed_body_over_1_mb_without_a_length_is_413_too_large(
+    client: httpx.AsyncClient,
+) -> None:
+    _, headers = sign_razorpay(b"{}")
+
+    async def chunks() -> AsyncIterator[bytes]:
+        for _ in range(3):
+            yield b" " * (ONE_MB // 2)
+
+    response = await client.post("/webhooks/razorpay", content=chunks(), headers=headers)
+
+    assert response.status_code == 413
+    assert response.json() == {"rejection": "too_large"}
+
+
+@pytest.mark.parametrize("content_length", [b"\xb2", b"\xb9\xb2", b"-1", b"1e9", b" 2"])
+async def test_a_garbage_content_length_is_ignored_and_the_body_still_checked(
+    client: httpx.AsyncClient, content_length: bytes
+) -> None:
+    body, headers = sign_razorpay(b"{}")
+    raw_headers = [(k.encode(), v.encode()) for k, v in headers.items()]
+
+    response = await client.post(
+        "/webhooks/razorpay",
+        content=body,
+        headers=httpx.Headers([*raw_headers, (b"content-length", content_length)]),
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"rejection": "malformed"}
+
+
+async def test_a_body_of_exactly_1_mb_is_read_and_checked(client: httpx.AsyncClient) -> None:
+    body, headers = sign_razorpay(b"{}" + b" " * (ONE_MB - 2))
+
+    response = await client.post("/webhooks/razorpay", content=body, headers=headers)
+
+    assert response.status_code == 400
+    assert response.json() == {"rejection": "malformed"}
+
+
+@pytest.mark.parametrize(
+    "content_type",
+    ["application/json", "application/json; charset=utf-8", "Application/JSON", "x/vnd.a+json"],
+)
+async def test_a_json_content_type_with_any_parameters_passes(
+    client: httpx.AsyncClient, content_type: str
+) -> None:
+    body, headers = sign_razorpay(razorpay_sample("payment.captured"))
+
+    response = await client.post(
+        "/webhooks/razorpay", content=body, headers={**headers, "content-type": content_type}
+    )
+
+    assert response.status_code == 202
+
+
+@pytest.mark.parametrize(
+    "content_type", [None, "", "text/plain", "application/jsonp", "json", "application/x-json+"]
+)
+async def test_any_other_content_type_is_415_not_json_even_with_a_bad_signature(
+    client: httpx.AsyncClient, content_type: str | None
+) -> None:
+    body, headers = sign_razorpay(razorpay_sample("payment.captured"), secret="not-our-secret")
+    del headers["content-type"]
+    if content_type is not None:
+        headers["content-type"] = content_type
+
+    response = await client.post("/webhooks/razorpay", content=body, headers=headers)
+
+    assert response.status_code == 415
+    assert response.json() == {"rejection": "not_json"}
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        "x-razorpay-signature",
+        "X-Razorpay-Event-Id",
+        "stripe-signature",
+        "webhook-id",
+        "webhook-timestamp",
+        "webhook-signature",
+    ],
+)
+async def test_a_security_header_appearing_twice_is_400_duplicate_header(
+    client: httpx.AsyncClient, read_rows: ReadRows, header: str
+) -> None:
+    body, headers = sign_razorpay(razorpay_sample("payment.captured"))
+    repeated = [(k, v) for k, v in headers.items() if k != header.lower()]
+    value = headers.get(header.lower(), "v1")
+    repeated += [(header, value), (header, value)]
+
+    response = await client.post(
+        "/webhooks/razorpay", content=body, headers=httpx.Headers(repeated)
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"rejection": "duplicate_header"}
+    assert await read_rows("SELECT * FROM events") == []
+
+
+async def test_a_duplicated_security_header_is_reported_before_a_bad_signature(
+    client: httpx.AsyncClient,
+) -> None:
+    body, headers = sign_razorpay(razorpay_sample("payment.captured"), secret="not-our-secret")
+    repeated = [*headers.items(), ("x-razorpay-event-id", "evt_other")]
+
+    response = await client.post(
+        "/webhooks/razorpay", content=body, headers=httpx.Headers(repeated)
+    )
+
+    assert response.json() == {"rejection": "duplicate_header"}
+
+
+NEW_SECRET = "fixture-webhook-secret-new"
+OLD_SECRET = "fixture-webhook-secret-old"
+
+
+@pytest.mark.parametrize(
+    ("secret", "status_code"), [(NEW_SECRET, 202), (OLD_SECRET, 202), ("neither", 400)]
+)
+async def test_with_two_secrets_a_body_signed_with_either_passes(
+    config: Config, data_dir: Path, secret: str, status_code: int
+) -> None:
+    rotating = replace(
+        config,
+        razorpay_secrets=replace(config.razorpay_secrets, webhook_secrets=(NEW_SECRET, OLD_SECRET)),
+    )
+    body, headers = sign_razorpay(razorpay_sample("payment.captured"), secret=secret)
+
+    async with started_app(rotating, data_dir) as client:
+        response = await client.post("/webhooks/razorpay", content=body, headers=headers)
+
+    assert response.status_code == status_code
+
+
+@asynccontextmanager
+async def started_app(config: Config, data_dir: Path) -> AsyncGenerator[httpx.AsyncClient]:
+    """The app started from `config` and driven over ASGI; leaving the block shuts it down."""
+    app = create_app(config, data_dir)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://wsync.test") as client:
+            yield client
+
+
+async def reject(client: httpx.AsyncClient, reason: str) -> None:
+    """Send one request that the receiver rejects with `reason`."""
+    body, headers = sign_razorpay(razorpay_sample("payment.captured"))
+    match reason:
+        case "bad_signature":
+            headers["x-razorpay-signature"] = "0" * 64
+        case "not_json":
+            headers["content-type"] = "text/plain"
+        case "missing_id":
+            del headers["x-razorpay-event-id"]
+        case _:
+            raise ValueError(reason)
+    response = await client.post("/webhooks/razorpay", content=body, headers=headers)
+    assert response.json() == {"rejection": reason}
+
+
+async def test_rejections_are_written_once_a_minute_as_one_row_per_reason(
+    client: httpx.AsyncClient, read_rows: ReadRows, time_machine: TimeMachineFixture
+) -> None:
+    time_machine.move_to(NINE, tick=False)
+    for reason in ["bad_signature"] * 3 + ["not_json"] * 2 + ["missing_id"]:
+        await reject(client, reason)
+    junk_wrote = (
+        await read_rows("SELECT * FROM rejection_counts"),
+        await read_rows("SELECT * FROM events"),
+        await read_rows("SELECT * FROM deliveries"),
+    )
+
+    time_machine.move_to(datetime(2026, 10, 2, 9, 1, 5, tzinfo=UTC), tick=False)
+    await reject(client, "bad_signature")
+
+    assert junk_wrote == ([], [], [])
+    rows = await read_rows("SELECT reason, minute, count FROM rejection_counts ORDER BY reason")
+    assert rows == [
+        {"reason": reason, "minute": "2026-10-02T09:00:00.000000Z", "count": count}
+        for reason, count in [("bad_signature", 3), ("missing_id", 1), ("not_json", 2)]
+    ]
+    assert {row["source"] for row in await read_rows("SELECT source FROM rejection_counts")} == {
+        "razorpay"
+    }
+
+
+async def test_the_open_minutes_rejections_are_written_at_shutdown_and_add_up_after_a_restart(
+    config: Config, data_dir: Path, read_rows: ReadRows, time_machine: TimeMachineFixture
+) -> None:
+    time_machine.move_to(NINE, tick=False)
+    async with started_app(config, data_dir) as client:
+        await reject(client, "not_json")
+        await reject(client, "not_json")
+    after_shutdown = await read_rows("SELECT reason, minute, count FROM rejection_counts")
+
+    async with started_app(config, data_dir) as client:
+        await reject(client, "not_json")
+
+    minute = "2026-10-02T09:00:00.000000Z"
+    assert after_shutdown == [{"reason": "not_json", "minute": minute, "count": 2}]
+    assert await read_rows("SELECT reason, minute, count FROM rejection_counts") == [
+        {"reason": "not_json", "minute": minute, "count": 3}
+    ]
+
+
+def _two_failures() -> list[tuple[str, bytes, list[tuple[str, str]]]]:
+    """Requests failing two neighbouring checks, with the earlier check's reason."""
+    wrongly_signed, wrong_headers = sign_razorpay(b"[1", secret="not-our-secret")
+    array, array_headers = sign_razorpay(b"[1]")
+    return [
+        (
+            "not_json",
+            json.dumps(razorpay_sample("payment.captured")).encode(),
+            [
+                ("content-type", "text/plain"),
+                ("x-razorpay-signature", "a"),
+                ("x-razorpay-signature", "b"),
+            ],
+        ),
+        ("bad_signature", wrongly_signed, list(wrong_headers.items())),
+        (
+            "malformed",
+            array,
+            [(k, v) for k, v in array_headers.items() if k != "x-razorpay-event-id"],
+        ),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("reason", "body", "headers"), _two_failures(), ids=[case[0] for case in _two_failures()]
+)
+async def test_a_request_failing_two_checks_gets_the_earlier_ones_reason(
+    client: httpx.AsyncClient, reason: str, body: bytes, headers: list[tuple[str, str]]
+) -> None:
+    response = await client.post("/webhooks/razorpay", content=body, headers=httpx.Headers(headers))
+
+    assert response.json() == {"rejection": reason}
+
+
+async def test_the_rate_cap_comes_before_reading_the_body(
+    client: httpx.AsyncClient, time_machine: TimeMachineFixture
+) -> None:
+    time_machine.move_to(NINE, tick=False)
+    small, headers = sign_razorpay(b"{}")
+    for _ in range(50):
+        await client.post("/webhooks/razorpay", content=small, headers=headers)
+
+    response = await client.post("/webhooks/razorpay", content=b" " * (ONE_MB + 1), headers=headers)
+
+    assert response.json() == {"rejection": "rate_capped"}
+
+
+def _fuzzed(rng: random.Random) -> tuple[bytes, list[tuple[bytes, bytes]]]:
+    """A random request: junk or a mutated sample, signed or not, with junk headers."""
+    sample = json.dumps(razorpay_sample("payment.captured")).encode()
+    match rng.randrange(3):
+        case 0:
+            body = rng.randbytes(rng.randrange(200))
+        case 1:
+            cut = rng.randrange(len(sample))
+            body = sample[:cut] + rng.randbytes(rng.randrange(4)) + sample[cut + 1 :]
+        case _:
+            body = sample
+    _, signed = sign_razorpay(body, event_id=rng.choice(["evt_fuzz", "", " ", "é", "\x00"]))
+    headers = [(k.encode(), v.encode()) for k, v in signed.items() if rng.random() < 0.8]
+    junk_values = [b"", b"\xff\xfe", b"application/json", b"x/y+json; q=\xe9", rng.randbytes(8)]
+    for name in [b"content-type", b"x-razorpay-signature", b"x-razorpay-event-id", b"webhook-id"]:
+        if rng.random() < 0.3:
+            headers.append((name, rng.choice(junk_values).replace(b"\r", b"").replace(b"\n", b"")))
+    return body, headers
+
+
+async def test_fuzzed_bodies_and_headers_never_produce_a_500(
+    client: httpx.AsyncClient, time_machine: TimeMachineFixture
+) -> None:
+    time_machine.move_to(NINE, tick=False)
+    rng = random.Random(10)
+    statuses: set[int] = set()
+    for _ in range(400):
+        time_machine.shift(1)
+        body, headers = _fuzzed(rng)
+        response = await client.post(
+            "/webhooks/razorpay", content=body, headers=httpx.Headers(headers)
+        )
+        statuses.add(response.status_code)
+
+    assert statuses <= {200, 202, 400, 413, 415}

@@ -79,3 +79,13 @@ attempts = sa.Table(
     sa.Column("error", sa.Text),
     sa.Column("duration_ms", sa.Integer),
 )
+
+
+rejection_counts = sa.Table(
+    "rejection_counts",
+    metadata,
+    sa.Column("source", sa.Text, primary_key=True),
+    sa.Column("reason", sa.Text, primary_key=True),
+    sa.Column("minute", sa.Text, primary_key=True),
+    sa.Column("count", sa.Integer, nullable=False),
+)
