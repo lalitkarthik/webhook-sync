@@ -6,7 +6,9 @@ cover. Razorpay events carry no mode; the configured mode is used, and the key p
 start. Every exception becomes a rejection reason, never a 500.
 
 Fetch: one call, `GET /v1/payments/{id}?expand[]=refunds&expand[]=card`, made directly with
-async httpx (basic auth, a 10 s timeout, A11), never the synchronous SDK. `payment_row` maps the
+async httpx (basic auth, a 10 s timeout, A11), never the synchronous SDK. When the expanded
+refunds fill Razorpay's default page of 10, `GET /v1/payments/{id}/refunds` is paged for the full
+list (A6). `payment_row` maps the
 answer to a business row, a pure function (sources.md, "Fetch").
 """
 
@@ -98,6 +100,14 @@ def api_client(api_url: str, key_id: str, key_secret: str) -> httpx.AsyncClient:
     )
 
 
+EXPANDED_PAGE = 10
+"""Razorpay's default page size: an expanded refunds list this long may have been cut short, so
+the refunds endpoint is paged instead (A6; `count` is per page, never a total)."""
+
+REFUNDS_PAGE = 100
+"""Refunds asked for per page of `GET /v1/payments/{id}/refunds`, the most Razorpay allows."""
+
+
 class RazorpayAdapter:
     name = "razorpay"
 
@@ -124,7 +134,34 @@ class RazorpayAdapter:
         except httpx.TransportError as error:  # a timeout, a refused or dropped connection
             return Failure(f"fetch failed: {type(error).__name__}", "retry")
         response.raise_for_status()
-        return Fetched(cast(dict[str, Any], response.json()))
+        state = cast(dict[str, Any], response.json())
+        expanded = _object(state.get("refunds")).get("items")
+        if isinstance(expanded, list) and len(cast(list[object], expanded)) >= EXPANDED_PAGE:
+            refunds = await self._all_refunds(payment_key)
+            if isinstance(refunds, Failure):
+                return refunds
+            state = {**state, "refunds": {"entity": "collection", "items": refunds}}
+        return Fetched(state)
+
+    async def _all_refunds(self, payment_key: str) -> list[dict[str, Any]] | Failure:
+        """Every refund of the payment, paged 100 at a time until a page comes back short.
+
+        A refunds collection's `count` is the items on that page, not a total, so a short page
+        is the only sign of the end (the fetch recordings' README; #22)."""
+        refunds: list[dict[str, Any]] = []
+        while True:
+            try:
+                response = await self._api.get(
+                    f"/v1/payments/{payment_key}/refunds",
+                    params={"count": REFUNDS_PAGE, "skip": len(refunds)},
+                )
+            except httpx.TransportError as error:
+                return Failure(f"refunds fetch failed: {type(error).__name__}", "retry")
+            response.raise_for_status()
+            page = cast(list[dict[str, Any]], response.json()["items"])
+            refunds.extend(page)
+            if len(page) < REFUNDS_PAGE:
+                return refunds
 
     def to_row(self, state: Mapping[str, Any]) -> BusinessRow | None:
         return payment_row(state)
@@ -279,19 +316,40 @@ _STATUSES: dict[str, PaymentStatus] = {
 }
 
 
+def _status(source_status: str, *, captured: bool) -> PaymentStatus:
+    """Our status before refunds are counted: a `refunded` payment was captured (it is then
+    refunded by its processed refunds) or was an authorisation auto-refunded uncaptured (A7)."""
+    if source_status == "refunded":
+        return "succeeded" if captured else "canceled"
+    status = _STATUSES.get(source_status)
+    if status is None:
+        raise ValueError(f"unmapped Razorpay payment status {source_status!r}")
+    return status
+
+
+def _processed_refunds(state: Mapping[str, Any]) -> int:
+    """The sum of the payment's `processed` refunds; pending and failed ones count for nothing.
+    `amount_refunded` is never used: whether it counts pending refunds is undocumented (G65)."""
+    items = cast(list[dict[str, Any]], _object(state.get("refunds")).get("items") or [])
+    return sum(refund["amount"] for refund in items if refund.get("status") == "processed")
+
+
 def payment_row(state: Mapping[str, Any]) -> BusinessRow | None:
     """A fetched Razorpay payment as its business row, or None while it is still `created`.
 
+    A captured payment (or `refunded` with `captured: true`) is succeeded, partially_refunded or
+    refunded by its processed refunds against the amount; `refunded` uncaptured is canceled (A7).
     Fee and fee tax (GST) are null until capture: pending. They are in the settlement currency
     (`base_currency`, else `currency`), and net is `(base_amount or amount) - fee` (Q130).
     """
     source_status: str = state["status"]
     if source_status == "created":
         return None  # nothing attempted yet: no row (G41)
-    status = _STATUSES.get(source_status)
-    if status is None:
-        raise ValueError(f"unmapped Razorpay payment status {source_status!r}")
     amount: int = state["amount"]
+    refunded = _processed_refunds(state)
+    status = _status(source_status, captured=state.get("captured") is True)
+    if status == "succeeded" and refunded > 0:
+        status = "refunded" if refunded >= amount else "partially_refunded"
     fee: int | None = state.get("fee")
     created_at = state.get("created_at")
     return BusinessRow(
@@ -300,6 +358,7 @@ def payment_row(state: Mapping[str, Any]) -> BusinessRow | None:
         source_status=source_status,
         amount_minor=amount,
         currency=state["currency"],
+        refunded_minor=refunded,
         source_created_at=(
             datetime.fromtimestamp(created_at, UTC) if isinstance(created_at, int) else None
         ),
