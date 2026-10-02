@@ -28,6 +28,7 @@ LOGGED_FIELDS = (
     "body_sha256",
     "outcome",
     "error_class",
+    "http_status",
 )
 
 

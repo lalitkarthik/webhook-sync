@@ -3,7 +3,9 @@
 For one claimed ledger job: fetch the payment's current state with no transaction open (the
 runner heartbeats meanwhile), map it to its business row, and return the writes, which the
 runner commits in one transaction with the job's fenced `complete`. A row is written only when
-its `row_hash` changes; a payment not yet attempted gets none.
+its `row_hash` changes; a payment not yet attempted gets none. A payment the source doesn't
+know keeps its row flagged `not_found_at`, or with no row ends dead (A5). A failed fetch or an
+answer `to_row` can't use fails the job with its error class.
 """
 
 import asyncio
@@ -33,7 +35,7 @@ from webhook_sync.queue import (
     enqueue,
 )
 from webhook_sync.queue.runner import Sleep
-from webhook_sync.sources.base import BusinessRow, SourceAdapter
+from webhook_sync.sources.base import BusinessRow, NotFound, SourceAdapter, UnusableState
 
 log = logging.getLogger("webhook_sync.ledger")
 
@@ -119,10 +121,17 @@ def ledger_work(
         source = sources[job.source]
         fetched = await source.fetch(job.payment_key)
         if isinstance(fetched, Failure):
-            _log_fetch(job, "failed", fetched.error_class)
+            _log_fetch(job, "failed", fetched.error_class, fetched.http_status)
             raise StageFailed(fetched)
-        _log_fetch(job, "fetched")
-        row = source.to_row(fetched.state)
+        if isinstance(fetched, NotFound):
+            row: BusinessRow | NotFound | None = fetched  # logged once the row is read
+        else:
+            try:
+                row = source.to_row(fetched.state)
+            except UnusableState as error:
+                _log_fetch(job, "failed", "dead")
+                raise StageFailed(Failure(str(error), "dead")) from error
+            _log_fetch(job, "fetched")
 
         async def writes(tx: Transaction) -> None:
             await write_row(
@@ -134,22 +143,37 @@ def ledger_work(
     return work
 
 
+NOT_FOUND_WITHOUT_ROW = "not found at source: possible mode or account mix-up"
+"""Why a job ends dead when the source doesn't know a payment the ledger has no row for (A5)."""
+
+
 async def write_row(
     tx: Transaction,
     job: ClaimedJob,
-    row: BusinessRow | None,
+    row: BusinessRow | NotFound | None,
     *,
     mirror_sinks: Sequence[str],
     retry_profile: RetryProfile,
     now: datetime,
 ) -> None:
     """Upsert the payment's business row if its hash changed, and enqueue one mirror job per
-    sink, all in the runner's transaction with the job's fenced `complete` (A2, A19)."""
+    sink, all in the runner's transaction with the job's fenced `complete` (A2, A19).
+
+    `NotFound`: the stored row keeps its values and gets `not_found_at` (a real change the
+    first time); with no stored row the job fails dead (A5). A fetched row always clears
+    `not_found_at`: the payment is back (A17)."""
     if row is None:
         return  # not yet attempted: no row (F10)
     stored = await _stored_row(tx, job)
-    columns = _business_columns(row)
-    columns["dispute_status"] = stored["dispute_status"] if stored else None
+    if isinstance(row, NotFound):
+        _log_fetch(job, "not_found", None if stored else "dead", row.http_status)
+        if stored is None:
+            raise StageFailed(Failure(NOT_FOUND_WITHOUT_ROW, "dead", http_status=row.http_status))
+        columns = {name: stored[name] for name in HASHED_COLUMNS}
+        columns["not_found_at"] = stored["not_found_at"] or to_db_text(now)
+    else:
+        columns = _business_columns(row)
+        columns["dispute_status"] = stored["dispute_status"] if stored else None
     new_hash = row_hash(columns)
     if stored is not None and stored["row_hash"] == new_hash:
         return  # nothing changed: nothing written
@@ -243,8 +267,15 @@ async def _via(tx: Transaction, job: ClaimedJob) -> str | None:
     return "sweep" if rows[0]["origin"] in _SWEPT_ORIGINS else "delivery"
 
 
-def _log_fetch(job: ClaimedJob, outcome: str, error_class: str | None = None) -> None:
-    """One line per fetch outcome: never a key, a body, an email or a phone number."""
+def _log_fetch(
+    job: ClaimedJob,
+    outcome: str,
+    error_class: str | None = None,
+    http_status: int | None = None,
+) -> None:
+    """One line per fetch outcome (`fetched`, `not_found` or `failed`), with the error class
+    and the source's HTTP status when it failed: never a key, a body, an email or a phone
+    number."""
     log.info(
         "payment fetch",
         extra={
@@ -253,5 +284,6 @@ def _log_fetch(job: ClaimedJob, outcome: str, error_class: str | None = None) ->
             "source": job.source,
             "outcome": outcome,
             "error_class": error_class,
+            "http_status": http_status,
         },
     )

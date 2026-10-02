@@ -102,9 +102,25 @@ class Fetched:
     state: Mapping[str, Any]
 
 
-type FetchResult = Fetched | Failure
-"""What `fetch` returns: the current state, or a failure with its error class (queue.md).
-(P2's later tickets add `not_found`.)"""
+@dataclass(frozen=True)
+class NotFound:
+    """The source doesn't know the payment: its own answer for an unknown id (A5, A16).
+
+    Not a queue error class: the ledger worker flags the payment's row "not found at source",
+    or ends the job dead when there is no row."""
+
+    http_status: int
+
+
+class UnusableState(ValueError):
+    """`to_row` can't map the source's answer (an amount that is negative or not an integer, a
+    status it doesn't know): bad data, never written. The job goes to dead with this message
+    (queue.md's `dead` class)."""
+
+
+type FetchResult = Fetched | NotFound | Failure
+"""What `fetch` returns: the current state, `NotFound`, or a failure with its error class
+(queue.md)."""
 
 
 class SourceAdapter(Protocol):

@@ -8,29 +8,38 @@ start. Every exception becomes a rejection reason, never a 500.
 Fetch: one call, `GET /v1/payments/{id}?expand[]=refunds&expand[]=card`, made directly with
 async httpx (basic auth, a 10 s timeout, A11), never the synchronous SDK. When the expanded
 refunds fill Razorpay's default page of 10, `GET /v1/payments/{id}/refunds` is paged for the full
-list (A6). `payment_row` maps the
-answer to a business row, a pure function (sources.md, "Fetch").
+list (A6). Every call first takes a token from a 10-a-second bucket, and its answer is classified
+by HTTP status (A12): 400 "The id provided does not exist" is `NotFound`; 401 and 403 pause the
+source; 429, 5xx, timeouts and connection errors retry, `Retry-After` a minimum; anything else,
+or a 2xx that isn't a JSON object, is dead with its reason. `payment_row` maps the answer to a
+business row, a pure function (sources.md, "Fetch").
 """
 
+import asyncio
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
+from email.utils import parsedate_to_datetime
 from typing import Any, cast
 
 import httpx
 from razorpay import Utility  # pyright: ignore[reportMissingTypeStubs]
 from razorpay.errors import SignatureVerificationError  # pyright: ignore[reportMissingTypeStubs]
 
+from webhook_sync.clock import utc_now
 from webhook_sync.config import Mode
 from webhook_sync.queue import Failure
+from webhook_sync.receiver.rate_cap import RateCap
 from webhook_sync.sources.base import (
     BusinessRow,
     EventDescription,
     Fetched,
     FetchResult,
+    NotFound,
     PaymentStatus,
     Rejection,
+    UnusableState,
     VerifiedDelivery,
 )
 
@@ -90,6 +99,10 @@ _PAYMENT_KEY_PATHS = (("payment", "id"), ("refund", "payment_id"), ("dispute", "
 FETCH_TIMEOUT = timedelta(seconds=10)
 """How long one fetch may take before it is given up and retried (A11)."""
 
+CALLS_PER_SECOND = 10.0
+"""The source's token bucket: at most 10 API calls a second, a burst of 10 (sources.md). A
+call waits for a token, so a burst never meets Razorpay's unpublished throttle."""
+
 
 def api_client(api_url: str, key_id: str, key_secret: str) -> httpx.AsyncClient:
     """The client every Razorpay API call goes through: basic auth with the key, 10 s timeout."""
@@ -108,6 +121,37 @@ REFUNDS_PAGE = 100
 """Refunds asked for per page of `GET /v1/payments/{id}/refunds`, the most Razorpay allows."""
 
 
+UNKNOWN_ID = "The id provided does not exist"
+"""Razorpay's 400 description for a payment id it doesn't know: not found at source (A5)."""
+
+
+def _error_description(response: httpx.Response) -> str | None:
+    """The `error.description` of a Razorpay error answer, or None when it has none."""
+    try:
+        body: object = response.json()
+    except ValueError:
+        return None
+    description = _object(_object(body).get("error")).get("description")
+    return description if isinstance(description, str) else None
+
+
+def _retry_after(value: str | None) -> timedelta | None:
+    """A `Retry-After` header as a wait: whole seconds, or an HTTP date from now (A12). None
+    when absent or unreadable; a date already past is no wait."""
+    if value is None:
+        return None
+    value = value.strip()
+    if value.isdigit():
+        return timedelta(seconds=int(value))
+    try:
+        when = parsedate_to_datetime(value)
+    except TypeError, ValueError:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)  # an HTTP date is always GMT
+    return max(when - utc_now(), timedelta(0))
+
+
 class RazorpayAdapter:
     name = "razorpay"
 
@@ -119,7 +163,10 @@ class RazorpayAdapter:
         webhook_secrets: Sequence[str],
         api: httpx.AsyncClient,
         metadata_keys: Sequence[str] = (),
+        fetch_timeout: timedelta = FETCH_TIMEOUT,
     ) -> None:
+        self._fetch_timeout = fetch_timeout
+        self._bucket = RateCap(rate=CALLS_PER_SECOND, burst=CALLS_PER_SECOND)
         self._mode = mode
         self._metadata_keys = tuple(metadata_keys)
         self._account = account
@@ -128,42 +175,90 @@ class RazorpayAdapter:
 
     async def fetch(self, payment_key: str) -> FetchResult:
         """The payment's current state, with its refunds and card expanded."""
-        try:
-            response = await self._api.get(
-                f"/v1/payments/{payment_key}",
-                params=[("expand[]", "refunds"), ("expand[]", "card")],
-            )
-        except httpx.TransportError as error:  # a timeout, a refused or dropped connection
-            return Failure(f"fetch failed: {type(error).__name__}", "retry")
-        response.raise_for_status()
-        state = cast(dict[str, Any], response.json())
+        state = await self._get(
+            f"/v1/payments/{payment_key}", [("expand[]", "refunds"), ("expand[]", "card")]
+        )
+        if not isinstance(state, dict):
+            return state
         expanded = _object(state.get("refunds")).get("items")
         if isinstance(expanded, list) and len(cast(list[object], expanded)) >= EXPANDED_PAGE:
             refunds = await self._all_refunds(payment_key)
-            if isinstance(refunds, Failure):
+            if not isinstance(refunds, list):
                 return refunds
             state = {**state, "refunds": {"entity": "collection", "items": refunds}}
         return Fetched(state)
 
-    async def _all_refunds(self, payment_key: str) -> list[dict[str, Any]] | Failure:
+    async def _all_refunds(self, payment_key: str) -> list[dict[str, Any]] | NotFound | Failure:
         """Every refund of the payment, paged 100 at a time until a page comes back short.
 
         A refunds collection's `count` is the items on that page, not a total, so a short page
-        is the only sign of the end (the fetch recordings' README; #22)."""
+        is the only sign of the end (the fetch recordings' README; #22). Each page's answer is
+        classified as the main fetch's is."""
         refunds: list[dict[str, Any]] = []
         while True:
-            try:
-                response = await self._api.get(
-                    f"/v1/payments/{payment_key}/refunds",
-                    params={"count": REFUNDS_PAGE, "skip": len(refunds)},
-                )
-            except httpx.TransportError as error:
-                return Failure(f"refunds fetch failed: {type(error).__name__}", "retry")
-            response.raise_for_status()
-            page = cast(list[dict[str, Any]], response.json()["items"])
+            answer = await self._get(
+                f"/v1/payments/{payment_key}/refunds",
+                [("count", str(REFUNDS_PAGE)), ("skip", str(len(refunds)))],
+            )
+            if not isinstance(answer, dict):
+                return answer
+            page = cast(list[dict[str, Any]], answer["items"])
             refunds.extend(page)
             if len(page) < REFUNDS_PAGE:
                 return refunds
+
+    async def _get(
+        self, path: str, params: Sequence[tuple[str, str]]
+    ) -> dict[str, Any] | NotFound | Failure:
+        """One API call, once the bucket gives a token: the answer's JSON object, or what its
+        failure means (A12)."""
+        # The bucket refills with the one clock's time, so it is polled, a token's time apart.
+        while True:
+            if self._bucket.allow(self.name):
+                break
+            await asyncio.sleep(1 / CALLS_PER_SECOND)
+        try:
+            # The whole call, not only each read, ends at the timeout: a trickle can't hang it.
+            async with asyncio.timeout(self._fetch_timeout.total_seconds()):
+                response = await self._api.get(path, params=list(params))
+        except TimeoutError:
+            return Failure("Razorpay call failed: no answer within the timeout", "retry")
+        except httpx.TransportError as error:  # a timeout, a refused or dropped connection
+            return Failure(f"Razorpay call failed: {type(error).__name__}", "retry")
+        status = response.status_code
+        if status == 400 and _error_description(response) == UNKNOWN_ID:
+            return NotFound(http_status=400)
+        if status in (401, 403):
+            return Failure(
+                f"Razorpay answered HTTP {status}",
+                "pause",
+                pause_target="source",
+                http_status=status,
+            )
+        if status == 429 or status >= 500:
+            return Failure(
+                f"Razorpay answered HTTP {status}",
+                "retry",
+                retry_after=_retry_after(response.headers.get("retry-after")),
+                http_status=status,
+            )
+        if not response.is_success:
+            description = _error_description(response)
+            reason = f"Razorpay answered HTTP {status}"
+            if description:
+                reason = f"{reason}: {description[:200]}"
+            return Failure(reason, "dead", http_status=status)
+        try:
+            body: object = response.json()
+        except ValueError:
+            body = None
+        if not isinstance(body, dict):
+            return Failure(
+                f"Razorpay answered HTTP {status} with a body that is not a JSON object",
+                "dead",
+                http_status=status,
+            )
+        return cast(dict[str, Any], body)
 
     def to_row(self, state: Mapping[str, Any]) -> BusinessRow | None:
         return payment_row(state, metadata_keys=self._metadata_keys)
@@ -325,7 +420,7 @@ def _status(source_status: str, *, captured: bool) -> PaymentStatus:
         return "succeeded" if captured else "canceled"
     status = _STATUSES.get(source_status)
     if status is None:
-        raise ValueError(f"unmapped Razorpay payment status {source_status!r}")
+        raise UnusableState(f"unmapped Razorpay payment status {source_status!r}")
     return status
 
 
@@ -352,9 +447,9 @@ def _method(state: Mapping[str, Any]) -> str | None:
     return f"{method} ({detail})" if isinstance(detail, str) and detail else method
 
 
-class BadAmount(ValueError):
+class BadAmount(UnusableState):
     """The source answered an amount that is negative or not an integer: bad data, never
-    written. The stage runner sends the job to dead with this message (A14, edge case D4)."""
+    written. The ledger worker sends the job to dead with this message (A14, edge case D4)."""
 
 
 def _amount(value: object) -> int:
