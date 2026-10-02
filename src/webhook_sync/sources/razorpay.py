@@ -50,8 +50,9 @@ _PAYMENT_KEY_PATHS = (("payment", "id"), ("refund", "payment_id"), ("dispute", "
 class RazorpayAdapter:
     name = "razorpay"
 
-    def __init__(self, *, mode: Mode, webhook_secrets: Sequence[str]) -> None:
+    def __init__(self, *, mode: Mode, account: str, webhook_secrets: Sequence[str]) -> None:
         self._mode = mode
+        self._account = account
         self._secrets = tuple(webhook_secrets)
 
     def verify(self, raw_body: bytes, headers: Mapping[str, str]) -> VerifiedDelivery | Rejection:
@@ -103,6 +104,10 @@ class RazorpayAdapter:
         event_type = body.get("event")
         if not isinstance(event_type, str) or not event_type:
             return Rejection("malformed")
+        # Q121: a body naming another account is refused; one naming none is the configured one's.
+        account_id = body.get("account_id")
+        if account_id is not None and account_id != self._account:
+            return Rejection("wrong_account")
         handled = event_type in HANDLED_TYPES
 
         entity_name = next(
@@ -134,10 +139,9 @@ class RazorpayAdapter:
             "" if created_seconds is None else str(created_seconds),
             self._mode,
         )
-        account_id = body.get("account_id")
         return EventDescription(
             type=event_type,
-            account_id=account_id if isinstance(account_id, str) and account_id else None,
+            account_id=account_id,
             payment_key=payment_key,
             fingerprint=hashlib.sha256("|".join(fingerprint_parts).encode()).hexdigest(),
             source_created_at=(

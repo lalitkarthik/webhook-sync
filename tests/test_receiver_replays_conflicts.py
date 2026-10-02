@@ -4,7 +4,7 @@ import logging
 
 import httpx
 import pytest
-from support import ReadRows, razorpay_sample, sign_razorpay
+from support import TEST_ACCOUNT, ReadRows, razorpay_sample, sign_razorpay
 
 pytestmark = pytest.mark.unrecorded
 
@@ -81,3 +81,36 @@ async def test_a_known_event_id_with_other_bytes_but_the_same_fingerprint_is_a_d
     assert (response.status_code, response.json()) == (200, {"result": "duplicate"})
     deliveries = await read_rows("SELECT result FROM deliveries ORDER BY id")
     assert [d["result"] for d in deliveries] == ["new", "duplicate"]
+
+
+async def test_a_body_from_another_account_is_400_wrong_account_and_stores_nothing(
+    client: httpx.AsyncClient, read_rows: ReadRows
+) -> None:
+    sample = razorpay_sample("payment.captured")
+    sample["account_id"] = "acc_SomeoneElse0001"
+    body, headers = sign_razorpay(sample)
+
+    response = await client.post("/webhooks/razorpay", content=body, headers=headers)
+
+    assert response.status_code == 400
+    assert response.json() == {"rejection": "wrong_account"}
+    assert await read_rows("SELECT * FROM events") == []
+    assert await read_rows("SELECT * FROM deliveries") == []
+
+
+async def test_a_body_without_an_account_is_stored_under_the_configured_one_with_a_warning(
+    client: httpx.AsyncClient, read_rows: ReadRows, caplog: pytest.LogCaptureFixture
+) -> None:
+    sample = razorpay_sample("payment.captured")
+    del sample["account_id"]
+    body, headers = sign_razorpay(sample, event_id="evt_noaccount01")
+
+    with caplog.at_level(logging.INFO):
+        response = await client.post("/webhooks/razorpay", content=body, headers=headers)
+
+    assert response.status_code == 202
+    assert await read_rows("SELECT event_id, account FROM events") == [
+        {"event_id": "evt_noaccount01", "account": TEST_ACCOUNT}
+    ]
+    [warning] = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert warning.__dict__["event_id"] == "evt_noaccount01"
