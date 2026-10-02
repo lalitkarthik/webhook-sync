@@ -322,3 +322,33 @@ async def test_a_worker_that_lost_its_lease_mid_fetch_has_its_writes_rolled_back
         {"number": 1, "outcome": "reaped"},
         {"number": 2, "outcome": "ok"},
     ]
+
+
+async def test_a_change_in_a_column_the_sheet_may_not_show_still_makes_a_mirror_job(
+    writer: Writer,
+    ledger: StageRunner,
+    razorpay: respx.MockRouter,
+    read_rows: ReadRows,
+    frozen_clock: TimeMachineFixture,
+) -> None:
+    # Only the GST on the fee changes (fee and net stay): a sheet configured without its column
+    # shows nothing new, but the hash covers every business column, not the shown ones (A3).
+    retaxed = {**captured(), "tax": 0}
+    razorpay.get(FETCH_PATH).mock(
+        side_effect=[httpx.Response(200, json=captured()), httpx.Response(200, json=retaxed)]
+    )
+    await enqueue_ledger_job(writer, "evt_captured")
+    await ledger.run_once()
+    await flusher_takes_the_mirror_jobs(writer)
+    frozen_clock.shift(timedelta(minutes=1))
+    await enqueue_ledger_job(writer, "evt_updated")
+
+    await ledger.run_once()
+
+    assert await read_rows(
+        "SELECT fee_minor, fee_tax_minor, net_minor, row_version FROM payments"
+    ) == [{"fee_minor": 1180, "fee_tax_minor": 0, "net_minor": 48820, "row_version": 2}]
+    assert await read_rows(MIRROR_JOBS) == [
+        {**waiting_mirror_job("evt_captured"), "status": "done"},
+        waiting_mirror_job("evt_updated"),
+    ]
