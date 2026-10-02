@@ -6,6 +6,7 @@ and is answered 200: a duplicate when the signed body's hash matches or the fing
 same, a conflict when a known event id arrives with a different fingerprint (the first is kept).
 """
 
+import json
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -62,6 +63,7 @@ async def store_delivery(
                 origin="delivery",
                 outcome="queued" if description.handled else "ignored",
                 ignore_reason=description.ignore_reason,
+                payload=json.dumps(description.payload, ensure_ascii=False),
                 source_created_at=(
                     to_db_text(description.source_created_at)
                     if description.source_created_at

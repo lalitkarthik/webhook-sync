@@ -33,6 +33,7 @@ class EventDescription:
 
     `account_id` is the account the body names, or None when it names none. `ignore_reason` is
     None for a handled type. `payment_key` is set whenever the body names a payment (A16).
+    `payload` is the body with every field outside the source's allow-list dropped (A5).
     """
 
     type: str
@@ -41,6 +42,7 @@ class EventDescription:
     fingerprint: str
     source_created_at: datetime | None
     ignore_reason: str | None
+    payload: Mapping[str, Any]
 
     @property
     def handled(self) -> bool:

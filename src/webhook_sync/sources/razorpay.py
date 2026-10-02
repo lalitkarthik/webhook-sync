@@ -43,6 +43,30 @@ _PRIMARY_ENTITY = (
     ("order.", "order"),
 )
 
+# Q119 / A5: what `events.payload` keeps. Everything else (email, contact, notes, card, VPA, bank
+# details, fields Razorpay adds later) is dropped before storing.
+_TOP_LEVEL_KEYS = frozenset({"entity", "account_id", "event", "contains", "created_at"})
+_ENTITY_FIELDS = frozenset(
+    {
+        "id",
+        "entity",
+        "amount",
+        "amount_refunded",
+        "currency",
+        "status",
+        "refund_status",
+        "captured",
+        "order_id",
+        "payment_id",
+        "method",
+        "speed_requested",
+        "speed_processed",
+        "error_code",
+        "error_reason",
+        "created_at",
+    }
+)
+
 # Where an event names its payment, in order (A16): stored for ignored events too.
 _PAYMENT_KEY_PATHS = (("payment", "id"), ("refund", "payment_id"), ("dispute", "payment_id"))
 
@@ -148,7 +172,35 @@ class RazorpayAdapter:
                 None if created_seconds is None else datetime.fromtimestamp(created_seconds, UTC)
             ),
             ignore_reason=ignore_reason,
+            payload=_allow_listed(body),
         )
+
+
+def _allow_listed(body: Mapping[str, Any]) -> dict[str, Any]:
+    """The body with only Q119's fields: allow-listed top-level keys, and under `payload` each
+    entity's allow-listed fields. Only plain values are kept, so a nested object never slips in
+    under an allowed name."""
+    kept: dict[str, Any] = {k: v for k, v in body.items() if k in _TOP_LEVEL_KEYS and _plain(v)}
+    entities = {
+        name: {"entity": {k: v for k, v in entity.items() if k in _ENTITY_FIELDS and _plain(v)}}
+        for name, wrapper in _object(body.get("payload")).items()
+        if (entity := _object(_object(wrapper).get("entity")))
+    }
+    if entities:
+        kept["payload"] = entities
+    return kept
+
+
+def _object(value: object) -> dict[str, Any]:
+    """`value` when it is a JSON object, else an empty one."""
+    return cast(dict[str, Any], value) if isinstance(value, dict) else {}
+
+
+def _plain(value: object) -> bool:
+    """A scalar, or a list of strings (`contains`)."""
+    if isinstance(value, list):
+        return all(isinstance(item, str) for item in cast(list[object], value))
+    return value is None or isinstance(value, str | int | float | bool)
 
 
 def _encodes_as_utf8(body: object) -> bool:
