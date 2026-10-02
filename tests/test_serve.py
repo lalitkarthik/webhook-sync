@@ -1,21 +1,22 @@
 """`wsync serve` as a real subprocess (seam 3): it starts, stores a delivery, logs JSON lines."""
 
 import json
-import os
-import shutil
 import signal
-import socket
 import subprocess
-import sys
-import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
 import pytest
+from processes import (
+    fixture_environment,
+    free_port,
+    wait_until_healthy,
+    write_serve_config,
+    wsync_path,
+)
 from support import (
-    TEST_ACCOUNT,
     TEST_KEY_ID,
     TEST_KEY_SECRET,
     TEST_WEBHOOK_SECRET,
@@ -33,41 +34,18 @@ class Server:
     log_path: Path
 
 
-def free_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
-
-
-def fixture_environment() -> dict[str, str]:
-    """This process's environment with the fixture secrets in place of any real ones."""
-    environ = {k: v for k, v in os.environ.items() if not k.startswith("RAZORPAY_")}
-    environ |= {
-        "RAZORPAY_KEY_ID": TEST_KEY_ID,
-        "RAZORPAY_KEY_SECRET": TEST_KEY_SECRET,
-        "RAZORPAY_WEBHOOK_SECRET": TEST_WEBHOOK_SECRET,
-    }
-    return environ
-
-
 @pytest.fixture
 def server(tmp_path: Path) -> Iterator[Server]:
     """`wsync serve` started from an unrelated directory, its config in `conf/`."""
     port = free_port()
     config_dir = tmp_path / "conf"
-    config_dir.mkdir()
-    (config_dir / "webhook-sync.toml").write_text(
-        f'[service]\npublic_listen = "127.0.0.1:{port}"\ndata_dir = "data"\n\n'
-        f'[sources.razorpay]\nmode = "test"\naccount = "{TEST_ACCOUNT}"\n'
-    )
+    config_path = write_serve_config(config_dir, port)
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
-    wsync = shutil.which("wsync", path=Path(sys.executable).parent)
-    assert wsync is not None, "the wsync console script is not installed"
     log_path = tmp_path / "stderr.log"
     with log_path.open("wb") as log_file:
         process = subprocess.Popen(
-            [wsync, "serve", "--config", str(config_dir / "webhook-sync.toml")],
+            [wsync_path(), "serve", "--config", str(config_path)],
             cwd=elsewhere,
             env=fixture_environment(),
             stdout=log_file,
@@ -84,19 +62,6 @@ def server(tmp_path: Path) -> Iterator[Server]:
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait()
-
-
-def wait_until_healthy(base_url: str, process: subprocess.Popen[bytes]) -> None:
-    deadline = time.monotonic() + 15
-    while time.monotonic() < deadline:
-        assert process.poll() is None, "wsync serve exited before it was healthy"
-        try:
-            if httpx.get(f"{base_url}/health", timeout=1).status_code == 200:
-                return
-        except httpx.TransportError:
-            pass
-        time.sleep(0.05)
-    pytest.fail("wsync serve did not answer /health in time")
 
 
 def test_serve_answers_health_and_stores_a_signed_delivery_under_the_config_dir(

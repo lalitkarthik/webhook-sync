@@ -1,0 +1,42 @@
+# Copy to webhook-sync.toml and fill in. Everything here is non-secret: secrets come from the
+# environment or .env (names in .env.example), never this file. An unknown key refuses to start.
+
+[service]
+public_listen = "0.0.0.0:8080"      # webhooks and /health only
+admin_listen = "127.0.0.1:8081"     # secrets: ADMIN_TOKENS=label:token,...
+data_dir = "data"                   # the database and its lock file; relative to this file
+timezone = "Asia/Kolkata"
+retry_profile = "production"        # or "demo"
+
+[sources.razorpay]
+mode = "test"                       # secrets: RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET,
+                                    # RAZORPAY_WEBHOOK_SECRET (comma-separated, newest first)
+account = "acc_XXXXXXXXXXXXXX"      # or the bare Merchant ID from the Dashboard
+metadata_keys = ["order_id"]
+# [sources.stripe] is refused while Stripe is parked (Q103): mode, account, metadata_keys;
+# secrets STRIPE_WEBHOOK_SECRETS (newest first), STRIPE_RESTRICTED_KEY
+
+[sinks.sheets]
+spreadsheet_id = "your-spreadsheet-id"  # secret: GOOGLE_SERVICE_ACCOUNT_JSON, or GOOGLE_OAUTH_REFRESH_TOKEN
+columns = ["payment_id", "source", "created", "status", "amount", "currency", "refunded",
+           "settled", "fee", "net", "settled_in", "method", "dispute", "customer_email",
+           "description", "metadata", "via", "note", "updated"]
+mask_email = true
+
+[sweeper]
+initial_lookback_days = 30
+heartbeat_url = "https://hc-ping.com/your-check-id"
+
+[verify]
+days = 30
+nightly_at = "02:00"
+auto_repair = true
+
+[retention]
+payload_days = 30
+
+[alerts]
+url = ""                            # Slack or Discord incoming-webhook URL; empty = banner only
+
+[demo]
+spreadsheet_ids = []                # --demo-fail-first runs only against these sheets (Q120)

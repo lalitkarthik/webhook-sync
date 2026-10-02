@@ -1,7 +1,8 @@
 """The migration runner: numbered `NNNN_<name>.sqlite.sql` files, applied in order at start.
 
 Each pending file runs in one transaction with its `schema_version` row (A9). History only moves
-forward: a file is never edited once released, and a later change is a new file.
+forward: a file is never edited once released, and a later change is a new file. A database whose
+schema is newer than the code is refused: an old binary must not touch newer data.
 """
 
 import re
@@ -13,6 +14,10 @@ from webhook_sync.clock import to_db_text, utc_now
 from webhook_sync.db.writer import Writer
 
 _FILE_NAME = re.compile(r"^(\d{4})_[a-z0-9_]+\.sqlite\.sql$")
+
+
+class SchemaTooNew(Exception):
+    """The database was migrated by a newer version of this code."""
 
 
 @dataclass(frozen=True)
@@ -46,11 +51,19 @@ async def current_version(writer: Writer) -> int:
 async def apply_pending(writer: Writer) -> list[int]:
     """Apply every migration newer than the database, each in its own transaction.
 
-    Returns the versions applied (empty when the database is current).
+    Returns the versions applied (empty when the database is current). Raises SchemaTooNew,
+    applying nothing, when the database's schema_version is newer than every known migration.
     """
     applied: list[int] = []
     current = await current_version(writer)
-    for migration in known_migrations():
+    migrations = known_migrations()
+    latest = migrations[-1].version if migrations else 0
+    if current > latest:
+        raise SchemaTooNew(
+            f"the database's schema_version is {current}, newer than this code's {latest}: "
+            "run the wsync that last migrated it, or a newer one"
+        )
+    for migration in migrations:
         if migration.version <= current:
             continue
         async with writer.transaction() as tx:

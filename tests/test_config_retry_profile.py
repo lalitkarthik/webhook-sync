@@ -3,7 +3,13 @@
 from pathlib import Path
 
 import pytest
-from support import TEST_ACCOUNT, TEST_KEY_ID, TEST_KEY_SECRET, TEST_WEBHOOK_SECRET
+from support import (
+    TEST_ACCOUNT,
+    TEST_KEY_ID,
+    TEST_KEY_SECRET,
+    TEST_SPREADSHEET_ID,
+    TEST_WEBHOOK_SECRET,
+)
 
 from webhook_sync.config import ConfigError, load_config
 
@@ -17,7 +23,8 @@ SECRETS = {
 def write_config(directory: Path, service_lines: str) -> Path:
     path = directory / "webhook-sync.toml"
     razorpay = f'[sources.razorpay]\nmode = "test"\naccount = "{TEST_ACCOUNT}"\n'
-    path.write_text(f"[service]\n{service_lines}\n{razorpay}")
+    sheets = f'[sinks.sheets]\nspreadsheet_id = "{TEST_SPREADSHEET_ID}"\n'
+    path.write_text(f"[service]\n{service_lines}\n{razorpay}\n{sheets}")
     return path
 
 
