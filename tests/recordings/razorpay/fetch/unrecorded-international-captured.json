@@ -1,0 +1,30 @@
+{
+  "unrecorded": true,
+  "source": "https://razorpay.com/docs/payments/international-payments/currency-conversion/",
+  "note": "Payment Entity sample for a $1 payment. Documented without `captured` or `card`; fee and tax are in base_currency (paise). Redacted: email placeholder, contact removed.",
+  "request": "GET /v1/payments/{id}?expand[]=refunds&expand[]=card",
+  "http": 200,
+  "body": {
+    "id": "pay_Donb2t6WkJYhfU",
+    "entity": "payment",
+    "amount": 100,
+    "currency": "USD",
+    "base_amount": 7129,
+    "base_currency": "INR",
+    "status": "captured",
+    "order_id": "order_CjCr5oKh4AVC51",
+    "international": true,
+    "method": "card",
+    "amount_refunded": 0,
+    "refund_status": null,
+    "description": "Payment at the Dollar Store",
+    "card_id": "card_Donb2wk8eC8EDN",
+    "email": "customer@example.com",
+    "notes": [],
+    "fee": 207,
+    "tax": 0,
+    "error_code": null,
+    "error_description": null,
+    "created_at": 1400826750
+  }
+}

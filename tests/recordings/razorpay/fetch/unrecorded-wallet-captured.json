@@ -1,0 +1,38 @@
+{
+  "unrecorded": true,
+  "source": "https://razorpay.com/docs/api/payments/fetch-with-id/",
+  "note": "The fetch page's Wallet sample (airtelmoney). Redacted: email placeholder; contact and vpa removed.",
+  "request": "GET /v1/payments/{id}?expand[]=refunds&expand[]=card",
+  "http": 200,
+  "body": {
+    "id": "pay_MT4GRFUHBfMCNf",
+    "entity": "payment",
+    "amount": 250000,
+    "currency": "INR",
+    "status": "captured",
+    "order_id": "order_MT4FE4i64KutqB",
+    "invoice_id": null,
+    "international": false,
+    "method": "wallet",
+    "amount_refunded": 0,
+    "refund_status": null,
+    "captured": true,
+    "description": "#MT4F1XRgHKcWEt",
+    "card_id": null,
+    "bank": null,
+    "wallet": "airtelmoney",
+    "email": "customer@example.com",
+    "notes": [],
+    "fee": 5900,
+    "tax": 900,
+    "error_code": null,
+    "error_description": null,
+    "error_source": null,
+    "error_step": null,
+    "error_reason": null,
+    "acquirer_data": {
+      "transaction_id": null
+    },
+    "created_at": 1692697187
+  }
+}

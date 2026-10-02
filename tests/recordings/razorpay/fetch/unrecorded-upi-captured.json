@@ -1,0 +1,42 @@
+{
+  "unrecorded": true,
+  "source": "https://razorpay.com/docs/api/payments/fetch-with-id/",
+  "note": "The fetch page's UPI sample: `email` null, `upi` inline. Redacted: contact, vpa and upi.vpa removed; acquirer_data.rrn blanked.",
+  "request": "GET /v1/payments/{id}?expand[]=refunds&expand[]=card",
+  "http": 200,
+  "body": {
+    "id": "pay_MT3PgKGazkDUUM",
+    "entity": "payment",
+    "amount": 1000,
+    "currency": "INR",
+    "status": "captured",
+    "order_id": "order_MLXS6VLbhKH7i1",
+    "invoice_id": "inv_MLXS5jI0oFNX2a",
+    "international": false,
+    "method": "upi",
+    "amount_refunded": 0,
+    "refund_status": null,
+    "captured": true,
+    "description": "#MLXS5jI0oFNX2a",
+    "card_id": null,
+    "bank": null,
+    "wallet": null,
+    "email": null,
+    "notes": [],
+    "fee": 24,
+    "tax": 4,
+    "error_code": null,
+    "error_description": null,
+    "error_source": null,
+    "error_step": null,
+    "error_reason": null,
+    "acquirer_data": {
+      "rrn": "<redacted>"
+    },
+    "created_at": 1692694191,
+    "upi": {
+      "payer_account_type": "credit_card",
+      "flow": "intent"
+    }
+  }
+}

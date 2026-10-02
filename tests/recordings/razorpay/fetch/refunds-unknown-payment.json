@@ -1,0 +1,14 @@
+{
+  "recorded_at": "2026-10-02T20:12:54+00:00",
+  "request": "GET /v1/payments/pay_00000000000000/refunds?count=1",
+  "http": 200,
+  "headers": {
+    "content-type": "application/json; charset=utf-8",
+    "date": "Fri, 02 Oct 2026 20:12:54 GMT"
+  },
+  "body": {
+    "count": 0,
+    "entity": "collection",
+    "items": []
+  }
+}

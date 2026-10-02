@@ -4,10 +4,13 @@ Import with `from support import ...` (pytest and pyright both put `tests/` on t
 Fixture secrets only: never the real environment's values.
 """
 
+import asyncio
 import hashlib
 import hmac
 import json
+import sqlite3
 from collections.abc import Awaitable, Callable
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +18,8 @@ TEST_KEY_ID = "rzp_test_fixtureKeyId01"
 TEST_KEY_SECRET = "fixture-key-secret-not-real"
 TEST_WEBHOOK_SECRET = "fixture-webhook-secret-not-real"
 TEST_ACCOUNT = "acc_BFQ7uQEaa7j2z7"
+UNREACHABLE_API = "http://127.0.0.1:9"
+"""A Razorpay API address nothing answers (the discard port): a fetch there fails to connect."""
 
 RAZORPAY_SAMPLES = Path(__file__).parent / "fixtures" / "razorpay"
 
@@ -63,3 +68,43 @@ def fixture_secrets() -> dict[str, str]:
         "RAZORPAY_KEY_SECRET": TEST_KEY_SECRET,
         "RAZORPAY_WEBHOOK_SECRET": TEST_WEBHOOK_SECRET,
     }
+
+
+RAZORPAY_RECORDINGS = Path(__file__).parent / "recordings" / "razorpay"
+RECORDED_ACCOUNT = "acc_Tj5AnsI7BH2aLR"
+"""The account every P0 delivery and P2 fetch answer was recorded from (G59)."""
+
+
+def recorded_delivery(event_id: str, attempt: int = 1) -> bytes:
+    """The raw body of a delivery P0 recorded (`tests/recordings/razorpay/<id>-<n>.json`).
+
+    Re-sign it with `sign_razorpay(body, event_id=...)`: the recording's own signature used the
+    real webhook secret, which tests never have. A test using it needs the config's account set
+    to RECORDED_ACCOUNT.
+    """
+    recording = json.loads((RAZORPAY_RECORDINGS / f"{event_id}-{attempt}.json").read_text())
+    return recording["body"].encode()
+
+
+def recorded_fetch(name: str) -> dict[str, Any]:
+    """The body of a recorded fetch answer, `tests/recordings/razorpay/fetch/<name>.json`."""
+    return json.loads((RAZORPAY_RECORDINGS / "fetch" / f"{name}.json").read_text())["body"]
+
+
+def recorded_api_answer(name: str) -> dict[str, Any]:
+    """The body of a P0 API answer, `tests/recordings/razorpay/api/<name>.json`."""
+    return json.loads((RAZORPAY_RECORDINGS / "api" / f"{name}.json").read_text())["body"]
+
+
+async def execute_aside(data_dir: Path, sql: str) -> None:
+    """Run one statement on a connection of its own, off the event loop.
+
+    A running app's stage runners write too: a blocking connection on the loop would wait for
+    the lock a runner holds while the runner waits for the loop.
+    """
+
+    def run() -> None:
+        with closing(sqlite3.connect(data_dir / "webhook-sync.db")) as connection, connection:
+            connection.execute(sql)
+
+    await asyncio.to_thread(run)

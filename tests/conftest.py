@@ -19,6 +19,7 @@ from support import (
     TEST_KEY_SECRET,
     TEST_SPREADSHEET_ID,
     TEST_WEBHOOK_SECRET,
+    UNREACHABLE_API,
     ReadRows,
 )
 
@@ -45,18 +46,22 @@ def data_dir(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def config(data_dir: Path) -> Config:
-    """A minimal test-mode config with fixture secrets; its data directory is `data_dir`."""
+    """A minimal test-mode config with fixture secrets; its data directory is `data_dir`.
+
+    Its Razorpay API address is unreachable, so an app's ledger runner never calls Razorpay: a
+    test that fetches points `api_url` at a respx-faked address."""
     return Config(
         service=ServiceConfig(
             public_listen="127.0.0.1:8080", data_dir=data_dir, timezone=ZoneInfo("Asia/Kolkata")
         ),
-        razorpay=RazorpayConfig(mode="test", account=TEST_ACCOUNT),
+        razorpay=RazorpayConfig(mode="test", account=TEST_ACCOUNT, api_url=UNREACHABLE_API),
         razorpay_secrets=RazorpaySecrets(
             key_id=TEST_KEY_ID,
             key_secret=TEST_KEY_SECRET,
             webhook_secrets=(TEST_WEBHOOK_SECRET,),
         ),
         sheets=SheetsConfig(spreadsheet_id=TEST_SPREADSHEET_ID),
+        sinks=("sheets",),
     )
 
 

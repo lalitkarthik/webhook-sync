@@ -82,7 +82,7 @@ The ledger. Written only by the ledger worker. The Payments tab is a copy.
 | `method` | `card` (with brand), `upi`, `netbanking`, `wallet`, … | Standard in Indian sales reports |
 | `metadata` | The configured metadata keys (Stripe `metadata`, Razorpay `notes`), as JSON | Joins the sheet to the buyer's own order ids |
 | `dispute_status` | `inquiry`, `needs_response`, `under_review`, `won`, `lost`, `prevented`, `closed`, or empty | Stripe's eight dispute states mapped without losing meaning (F10) |
-| `customer_email`, `customer_name`, `description` | As the source reports them | Masked at write time if configured |
+| `customer_email`, `customer_name`, `description` | As the source reports them (Razorpay has no name) | Stored as reported; the sheet masks the email when configured ([Q125](grilling-log.md)) |
 | `source_created_at` | When the payment was created at the source | The sheet's date column and the Daily summary's day |
 | `not_found_at` | Set when a fetch returned 404 | The row keeps its last fetched values and is flagged ([ADR 0002](decisions/0002-fetch-current-state-not-event-payload.md)) |
 | `unknown_columns` | Columns an optional read couldn't fill (a missing key permission) | Shown as "unknown", never as zero ([Q85](grilling-log.md)) |

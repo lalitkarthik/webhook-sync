@@ -26,6 +26,9 @@ LOGGED_FIELDS = (
     "attempt",
     "received_at",
     "body_sha256",
+    "outcome",
+    "error_class",
+    "http_status",
 )
 
 

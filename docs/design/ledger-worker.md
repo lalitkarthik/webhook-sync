@@ -44,17 +44,17 @@ And because there is only ever one live job per payment ([queue.md](queue.md)), 
 
 The fetched state is mapped as [sources.md](sources.md) describes and written as it is: whatever order the events arrived in, the row ends up equal to the source ([ADR 0002](decisions/0002-fetch-current-state-not-event-payload.md)).
 
-- **A row is created only once the payment is charged or attempted**: `processing`, `authorized`, `failed` or `succeeded`. A payment still pending, or canceled before any charge, completes the job without a row (F10).
+- **A row is created only once the payment is charged or attempted**: `processing`, `authorized`, `failed` or `succeeded` (for Razorpay, anything but `created`). A payment still pending, or canceled before any charge, completes the job without a row (F10).
 - **Columns an optional read couldn't fill** (a restricted key without dispute or balance-transaction access) are recorded in `unknown_columns` and shown as "unknown", never as empty or zero ([Q85](grilling-log.md)).
 - **A prefetched state** (a backfill or repair already listed the payment in full) is used instead of a fetch, unless a newer event has arrived since. Enqueue clears it in that case (F18).
 
 ## Not found at source
 
-If the payment has no row yet, a 404 makes none: the job completes and the event stays in the audit trail. Otherwise: a fetch that returns 404 usually means test data was deleted in the dashboard, or the payment belongs to another account. The row keeps its last fetched values, `not_found_at` is set, the sheet's Note column says "not found at source", and verify lists it. Nothing is written from the event's own contents; that fallback was removed ([Q73](grilling-log.md)).
+"Not found" is the source's own answer for an id it doesn't know: Stripe's 404, Razorpay's 400 "The id provided does not exist" ([Q126](grilling-log.md)). If the payment has no row yet, none is made and the job ends `dead` as `not_found`, naming a possible mode or account mix-up; the event stays in the audit trail. Otherwise: a fetch that returns 404 usually means test data was deleted in the dashboard, or the payment belongs to another account. The row keeps its last fetched values, `not_found_at` is set, the sheet's Note column says "not found at source", and verify lists it. Nothing is written from the event's own contents; that fallback was removed ([Q73](grilling-log.md)).
 
 ## When a mirror job is made
 
-Only when `row_hash` changes. `row_hash` covers exactly the columns the mirrors show. A fetch that finds nothing new (a duplicate hint from the sweeper, a replay of an old event) costs one API call and no sheet write, which is also why a replay is always safe.
+Only when `row_hash` changes. `row_hash` covers a fixed list, every business column of `payments`, not the bookkeeping columns or `via` ([Q124](grilling-log.md)). A fetch that finds nothing new (a duplicate hint from the sweeper, a replay of an old event) costs one API call and no sheet write, which is also why a replay is always safe.
 
 ## Crash points
 

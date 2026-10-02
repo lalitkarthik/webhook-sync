@@ -1,0 +1,47 @@
+{
+  "recorded_at": "2026-10-02T20:12:38+00:00",
+  "request": "GET /v1/payments/pay_Tj9sm13R8h2378?expand[]=refunds&expand[]=card",
+  "http": 200,
+  "headers": {
+    "content-type": "application/json",
+    "date": "Fri, 02 Oct 2026 20:12:38 GMT",
+    "uber-trace-id": "a0697d4ba13ddb6c9f17d3a8c290ca61:940c74e712e0d0a0:0000000000000000:1"
+  },
+  "body": {
+    "id": "pay_Tj9sm13R8h2378",
+    "entity": "payment",
+    "amount": 50000,
+    "currency": "INR",
+    "status": "failed",
+    "order_id": "order_Tj9sW2HbfQCR9T",
+    "invoice_id": null,
+    "international": false,
+    "method": "netbanking",
+    "refunds": {
+      "entity": "collection",
+      "count": 0,
+      "items": []
+    },
+    "amount_refunded": 0,
+    "refund_status": null,
+    "captured": false,
+    "description": null,
+    "card_id": null,
+    "card": null,
+    "bank": "CNRB",
+    "wallet": null,
+    "email": "customer@example.com",
+    "notes": [],
+    "fee": null,
+    "tax": null,
+    "error_code": "BAD_REQUEST_ERROR",
+    "error_description": "Your payment didn't go through as it was declined by the bank. Try another payment method or contact your bank.",
+    "error_source": "bank",
+    "error_step": "payment_authorization",
+    "error_reason": "payment_failed",
+    "acquirer_data": {
+      "bank_transaction_id": null
+    },
+    "created_at": 1790970020
+  }
+}

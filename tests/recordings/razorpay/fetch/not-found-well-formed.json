@@ -1,0 +1,20 @@
+{
+  "recorded_at": "2026-10-02T20:12:52+00:00",
+  "request": "GET /v1/payments/pay_00000000000000?expand[]=refunds&expand[]=card",
+  "http": 400,
+  "headers": {
+    "content-type": "application/json",
+    "date": "Fri, 02 Oct 2026 20:12:52 GMT",
+    "uber-trace-id": "015be304198afcef4286c604b48d6d9a:c31e5b6326a3d8f5:0000000000000000:1"
+  },
+  "body": {
+    "error": {
+      "code": "BAD_REQUEST_ERROR",
+      "description": "The id provided does not exist",
+      "source": "internal",
+      "step": "payment_initiation",
+      "reason": "input_validation_failed",
+      "metadata": {}
+    }
+  }
+}

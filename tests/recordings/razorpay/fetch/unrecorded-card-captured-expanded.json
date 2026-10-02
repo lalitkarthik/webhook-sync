@@ -1,0 +1,50 @@
+{
+  "unrecorded": true,
+  "source": "https://razorpay.com/docs/api/payments/fetch-with-id/",
+  "note": "The fetch page's expanded-card Success sample (?expand[]=card): a captured Visa debit payment. Redacted: email placeholder; contact, card.name and card.last4 removed; acquirer_data.auth_code blanked.",
+  "request": "GET /v1/payments/{id}?expand[]=refunds&expand[]=card",
+  "http": 200,
+  "body": {
+    "id": "pay_DG4ZdRK8ZnXC3k",
+    "entity": "payment",
+    "amount": 5000,
+    "currency": "INR",
+    "status": "captured",
+    "order_id": null,
+    "invoice_id": null,
+    "international": false,
+    "method": "card",
+    "amount_refunded": 0,
+    "refund_status": null,
+    "captured": true,
+    "description": "Test Transaction",
+    "card_id": "card_LPpN6ubeosLH4g",
+    "card": {
+      "id": "card_LPpN6ubeosLH4g",
+      "entity": "card",
+      "network": "Visa",
+      "type": "debit",
+      "issuer": null,
+      "international": false,
+      "sub_type": "consumer",
+      "token_iin": null
+    },
+    "bank": null,
+    "wallet": null,
+    "email": "customer@example.com",
+    "notes": {
+      "address": "Corporate Office"
+    },
+    "fee": 100,
+    "tax": 0,
+    "error_code": null,
+    "error_description": null,
+    "error_source": null,
+    "error_step": null,
+    "error_reason": null,
+    "acquirer_data": {
+      "auth_code": "<redacted>"
+    },
+    "created_at": 1678452635
+  }
+}

@@ -29,6 +29,7 @@ DEFAULT_PUBLIC_LISTEN = "0.0.0.0:8080"
 DEFAULT_ADMIN_LISTEN = "127.0.0.1:8081"
 DEFAULT_DATA_DIR = "data"
 DEFAULT_TIMEZONE = "Asia/Kolkata"  # Q20
+DEFAULT_RAZORPAY_API_URL = "https://api.razorpay.com"
 
 
 class ConfigError(Exception):
@@ -50,6 +51,8 @@ class RazorpayConfig:
     account: str
     """Always `acc_<Merchant ID>`, however the TOML wrote it (A7)."""
     metadata_keys: tuple[str, ...] = ()
+    api_url: str = DEFAULT_RAZORPAY_API_URL
+    """Where the fetch calls Razorpay's API. Only tests and fakes point it elsewhere."""
 
 
 @dataclass(frozen=True)
@@ -77,6 +80,9 @@ class Config:
     razorpay: RazorpayConfig
     razorpay_secrets: RazorpaySecrets
     sheets: SheetsConfig
+    sinks: tuple[str, ...]
+    """The configured sinks' names, one per `[sinks.*]` section present (today `sheets`). Each
+    real ledger change makes one mirror job per sink (A19)."""
     demo: DemoConfig = DemoConfig()
 
 
@@ -121,7 +127,12 @@ SCHEMA: Schema = {
         "retry_profile": _is_string,
     },
     "sources": {
-        "razorpay": {"mode": _is_string, "account": _is_string, "metadata_keys": _is_string_list},
+        "razorpay": {
+            "mode": _is_string,
+            "account": _is_string,
+            "metadata_keys": _is_string_list,
+            "api_url": _is_string,
+        },
     },
     "sinks": {
         "sheets": {
@@ -194,6 +205,7 @@ def load_config(path: Path, environ: Mapping[str, str] | None = None) -> Config:
             mode=mode,
             account=_account(razorpay),
             metadata_keys=tuple(razorpay.get("metadata_keys", [])),
+            api_url=_api_url(razorpay),
         ),
         razorpay_secrets=RazorpaySecrets(
             key_id=secrets["RAZORPAY_KEY_ID"],
@@ -201,6 +213,7 @@ def load_config(path: Path, environ: Mapping[str, str] | None = None) -> Config:
             webhook_secrets=webhook_secrets,
         ),
         sheets=SheetsConfig(spreadsheet_id=_string(sheets, "spreadsheet_id", "sinks.sheets")),
+        sinks=tuple(_section(document, "sinks")),
         demo=DemoConfig(spreadsheet_ids=tuple(demo.get("spreadsheet_ids", []))),
     )
 
@@ -326,6 +339,13 @@ def _timezone(service: Mapping[str, Any]) -> ZoneInfo:
         raise ConfigError(
             "service.timezone is not a known time zone name (e.g. Asia/Kolkata)"
         ) from None
+
+
+def _api_url(razorpay: Mapping[str, Any]) -> str:
+    url = _string(razorpay, "api_url", "sources.razorpay", DEFAULT_RAZORPAY_API_URL).rstrip("/")
+    if not re.fullmatch(r"https?://[^/\s]+", url):
+        raise ConfigError('sources.razorpay.api_url must be "https://host[:port]"')
+    return url
 
 
 _ACCOUNT = re.compile(r"(?:acc_)?([A-Za-z0-9]+)")

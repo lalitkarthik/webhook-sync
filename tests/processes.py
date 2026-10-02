@@ -14,7 +14,7 @@ from pathlib import Path
 
 import httpx
 import pytest
-from support import TEST_ACCOUNT, TEST_SPREADSHEET_ID, fixture_secrets
+from support import TEST_ACCOUNT, TEST_SPREADSHEET_ID, UNREACHABLE_API, fixture_secrets
 
 
 def wsync_path() -> str:
@@ -36,13 +36,17 @@ def fixture_environment() -> dict[str, str]:
 
 
 def write_serve_config(config_dir: Path, port: int) -> Path:
-    """A valid test-mode `webhook-sync.toml` in `config_dir`, listening on `port`."""
+    """A valid test-mode `webhook-sync.toml` in `config_dir`, listening on `port`.
+
+    Its Razorpay API address is unreachable: the ledger worker's fetches fail to connect and
+    retry, and never reach Razorpay."""
     config_dir.mkdir(parents=True, exist_ok=True)
     path = config_dir / "webhook-sync.toml"
     path.write_text(
         f'[service]\npublic_listen = "127.0.0.1:{port}"\ndata_dir = "data"\n'
         f'timezone = "Asia/Kolkata"\n\n'
-        f'[sources.razorpay]\nmode = "test"\naccount = "{TEST_ACCOUNT}"\n\n'
+        f'[sources.razorpay]\nmode = "test"\naccount = "{TEST_ACCOUNT}"\n'
+        f'api_url = "{UNREACHABLE_API}"\n\n'
         f'[sinks.sheets]\nspreadsheet_id = "{TEST_SPREADSHEET_ID}"\n',
         encoding="utf-8",
     )

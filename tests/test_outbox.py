@@ -9,7 +9,7 @@ from typing import Any
 
 import httpx
 import pytest
-from support import TEST_ACCOUNT, ReadRows, razorpay_sample, sign_razorpay
+from support import TEST_ACCOUNT, ReadRows, execute_aside, razorpay_sample, sign_razorpay
 from time_machine import TimeMachineFixture
 
 from webhook_sync.clock import utc_now
@@ -239,11 +239,11 @@ async def test_a_database_error_in_the_transaction_is_503_and_stores_nothing(
 ) -> None:
     # The delivery row is the transaction's last write: failing it comes after the event and
     # its job are written, so all three must roll back together.
-    with closing(sqlite3.connect(database_path(data_dir))) as connection, connection:
-        connection.execute(
-            "CREATE TRIGGER fail_deliveries BEFORE INSERT ON deliveries "
-            "BEGIN SELECT RAISE(ABORT, 'forced failure'); END"
-        )
+    await execute_aside(
+        data_dir,
+        "CREATE TRIGGER fail_deliveries BEFORE INSERT ON deliveries "
+        "BEGIN SELECT RAISE(ABORT, 'forced failure'); END",
+    )
     body, headers = sign_razorpay(razorpay_sample("payment.captured"), event_id="evt_captured01")
 
     response = await client.post("/webhooks/razorpay", content=body, headers=headers)
@@ -253,8 +253,7 @@ async def test_a_database_error_in_the_transaction_is_503_and_stores_nothing(
     assert await read_rows("SELECT * FROM jobs") == []
     assert await read_rows("SELECT * FROM deliveries") == []
 
-    with closing(sqlite3.connect(database_path(data_dir))) as connection, connection:
-        connection.execute("DROP TRIGGER fail_deliveries")
+    await execute_aside(data_dir, "DROP TRIGGER fail_deliveries")
     retried = await client.post("/webhooks/razorpay", content=body, headers=headers)
     assert retried.status_code == 202
     assert len(await read_rows("SELECT * FROM jobs")) == 1
