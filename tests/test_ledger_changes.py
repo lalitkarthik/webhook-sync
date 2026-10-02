@@ -203,3 +203,66 @@ async def test_an_unchanged_fetch_writes_nothing_and_makes_no_mirror_job(
         {"status": "done"},
         {"status": "done"},
     ]
+
+
+async def test_many_events_while_the_job_waits_cost_one_fetch(
+    writer: Writer, ledger: StageRunner, razorpay: respx.MockRouter, read_rows: ReadRows
+) -> None:
+    fetch = razorpay.get(FETCH_PATH).respond(200, json=captured())
+    for event_id in ("evt_1", "evt_2", "evt_3"):
+        await enqueue_ledger_job(writer, event_id)
+
+    while await ledger.run_once():
+        pass
+
+    assert fetch.call_count == 1
+    assert await read_rows("SELECT status FROM jobs WHERE stage = 'ledger'") == [
+        {"status": "done"}
+    ]
+    assert await read_rows("SELECT row_version, last_event_id FROM payments") == [
+        {"row_version": 1, "last_event_id": "evt_3"}
+    ]
+
+
+async def test_an_event_during_a_fetch_causes_one_more_fetch_and_the_row_ends_at_its_answer(
+    writer: Writer, ledger: StageRunner, razorpay: respx.MockRouter, read_rows: ReadRows
+) -> None:
+    fetching = asyncio.Event()
+    answered = asyncio.Event()
+    answers = [authorized(), captured()]
+
+    async def razorpay_answers(request: httpx.Request) -> httpx.Response:
+        if len(answers) == 2:  # the first fetch waits until the new event is in
+            fetching.set()
+            await answered.wait()
+        return httpx.Response(200, json=answers.pop(0))
+
+    fetch = razorpay.get(FETCH_PATH).mock(side_effect=razorpay_answers)
+    await enqueue_ledger_job(writer, "evt_authorized")
+    first = asyncio.create_task(ledger.run_once())
+    await asyncio.wait_for(fetching.wait(), timeout=5)
+    await enqueue_ledger_job(writer, "evt_captured")
+    answered.set()
+    await asyncio.wait_for(first, timeout=5)
+
+    assert await read_rows("SELECT status, rerun FROM jobs WHERE stage = 'ledger'") == [
+        {"status": "waiting", "rerun": 0}
+    ]
+    while await ledger.run_once():
+        pass
+
+    assert fetch.call_count == 2
+    assert await read_rows("SELECT status FROM jobs WHERE stage = 'ledger'") == [
+        {"status": "done"}
+    ]
+    assert await read_rows(
+        "SELECT status, source_status, row_version, last_event_id FROM payments"
+    ) == [
+        {
+            "status": "succeeded",
+            "source_status": "captured",
+            "row_version": 2,
+            "last_event_id": "evt_captured",
+        }
+    ]
+    assert await read_rows(MIRROR_JOBS) == [waiting_mirror_job("evt_captured")]
