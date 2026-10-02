@@ -12,6 +12,7 @@ list (A6). `payment_row` maps the
 answer to a business row, a pure function (sources.md, "Fetch").
 """
 
+import asyncio
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
@@ -153,7 +154,9 @@ class RazorpayAdapter:
         webhook_secrets: Sequence[str],
         api: httpx.AsyncClient,
         metadata_keys: Sequence[str] = (),
+        fetch_timeout: timedelta = FETCH_TIMEOUT,
     ) -> None:
+        self._fetch_timeout = fetch_timeout
         self._mode = mode
         self._metadata_keys = tuple(metadata_keys)
         self._account = account
@@ -199,7 +202,11 @@ class RazorpayAdapter:
     ) -> dict[str, Any] | NotFound | Failure:
         """One API call: the answer's JSON object, or what its failure means (A12)."""
         try:
-            response = await self._api.get(path, params=list(params))
+            # The whole call, not only each read, ends at the timeout: a trickle can't hang it.
+            async with asyncio.timeout(self._fetch_timeout.total_seconds()):
+                response = await self._api.get(path, params=list(params))
+        except TimeoutError:
+            return Failure("Razorpay call failed: no answer within the timeout", "retry")
         except httpx.TransportError as error:  # a timeout, a refused or dropped connection
             return Failure(f"Razorpay call failed: {type(error).__name__}", "retry")
         status = response.status_code

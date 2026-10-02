@@ -448,3 +448,42 @@ async def test_a_refunds_page_is_classified_as_the_main_fetch_is(
         assert job["run_after"] >= "2026-10-02T20:32:00.000000Z"
     assert await read_rows(ATTEMPTS) == [{"number": 1, "outcome": error_class}]
     assert await read_rows("SELECT * FROM payments") == []
+
+
+async def test_a_hung_fetch_ends_at_the_timeout_as_retry(
+    writer: Writer, pauses: Pauses, razorpay: respx.MockRouter, read_rows: ReadRows
+) -> None:
+    async def hangs(request: httpx.Request) -> httpx.Response:
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    razorpay.get(FETCH_PATH).mock(side_effect=hangs)
+    await enqueue_ledger_job(writer, "evt_first")
+    async with api_client(RAZORPAY_API, TEST_KEY_ID, TEST_KEY_SECRET) as api:
+        adapter = RazorpayAdapter(
+            mode="test",
+            account=RECORDED_ACCOUNT,
+            webhook_secrets=(TEST_WEBHOOK_SECRET,),
+            api=api,
+            fetch_timeout=timedelta(milliseconds=50),  # 10 s in production (A11)
+        )
+        ledger = ledger_runner(
+            writer,
+            {"razorpay": adapter},
+            mirror_sinks=("sheets",),
+            claimed_by="wsync-test",
+            pauses=pauses,
+            retry_profile="production",
+            rng=random.Random(7),
+            sleep=never_wakes,
+        )
+
+        await asyncio.wait_for(ledger.run_once(), timeout=5)
+
+    [job] = await read_rows(LEDGER_JOB)
+    assert (job["status"], job["last_error"], job["last_error_class"]) == (
+        "waiting",
+        "Razorpay call failed: no answer within the timeout",
+        "retry",
+    )
+    assert await read_rows(ATTEMPTS) == [{"number": 1, "outcome": "retry"}]
