@@ -118,8 +118,10 @@ class RazorpayAdapter:
         account: str,
         webhook_secrets: Sequence[str],
         api: httpx.AsyncClient,
+        metadata_keys: Sequence[str] = (),
     ) -> None:
         self._mode = mode
+        self._metadata_keys = tuple(metadata_keys)
         self._account = account
         self._secrets = tuple(webhook_secrets)
         self._api = api
@@ -164,7 +166,7 @@ class RazorpayAdapter:
                 return refunds
 
     def to_row(self, state: Mapping[str, Any]) -> BusinessRow | None:
-        return payment_row(state)
+        return payment_row(state, metadata_keys=self._metadata_keys)
 
     def verify(self, raw_body: bytes, headers: Mapping[str, str]) -> VerifiedDelivery | Rejection:
         try:
@@ -334,23 +336,55 @@ def _processed_refunds(state: Mapping[str, Any]) -> int:
     return sum(refund["amount"] for refund in items if refund.get("status") == "processed")
 
 
-def payment_row(state: Mapping[str, Any]) -> BusinessRow | None:
+# A8 / Q129: the one non-personal detail shown with each method, and where it is read.
+_METHOD_DETAIL = {"card": ("card", "network"), "netbanking": ("bank",), "wallet": ("wallet",)}
+
+
+def _method(state: Mapping[str, Any]) -> str | None:
+    """`method` plus its card network, bank code or wallet name, as `card (Visa)`; any other
+    method (`upi`, `emi`, `paylater`, ...) alone. Never last4, the card's name or a VPA."""
+    method = state.get("method")
+    if not isinstance(method, str) or not method:
+        return None
+    detail: object = state
+    for key in _METHOD_DETAIL.get(method, ()):
+        detail = _object(detail).get(key)
+    return f"{method} ({detail})" if isinstance(detail, str) and detail else method
+
+
+class BadAmount(ValueError):
+    """The source answered an amount that is negative or not an integer: bad data, never
+    written. The stage runner sends the job to dead with this message (A14, edge case D4)."""
+
+
+def _amount(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise BadAmount(f"bad amount from Razorpay: {value!r} is not a non-negative integer")
+    return value
+
+
+def payment_row(
+    state: Mapping[str, Any], *, metadata_keys: Sequence[str] = ()
+) -> BusinessRow | None:
     """A fetched Razorpay payment as its business row, or None while it is still `created`.
 
     A captured payment (or `refunded` with `captured: true`) is succeeded, partially_refunded or
     refunded by its processed refunds against the amount; `refunded` uncaptured is canceled (A7).
     Fee and fee tax (GST) are null until capture: pending. They are in the settlement currency
     (`base_currency`, else `currency`), and net is `(base_amount or amount) - fee` (Q130).
+    Metadata is the `metadata_keys` found in `notes`, values as given (Q131). A negative or
+    non-integer amount raises `BadAmount`; an unknown currency is written as given (A14).
     """
     source_status: str = state["status"]
     if source_status == "created":
         return None  # nothing attempted yet: no row (G41)
-    amount: int = state["amount"]
+    amount = _amount(state.get("amount"))
     refunded = _processed_refunds(state)
     status = _status(source_status, captured=state.get("captured") is True)
     if status == "succeeded" and refunded > 0:
         status = "refunded" if refunded >= amount else "partially_refunded"
     fee: int | None = state.get("fee")
+    notes = _object(state.get("notes"))  # empty notes arrive as `[]` (Q131)
     created_at = state.get("created_at")
     return BusinessRow(
         payment_id=state["id"],
@@ -366,4 +400,9 @@ def payment_row(state: Mapping[str, Any]) -> BusinessRow | None:
         fee_tax_minor=state.get("tax"),
         net_minor=None if fee is None else (state.get("base_amount") or amount) - fee,
         settlement_currency=state.get("base_currency") or state["currency"],
+        method=_method(state),
+        metadata={key: notes[key] for key in metadata_keys if key in notes},
+        # A4: email and description as reported; never `contact`, a VPA or card details.
+        customer_email=state.get("email"),
+        description=state.get("description"),
     )
