@@ -8,10 +8,15 @@ credentials*.json
 __pycache__/
 *.pyc
 .venv/
+.pytest_cache/
+.ruff_cache/
 
 # Local data
 *.db
 *.db-journal
+*.db-wal
+*.db-shm
+data/
 *.sqlite3
 out/
 

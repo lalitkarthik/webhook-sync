@@ -1,0 +1,62 @@
+{
+  "account_id": "acc_BFQ7uQEaa7j2z7",
+  "contains": [
+    "payment"
+  ],
+  "created_at": 1691735748,
+  "entity": "event",
+  "event": "payment.failed",
+  "payload": {
+    "payment": {
+      "entity": {
+        "acquirer_data": {
+          "auth_code": "828553",
+          "rrn": "322206890934"
+        },
+        "amount": 100,
+        "amount_refunded": 0,
+        "amount_transferred": 0,
+        "bank": null,
+        "captured": true,
+        "card": {
+          "emi": false,
+          "entity": "card",
+          "id": "card_DESp9fNnu0RoNc",
+          "iin": "999999",
+          "international": false,
+          "issuer": null,
+          "last4": "0153",
+          "name": "<name>",
+          "network": "Visa",
+          "sub_type": "business",
+          "type": "debit"
+        },
+        "card_id": "card_DESp9fNnu0RoNc",
+        "contact": "<phone>",
+        "created_at": 1567674797,
+        "currency": "USD",
+        "description": null,
+        "email": "<email>",
+        "entity": "payment",
+        "error_code": "",
+        "error_description": "",
+        "error_reason": null,
+        "error_source": null,
+        "error_step": null,
+        "fee": null,
+        "id": "pay_DESp9bgForNoUd",
+        "international": false,
+        "invoice_id": null,
+        "method": "card",
+        "notes": [],
+        "order_id": "order_DESoU0U4ikYA19",
+        "refund_status": null,
+        "status": "failed",
+        "tax": null,
+        "token_id": null,
+        "vpa": null,
+        "wallet": null
+      }
+    }
+  }
+}

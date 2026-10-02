@@ -58,7 +58,7 @@ A delivery refused before storing: bad signature, stale or future timestamp, wro
 _Avoid_: error, failure (those are for work after storing)
 
 **Ignored event**:
-A verified event of a type we don't handle. Stored and answered 202, like any new event, but it creates no work.
+A verified event of a type we don't handle, or of a handled type that names no payment. Stored with its reason and answered 202, like any new event, but it creates no work.
 _Avoid_: skipped, unsupported
 
 **Mode**:
@@ -137,6 +137,10 @@ A worker taking a waiting job to run it. A claim gives the job a **lease** (an e
 
 **Heartbeat**:
 A running worker pushing its lease forward while it is still working.
+
+**Stage runner**:
+The loop that runs one stage's jobs: it claims, heartbeats, completes or fails each job, reaps expired leases and releases unfinished ones at shutdown. A stage (the ledger worker, the flusher) plugs in only the work itself.
+_Avoid_: worker pool, consumer
 
 **Reaper**:
 The loop that returns jobs whose lease has expired to waiting.
