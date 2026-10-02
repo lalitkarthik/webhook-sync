@@ -1,0 +1,44 @@
+{
+  "unrecorded": true,
+  "source": "https://razorpay.com/docs/payments/payments/capture-settings/",
+  "note": "CONSTRUCTED, not a Razorpay sample: no page shows an uncaptured payment after its auto-refund (G66, spike S-Q7a). The source documents only that uncaptured payments are refunded automatically. This body is the fetch page's Netbanking sample shape with status refunded, captured false, fee and tax null, amount_refunded = amount and refund_status full, as the canceled rule (A7, A22) assumes. Replace it with a recording once S-Q7a runs.",
+  "request": "GET /v1/payments/{id}?expand[]=refunds&expand[]=card",
+  "http": 200,
+  "body": {
+    "id": "pay_UnrecordedAutoRf",
+    "entity": "payment",
+    "amount": 50000,
+    "currency": "INR",
+    "status": "refunded",
+    "order_id": "order_UnrecordedAuto",
+    "invoice_id": null,
+    "international": false,
+    "method": "netbanking",
+    "amount_refunded": 50000,
+    "refund_status": "full",
+    "captured": false,
+    "description": null,
+    "card_id": null,
+    "card": null,
+    "bank": "HDFC",
+    "wallet": null,
+    "email": "customer@example.com",
+    "notes": [],
+    "fee": null,
+    "tax": null,
+    "error_code": null,
+    "error_description": null,
+    "error_source": null,
+    "error_step": null,
+    "error_reason": null,
+    "acquirer_data": {
+      "bank_transaction_id": null
+    },
+    "created_at": 1790969354,
+    "refunds": {
+      "entity": "collection",
+      "count": 0,
+      "items": []
+    }
+  }
+}

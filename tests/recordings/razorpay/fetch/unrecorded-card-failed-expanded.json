@@ -1,0 +1,52 @@
+{
+  "unrecorded": true,
+  "source": "https://razorpay.com/docs/api/payments/fetch-payment-expanded-card/",
+  "note": "The expanded-card page's Success sample: a failed RuPay credit payment whose notes carry an email and phone (redacted here).",
+  "request": "GET /v1/payments/{id}?expand[]=refunds&expand[]=card",
+  "http": 200,
+  "body": {
+    "id": "pay_H9oR0gLCaVlV6m",
+    "entity": "payment",
+    "amount": 100,
+    "currency": "INR",
+    "status": "failed",
+    "order_id": "order_H9o58N6qmLYQKC",
+    "invoice_id": null,
+    "terminal_id": "term_G5kJnYM9GhhLYT",
+    "international": false,
+    "method": "card",
+    "amount_refunded": 0,
+    "refund_status": null,
+    "captured": false,
+    "description": null,
+    "card_id": "card_H9oR0ocen1cmZq",
+    "card": {
+      "id": "card_H9oR0ocen1cmZq",
+      "entity": "card",
+      "network": "RuPay",
+      "type": "credit",
+      "issuer": "UTIB",
+      "international": false,
+      "emi": false,
+      "sub_type": "business"
+    },
+    "bank": null,
+    "wallet": null,
+    "email": "customer@example.com",
+    "notes": {
+      "email": "customer@example.com"
+    },
+    "fee": null,
+    "tax": null,
+    "error_code": "BAD_REQUEST_ERROR",
+    "error_description": "Card issuer is invalid",
+    "error_source": "customer",
+    "error_step": "payment_authentication",
+    "error_reason": "incorrect_card_details",
+    "acquirer_data": {
+      "auth_code": null,
+      "authentication_reference_number": "<redacted>"
+    },
+    "created_at": 1620807547
+  }
+}

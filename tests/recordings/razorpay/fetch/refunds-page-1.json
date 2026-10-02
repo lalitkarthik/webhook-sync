@@ -1,0 +1,32 @@
+{
+  "recorded_at": "2026-10-02T20:12:49+00:00",
+  "request": "GET /v1/payments/pay_Tj9gmEfed6kRqO/refunds?count=1",
+  "http": 200,
+  "headers": {
+    "content-type": "application/json; charset=utf-8",
+    "date": "Fri, 02 Oct 2026 20:12:49 GMT"
+  },
+  "body": {
+    "count": 1,
+    "entity": "collection",
+    "items": [
+      {
+        "acquirer_data": {
+          "arn": "<redacted>"
+        },
+        "amount": 10000,
+        "batch_id": null,
+        "created_at": 1790970053,
+        "currency": "INR",
+        "entity": "refund",
+        "id": "rfnd_Tj9tMhKlOulF3Q",
+        "notes": [],
+        "payment_id": "pay_Tj9gmEfed6kRqO",
+        "receipt": null,
+        "speed_processed": "normal",
+        "speed_requested": "optimum",
+        "status": "processed"
+      }
+    ]
+  }
+}
