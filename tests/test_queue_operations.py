@@ -341,3 +341,87 @@ async def test_a_pause_failure_naming_the_source_stops_claims_of_that_sources_jo
     assert pauses.sources == {"razorpay"}
     [claimed_next] = await claim_ledger(writer, pauses=pauses, limit=5)
     assert claimed_next.id == other_source
+
+
+async def test_a_retry_after_longer_than_the_backoff_wins_and_is_never_clamped(
+    writer: Writer, read_rows: ReadRows
+) -> None:
+    await enqueue_job(writer)
+    [claimed] = await claim_ledger(writer)
+
+    failure = Failure("HTTP 429", "retry", retry_after=timedelta(hours=24))
+    await fail_job(writer, claimed, failure)
+
+    [job] = await read_rows("SELECT status, run_after FROM jobs")
+    assert job == {"status": "waiting", "run_after": "2026-10-03T09:00:00.000000Z"}
+
+
+async def test_a_retry_after_shorter_than_the_backoff_does_not_shorten_it(
+    writer: Writer, read_rows: ReadRows
+) -> None:
+    await enqueue_job(writer)
+    [claimed] = await claim_ledger(writer)
+
+    failure = Failure("HTTP 429", "retry", retry_after=timedelta(seconds=1))
+    await fail_job(writer, claimed, failure)
+
+    [job] = await read_rows("SELECT run_after FROM jobs")
+    assert "2026-10-02T09:00:02.500000Z" <= job["run_after"] <= "2026-10-02T09:00:07.500000Z"
+
+
+async def reap_by_hand(writer: Writer, job_id: int) -> None:
+    """Return an expired lease to waiting, as the reaper (#13) does."""
+    async with writer.transaction() as tx:
+        await tx.execute(
+            "UPDATE jobs SET status = 'waiting', claim_token = NULL, lease_until = NULL "
+            "WHERE id = :id AND status = 'running'",
+            {"id": job_id},
+        )
+
+
+async def test_a_stalled_worker_past_its_lease_cannot_complete_and_loses_its_writes(
+    writer: Writer, read_rows: ReadRows, frozen_clock: TimeMachineFixture
+) -> None:
+    job_id = await enqueue_job(writer)
+    [stalled] = await claim_ledger(writer)
+    frozen_clock.move_to(NINE + timedelta(seconds=61), tick=False)
+    await reap_by_hand(writer, job_id)
+    [current] = await claim_ledger(writer)
+    assert current.claim_token != stalled.claim_token
+    async with writer.transaction() as tx:
+        await tx.execute("CREATE TABLE ledger_stand_in (written_by TEXT)")
+        await tx.execute("INSERT INTO ledger_stand_in VALUES ('current')")
+        await complete(tx, current, now=utc_now())
+
+    lost = await heartbeat(writer, [job_id], stalled.claim_token, now=utc_now())
+    with pytest.raises(LeaseLost):
+        async with writer.transaction() as tx:
+            await tx.execute("INSERT INTO ledger_stand_in VALUES ('stalled')")
+            await complete(tx, stalled, now=utc_now())
+
+    assert lost == {job_id}
+    assert await read_rows("SELECT written_by FROM ledger_stand_in") == [{"written_by": "current"}]
+    [job] = await read_rows("SELECT status, attempts FROM jobs")
+    assert job == {"status": "done", "attempts": 2}
+    assert await read_rows("SELECT number, outcome FROM attempts") == [
+        {"number": 2, "outcome": "ok"}
+    ]
+
+
+async def test_a_fail_with_a_lost_lease_writes_nothing_and_pauses_nothing(
+    writer: Writer, read_rows: ReadRows
+) -> None:
+    pauses = Pauses()
+    job_id = await enqueue_job(writer)
+    [stalled] = await claim_ledger(writer)
+    await reap_by_hand(writer, job_id)
+    await claim_ledger(writer)
+
+    with pytest.raises(LeaseLost):
+        failure = Failure("HTTP 401", "pause", pause_target="source")
+        await fail_job(writer, stalled, failure, pauses=pauses)
+
+    assert pauses.sources == frozenset()
+    [job] = await read_rows("SELECT status, last_error FROM jobs")
+    assert job == {"status": "running", "last_error": None}
+    assert await read_rows("SELECT * FROM attempts") == []
