@@ -32,7 +32,7 @@ from webhook_sync.clock import utc_now
 from webhook_sync.db.schema import jobs
 from webhook_sync.db.writer import Writer
 from webhook_sync.ledger import ledger_runner
-from webhook_sync.queue import Pauses, StageRunner, enqueue
+from webhook_sync.queue import Pauses, StageRunner, enqueue, reap
 from webhook_sync.sources.razorpay import RazorpayAdapter, api_client
 
 RAZORPAY_API = "https://api.razorpay.test"
@@ -216,9 +216,7 @@ async def test_many_events_while_the_job_waits_cost_one_fetch(
         pass
 
     assert fetch.call_count == 1
-    assert await read_rows("SELECT status FROM jobs WHERE stage = 'ledger'") == [
-        {"status": "done"}
-    ]
+    assert await read_rows("SELECT status FROM jobs WHERE stage = 'ledger'") == [{"status": "done"}]
     assert await read_rows("SELECT row_version, last_event_id FROM payments") == [
         {"row_version": 1, "last_event_id": "evt_3"}
     ]
@@ -252,9 +250,7 @@ async def test_an_event_during_a_fetch_causes_one_more_fetch_and_the_row_ends_at
         pass
 
     assert fetch.call_count == 2
-    assert await read_rows("SELECT status FROM jobs WHERE stage = 'ledger'") == [
-        {"status": "done"}
-    ]
+    assert await read_rows("SELECT status FROM jobs WHERE stage = 'ledger'") == [{"status": "done"}]
     assert await read_rows(
         "SELECT status, source_status, row_version, last_event_id FROM payments"
     ) == [
@@ -266,3 +262,63 @@ async def test_an_event_during_a_fetch_causes_one_more_fetch_and_the_row_ends_at
         }
     ]
     assert await read_rows(MIRROR_JOBS) == [waiting_mirror_job("evt_captured")]
+
+
+async def test_a_worker_that_lost_its_lease_mid_fetch_has_its_writes_rolled_back(
+    writer: Writer,
+    adapter: RazorpayAdapter,
+    razorpay: respx.MockRouter,
+    read_rows: ReadRows,
+    frozen_clock: TimeMachineFixture,
+) -> None:
+    stalled, new_owner = make_ledger(writer, adapter), make_ledger(writer, adapter)
+    fetching = asyncio.Event()
+    answered = asyncio.Event()
+    calls = 0
+
+    async def razorpay_answers(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:  # the stalled worker's fetch hangs, then brings back an older state
+            fetching.set()
+            await answered.wait()
+            return httpx.Response(200, json=authorized())
+        return httpx.Response(200, json=captured())
+
+    razorpay.get(FETCH_PATH).mock(side_effect=razorpay_answers)
+    await enqueue_ledger_job(writer, "evt_captured")
+    stale = asyncio.create_task(stalled.run_once())
+    await asyncio.wait_for(fetching.wait(), timeout=5)
+
+    # The lease runs out; the reaper takes the job back and the new owner runs it after backoff.
+    frozen_clock.shift(timedelta(seconds=61))
+    await reap(writer, retry_profile="production", now=utc_now(), rng=random.Random(7))
+    frozen_clock.shift(timedelta(seconds=10))
+    assert await new_owner.run_once() == 1
+    taken_over_at = "2026-10-02T20:31:11.000000Z"
+
+    # The stalled fetch finally answers; its upsert, mirror job and complete roll back.
+    frozen_clock.shift(timedelta(minutes=1))
+    answered.set()
+    await asyncio.wait_for(stale, timeout=5)
+
+    assert calls == 2
+    assert await read_rows(
+        "SELECT status, source_status, row_version, last_event_id, updated_at FROM payments"
+    ) == [
+        {
+            "status": "succeeded",
+            "source_status": "captured",
+            "row_version": 1,
+            "last_event_id": "evt_captured",
+            "updated_at": taken_over_at,
+        }
+    ]
+    assert await read_rows("SELECT stage, sink, status, updated_at FROM jobs ORDER BY id") == [
+        {"stage": "ledger", "sink": "ledger", "status": "done", "updated_at": taken_over_at},
+        {"stage": "mirror", "sink": "sheets", "status": "waiting", "updated_at": taken_over_at},
+    ]
+    assert await read_rows("SELECT number, outcome FROM attempts ORDER BY id") == [
+        {"number": 1, "outcome": "reaped"},
+        {"number": 2, "outcome": "ok"},
+    ]
