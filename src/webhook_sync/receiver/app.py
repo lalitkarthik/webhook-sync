@@ -82,6 +82,7 @@ def create_app(config: Config, data_dir: Path) -> FastAPI:
             source=adapter.name,
             account=receiver.config.razorpay.account,
             mode=receiver.config.razorpay.mode,
+            retry_profile=receiver.config.service.retry_profile,
             delivery=verified,
             description=description,
             received_at=received_at,
