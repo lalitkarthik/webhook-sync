@@ -371,6 +371,7 @@ def payment_row(
     if status == "succeeded" and refunded > 0:
         status = "refunded" if refunded >= amount else "partially_refunded"
     fee: int | None = state.get("fee")
+    notes = _object(state.get("notes"))  # empty notes arrive as `[]` (Q131)
     created_at = state.get("created_at")
     return BusinessRow(
         payment_id=state["id"],
@@ -387,4 +388,5 @@ def payment_row(
         net_minor=None if fee is None else (state.get("base_amount") or amount) - fee,
         settlement_currency=state.get("base_currency") or state["currency"],
         method=_method(state),
+        metadata={key: notes[key] for key in metadata_keys if key in notes},
     )

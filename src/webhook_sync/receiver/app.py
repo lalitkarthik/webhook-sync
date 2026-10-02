@@ -78,6 +78,7 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
                     account=config.razorpay.account,
                     webhook_secrets=config.razorpay_secrets.webhook_secrets,
                     api=razorpay_api,
+                    metadata_keys=config.razorpay.metadata_keys,
                 ),
                 rate_cap=RateCap(),
                 rejections=RejectionCounters(),
