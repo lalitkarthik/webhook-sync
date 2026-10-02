@@ -16,11 +16,12 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from webhook_sync.clock import utc_now
+from webhook_sync.clock import to_db_text, utc_now
 from webhook_sync.config import Config
 from webhook_sync.db.migrations import apply_pending
 from webhook_sync.db.writer import Writer
 from webhook_sync.receiver.checks import check_content_type, check_security_headers, read_body
+from webhook_sync.receiver.demo import FailFirst
 from webhook_sync.receiver.rate_cap import RateCap
 from webhook_sync.receiver.rejections import RejectionCounters
 from webhook_sync.receiver.store import store_delivery
@@ -40,9 +41,12 @@ class Receiver:
     razorpay: SourceAdapter
     rate_cap: RateCap
     rejections: RejectionCounters
+    fail_first: FailFirst | None = None
+    """The demo fail-first switch, when `wsync serve --demo-fail-first N` turned it on."""
 
 
-def create_app(config: Config, data_dir: Path) -> FastAPI:
+def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = None) -> FastAPI:
+    """The public app; `demo_fail_first` is N of `--demo-fail-first N`, checked at start."""
     data_dir.mkdir(parents=True, exist_ok=True)
 
     @asynccontextmanager
@@ -62,6 +66,7 @@ def create_app(config: Config, data_dir: Path) -> FastAPI:
                 ),
                 rate_cap=RateCap(),
                 rejections=RejectionCounters(),
+                fail_first=FailFirst(demo_fail_first) if demo_fail_first is not None else None,
             )
             app.state.receiver = receiver
             minutely = asyncio.create_task(_write_rejection_counts_every_minute(receiver))
@@ -111,6 +116,7 @@ def create_app(config: Config, data_dir: Path) -> FastAPI:
                 description=description,
                 received_at=received_at,
                 started=started,
+                fail_first=receiver.fail_first,
             )
         except sqlite3.Error:
             # The transaction rolled back as a whole: nothing is stored, so the source retries.
@@ -136,21 +142,26 @@ def create_app(config: Config, data_dir: Path) -> FastAPI:
                     "stored_fingerprint": stored.stored_fingerprint,
                 },
             )
-        log.info(
-            "delivery stored",
-            extra={
-                "source": adapter.name,
-                "event_id": stored.event_id,
-                "payment_key": description.payment_key,
-                "result": stored.result,
-                "status_code": stored.status_code,
-                "reason": description.ignore_reason,
-                # A body-hash replay is stored under the first event's id; the header's id (A17).
-                "header_event_id": (
-                    verified.event_id if verified.event_id != stored.event_id else None
-                ),
-            },
-        )
+        stored_fields = {
+            "source": adapter.name,
+            "event_id": stored.event_id,
+            "payment_key": description.payment_key,
+            "result": stored.result,
+            "status_code": stored.status_code,
+            "reason": description.ignore_reason,
+            # A body-hash replay is stored under the first event's id; the header's id (A17).
+            "header_event_id": (
+                verified.event_id if verified.event_id != stored.event_id else None
+            ),
+        }
+        if stored.attempt is not None:
+            # The demo switch logs each attempt for the recording spike to time (G38, G48).
+            stored_fields |= {
+                "attempt": stored.attempt,
+                "received_at": to_db_text(received_at),
+                "body_sha256": verified.body_sha256,
+            }
+        log.info("delivery stored", extra=stored_fields)
         return JSONResponse({"result": stored.result}, status_code=stored.status_code)
 
     return app

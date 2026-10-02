@@ -8,7 +8,7 @@ same, a conflict when a known event id arrives with a different fingerprint (the
 
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Literal
 
@@ -20,6 +20,7 @@ from webhook_sync.config import Mode, RetryProfile
 from webhook_sync.db.schema import deliveries, events
 from webhook_sync.db.writer import Transaction, Writer
 from webhook_sync.queue import enqueue
+from webhook_sync.receiver.demo import FailFirst
 from webhook_sync.sources.base import EventDescription, VerifiedDelivery
 
 type DeliveryResult = Literal["new", "duplicate", "conflict"]
@@ -33,6 +34,8 @@ class StoredDelivery:
     """The stored event's id: for a body-hash replay, the first event's, not the header's."""
     stored_fingerprint: str | None = None
     """For a conflict, the fingerprint of the event kept."""
+    attempt: int | None = None
+    """With the demo fail-first switch on, this delivery's attempt number for its event id."""
 
 
 async def store_delivery(
@@ -46,8 +49,13 @@ async def store_delivery(
     description: EventDescription,
     received_at: datetime,
     started: float,
+    fail_first: FailFirst | None = None,
 ) -> StoredDelivery:
-    """Run the one transaction; `started` is the request's `time.perf_counter()` at arrival."""
+    """Run the one transaction; `started` is the request's `time.perf_counter()` at arrival.
+
+    With `fail_first` (the demo switch), the event is stored as normal and the attempt is then
+    answered, and recorded in `deliveries`, with the switch's status.
+    """
     async with writer.transaction() as tx:
         inserted = await tx.execute(
             sqlite.insert(events)
@@ -88,6 +96,11 @@ async def store_delivery(
             stored = StoredDelivery("new", 202, delivery.event_id)
         else:
             stored = await _repeat(tx, source, delivery, description.fingerprint)
+        if fail_first is not None:
+            attempt = fail_first.attempt(source, stored.event_id)
+            stored = replace(
+                stored, status_code=fail_first.answer(attempt, stored.status_code), attempt=attempt
+            )
         await tx.execute(
             sa.insert(deliveries).values(
                 source=source,

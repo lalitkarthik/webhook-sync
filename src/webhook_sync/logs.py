@@ -23,6 +23,9 @@ LOGGED_FIELDS = (
     "header_event_id",
     "fingerprint",
     "stored_fingerprint",
+    "attempt",
+    "received_at",
+    "body_sha256",
 )
 
 
