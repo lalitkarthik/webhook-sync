@@ -279,6 +279,24 @@ _STATUSES: dict[str, PaymentStatus] = {
 }
 
 
+def _status(source_status: str, *, captured: bool) -> PaymentStatus:
+    """Our status before refunds are counted: a `refunded` payment was captured (it is then
+    refunded by its processed refunds) or was an authorisation auto-refunded uncaptured (A7)."""
+    if source_status == "refunded":
+        return "succeeded" if captured else "canceled"
+    status = _STATUSES.get(source_status)
+    if status is None:
+        raise ValueError(f"unmapped Razorpay payment status {source_status!r}")
+    return status
+
+
+def _processed_refunds(state: Mapping[str, Any]) -> int:
+    """The sum of the payment's `processed` refunds; pending and failed ones count for nothing.
+    `amount_refunded` is never used: whether it counts pending refunds is undocumented (G65)."""
+    items = cast(list[dict[str, Any]], _object(state.get("refunds")).get("items") or [])
+    return sum(refund["amount"] for refund in items if refund.get("status") == "processed")
+
+
 def payment_row(state: Mapping[str, Any]) -> BusinessRow | None:
     """A fetched Razorpay payment as its business row, or None while it is still `created`.
 
@@ -288,10 +306,11 @@ def payment_row(state: Mapping[str, Any]) -> BusinessRow | None:
     source_status: str = state["status"]
     if source_status == "created":
         return None  # nothing attempted yet: no row (G41)
-    status = _STATUSES.get(source_status)
-    if status is None:
-        raise ValueError(f"unmapped Razorpay payment status {source_status!r}")
     amount: int = state["amount"]
+    refunded = _processed_refunds(state)
+    status = _status(source_status, captured=state.get("captured") is True)
+    if status == "succeeded" and refunded > 0:
+        status = "refunded" if refunded >= amount else "partially_refunded"
     fee: int | None = state.get("fee")
     created_at = state.get("created_at")
     return BusinessRow(
@@ -300,6 +319,7 @@ def payment_row(state: Mapping[str, Any]) -> BusinessRow | None:
         source_status=source_status,
         amount_minor=amount,
         currency=state["currency"],
+        refunded_minor=refunded,
         source_created_at=(
             datetime.fromtimestamp(created_at, UTC) if isinstance(created_at, int) else None
         ),
