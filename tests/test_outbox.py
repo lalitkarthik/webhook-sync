@@ -110,3 +110,55 @@ async def test_a_second_event_for_a_payment_whose_job_runs_sets_rerun_on_that_jo
     assert job["caused_by_event_id"] == "evt_captured01"
     [event] = await read_rows("SELECT job_id FROM events WHERE event_id = 'evt_captured01'")
     assert event["job_id"] == job["id"]
+
+
+async def test_new_work_for_a_payment_whose_job_is_done_makes_a_new_job(
+    client: httpx.AsyncClient, read_rows: ReadRows, data_dir: Path
+) -> None:
+    first, first_headers = sign_razorpay(payment_authorized(), event_id="evt_authorized01")
+    await client.post("/webhooks/razorpay", content=first, headers=first_headers)
+    [done] = await read_rows("SELECT id FROM jobs")
+    force_job_state(data_dir, done["id"], status="done", prefetched=None)
+
+    second, second_headers = sign_razorpay(
+        razorpay_sample("payment.captured"), event_id="evt_captured01"
+    )
+    await client.post("/webhooks/razorpay", content=second, headers=second_headers)
+
+    jobs = await read_rows("SELECT id, status, caused_by_event_id FROM jobs ORDER BY id")
+    assert [(j["status"], j["caused_by_event_id"]) for j in jobs] == [
+        ("done", "evt_authorized01"),
+        ("waiting", "evt_captured01"),
+    ]
+    [event] = await read_rows("SELECT job_id FROM events WHERE event_id = 'evt_captured01'")
+    assert event["job_id"] == jobs[1]["id"]
+
+
+@pytest.mark.parametrize("event_type", ["order.paid", "payment.dispute.created"])
+async def test_an_ignored_event_makes_no_job(
+    client: httpx.AsyncClient, read_rows: ReadRows, event_type: str
+) -> None:
+    body, headers = sign_razorpay(razorpay_sample(event_type), event_id="evt_ignored01")
+
+    response = await client.post("/webhooks/razorpay", content=body, headers=headers)
+
+    assert response.status_code == 202
+    assert await read_rows("SELECT * FROM jobs") == []
+    assert await read_rows("SELECT job_id FROM events") == [{"job_id": None}]
+
+
+async def test_a_duplicate_makes_no_second_job_and_leaves_the_first_untouched(
+    client: httpx.AsyncClient, read_rows: ReadRows, data_dir: Path
+) -> None:
+    body, headers = sign_razorpay(razorpay_sample("payment.captured"), event_id="evt_captured01")
+    await client.post("/webhooks/razorpay", content=body, headers=headers)
+    [job_before] = await read_rows("SELECT * FROM jobs")
+    force_job_state(data_dir, job_before["id"], status="running", prefetched=None)
+    replayed_headers = {**headers, "x-razorpay-event-id": "evt_replayed01"}
+
+    again = await client.post("/webhooks/razorpay", content=body, headers=headers)
+    replayed = await client.post("/webhooks/razorpay", content=body, headers=replayed_headers)
+
+    assert (again.status_code, replayed.status_code) == (200, 200)
+    [job] = await read_rows("SELECT * FROM jobs")
+    assert job == {**job_before, "status": "running"}
