@@ -4,6 +4,7 @@ The source's own checks (signature, a JSON object with an event id) live in its 
 """
 
 from fastapi import Request
+from starlette.datastructures import Headers
 
 from webhook_sync.sources.base import Rejection
 
@@ -32,3 +33,22 @@ def check_content_type(content_type: str | None) -> Rejection | None:
     ):
         return None
     return Rejection("not_json", 415)
+
+
+# Every source's security headers: Standard Webhooks verifies the last copy while FastAPI reads
+# the first, so a repeat is refused for all of them, whichever source the route is for.
+SECURITY_HEADERS = (
+    "stripe-signature",
+    "x-razorpay-signature",
+    "x-razorpay-event-id",
+    "webhook-id",
+    "webhook-timestamp",
+    "webhook-signature",
+)
+
+
+def check_security_headers(headers: Headers) -> Rejection | None:
+    """Check 5: a security header appearing twice is 400 `duplicate_header`."""
+    if any(len(headers.getlist(name)) > 1 for name in SECURITY_HEADERS):
+        return Rejection("duplicate_header")
+    return None

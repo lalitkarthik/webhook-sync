@@ -1,4 +1,4 @@
-"""The per-source request-rate cap (receiver.md check 2): a token bucket, 50 a second, burst 50 (A18).
+"""The per-source request-rate cap (receiver.md check 2): a token bucket, 50/s, burst 50 (A18).
 
 In memory, one bucket per source. Time comes from the one clock, so tests move it with
 time-machine.

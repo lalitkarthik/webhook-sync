@@ -19,10 +19,10 @@ from webhook_sync.clock import utc_now
 from webhook_sync.config import Config
 from webhook_sync.db.migrations import apply_pending
 from webhook_sync.db.writer import Writer
-from webhook_sync.receiver.checks import check_content_type, read_body
+from webhook_sync.receiver.checks import check_content_type, check_security_headers, read_body
 from webhook_sync.receiver.rate_cap import RateCap
 from webhook_sync.receiver.store import store_delivery
-from webhook_sync.sources.base import Rejection, SourceAdapter
+from webhook_sync.sources.base import EventDescription, Rejection, SourceAdapter, VerifiedDelivery
 from webhook_sync.sources.razorpay import EVENT_ID_HEADER, RazorpayAdapter
 
 log = logging.getLogger("webhook_sync.receiver")
@@ -73,22 +73,10 @@ def create_app(config: Config, data_dir: Path) -> FastAPI:
         received_at = utc_now()
         receiver: Receiver = request.app.state.receiver
         adapter = receiver.razorpay
-        if not receiver.rate_cap.allow(adapter.name):
-            return _rejected(
-                adapter.name, Rejection("rate_capped", 429), request.headers.get(EVENT_ID_HEADER)
-            )
-        raw_body = await read_body(request)
-        if isinstance(raw_body, Rejection):
-            return _rejected(adapter.name, raw_body, request.headers.get(EVENT_ID_HEADER))
-        if rejection := check_content_type(request.headers.get("content-type")):
-            return _rejected(adapter.name, rejection, request.headers.get(EVENT_ID_HEADER))
-
-        verified = adapter.verify(raw_body, request.headers)
-        if isinstance(verified, Rejection):
-            return _rejected(adapter.name, verified, request.headers.get(EVENT_ID_HEADER))
-        description = adapter.describe(verified)
-        if isinstance(description, Rejection):
-            return _rejected(adapter.name, description, verified.event_id)
+        checked = await _check(request, receiver.rate_cap, adapter)
+        if isinstance(checked, Rejection):
+            return _rejected(adapter.name, checked, request.headers.get(EVENT_ID_HEADER))
+        verified, description = checked
 
         try:
             stored = await store_delivery(
@@ -128,6 +116,28 @@ def create_app(config: Config, data_dir: Path) -> FastAPI:
         return JSONResponse({"result": stored.result}, status_code=stored.status_code)
 
     return app
+
+
+async def _check(
+    request: Request, rate_cap: RateCap, adapter: SourceAdapter
+) -> tuple[VerifiedDelivery, EventDescription] | Rejection:
+    """Checks 2-7 in receiver.md's order: the first that fails is the answer."""
+    if not rate_cap.allow(adapter.name):
+        return Rejection("rate_capped", 429)
+    raw_body = await read_body(request)
+    if isinstance(raw_body, Rejection):
+        return raw_body
+    if rejection := check_content_type(request.headers.get("content-type")):
+        return rejection
+    if rejection := check_security_headers(request.headers):
+        return rejection
+    verified = adapter.verify(raw_body, request.headers)
+    if isinstance(verified, Rejection):
+        return verified
+    description = adapter.describe(verified)
+    if isinstance(description, Rejection):
+        return description
+    return verified, description
 
 
 def _rejected(source: str, rejection: Rejection, header_event_id: str | None) -> JSONResponse:

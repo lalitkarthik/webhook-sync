@@ -1,11 +1,11 @@
-"""Every rejected request answered with its reason, and counted (seam 1: the HTTP app in process)."""
+"""Every rejected request answered with its reason, and counted (seam 1: the HTTP app)."""
 
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 
 import httpx
 import pytest
-from support import razorpay_sample, sign_razorpay
+from support import ReadRows, razorpay_sample, sign_razorpay
 from time_machine import TimeMachineFixture
 
 pytestmark = pytest.mark.unrecorded
@@ -117,3 +117,44 @@ async def test_any_other_content_type_is_415_not_json_even_with_a_bad_signature(
 
     assert response.status_code == 415
     assert response.json() == {"rejection": "not_json"}
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        "x-razorpay-signature",
+        "X-Razorpay-Event-Id",
+        "stripe-signature",
+        "webhook-id",
+        "webhook-timestamp",
+        "webhook-signature",
+    ],
+)
+async def test_a_security_header_appearing_twice_is_400_duplicate_header(
+    client: httpx.AsyncClient, read_rows: ReadRows, header: str
+) -> None:
+    body, headers = sign_razorpay(razorpay_sample("payment.captured"))
+    repeated = [(k, v) for k, v in headers.items() if k != header.lower()]
+    value = headers.get(header.lower(), "v1")
+    repeated += [(header, value), (header, value)]
+
+    response = await client.post(
+        "/webhooks/razorpay", content=body, headers=httpx.Headers(repeated)
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"rejection": "duplicate_header"}
+    assert await read_rows("SELECT * FROM events") == []
+
+
+async def test_a_duplicated_security_header_is_reported_before_a_bad_signature(
+    client: httpx.AsyncClient,
+) -> None:
+    body, headers = sign_razorpay(razorpay_sample("payment.captured"), secret="not-our-secret")
+    repeated = [*headers.items(), ("x-razorpay-event-id", "evt_other")]
+
+    response = await client.post(
+        "/webhooks/razorpay", content=body, headers=httpx.Headers(repeated)
+    )
+
+    assert response.json() == {"rejection": "duplicate_header"}
