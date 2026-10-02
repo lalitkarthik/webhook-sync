@@ -109,7 +109,12 @@ class RazorpayAdapter:
             (name for prefix, name in _PRIMARY_ENTITY if event_type.startswith(prefix)), None
         )
         entity_id = _entity_field(body, entity_name, "id") if entity_name else None
-        if handled and entity_id is None:
+        payment_key = next(
+            (key for name, field in _PAYMENT_KEY_PATHS if (key := _entity_field(body, name, field))),
+            None,
+        )
+        # A handled event's job is keyed by its payment, so it must name one.
+        if handled and (entity_id is None or payment_key is None):
             return Rejection("malformed")
 
         created_at = body.get("created_at")
@@ -126,14 +131,7 @@ class RazorpayAdapter:
         return EventDescription(
             type=event_type,
             account_id=account_id if isinstance(account_id, str) and account_id else None,
-            payment_key=next(
-                (
-                    key
-                    for name, field in _PAYMENT_KEY_PATHS
-                    if (key := _entity_field(body, name, field))
-                ),
-                None,
-            ),
+            payment_key=payment_key,
             fingerprint=hashlib.sha256("|".join(fingerprint_parts).encode()).hexdigest(),
             source_created_at=(
                 None if created_seconds is None else datetime.fromtimestamp(created_seconds, UTC)

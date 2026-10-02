@@ -166,6 +166,26 @@ async def test_an_ignored_event_makes_no_job(
     assert await read_rows("SELECT job_id FROM events") == [{"job_id": None}]
 
 
+async def test_a_handled_event_that_names_no_payment_is_malformed_and_stores_nothing(
+    client: httpx.AsyncClient, read_rows: ReadRows
+) -> None:
+    body, headers = sign_razorpay(
+        {
+            "entity": "event",
+            "account_id": TEST_ACCOUNT,
+            "event": "refund.created",
+            "payload": {"refund": {"entity": {"id": "rfnd_FP8QHiV938haTz", "amount": 500}}},
+            "created_at": 1600000000,
+        }
+    )
+
+    response = await client.post("/webhooks/razorpay", content=body, headers=headers)
+
+    assert (response.status_code, response.json()) == (400, {"rejection": "malformed"})
+    assert await read_rows("SELECT * FROM events") == []
+    assert await read_rows("SELECT * FROM jobs") == []
+
+
 async def test_a_duplicate_makes_no_second_job_and_leaves_the_first_untouched(
     client: httpx.AsyncClient, read_rows: ReadRows, data_dir: Path
 ) -> None:
