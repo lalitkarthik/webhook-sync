@@ -9,6 +9,7 @@ card digits (A4); an international payment's fee and net are in its settlement c
 
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -190,3 +191,80 @@ async def test_serve_uses_the_configured_metadata_keys(
 
     [row] = await read_rows("SELECT metadata FROM payments")
     assert json.loads(row["metadata"]) == {"order_id": "ord-1042"}
+
+
+PHONE = "+919876543210"
+VPA = "gaurav.kumar@okhdfcbank"
+LAST4 = "4242"
+CARD_NAME = "Gaurav Kumar"
+
+
+def with_personal_data(state: dict[str, Any]) -> dict[str, Any]:
+    """`state` with the personal data the recordings had redacted put back: the phone, a VPA,
+    the card's last4 and name, and a phone in an unconfigured `notes` key."""
+    card = state.get("card")
+    return {
+        **state,
+        "contact": PHONE,
+        "vpa": VPA,
+        "upi": {**(state.get("upi") or {}), "vpa": VPA},
+        "card": None if card is None else {**card, "last4": LAST4, "name": CARD_NAME},
+        "notes": {"order_id": "ord-1042", "phone": PHONE},
+    }
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "unrecorded-card-captured-expanded",
+        "unrecorded-card-failed-expanded",
+        "unrecorded-upi-captured",
+        "unrecorded-wallet-captured",
+        "unrecorded-international-captured",
+        "payment-captured-pay_Tj66x2JuEXjIdB",
+    ],
+)
+async def test_no_row_or_log_line_holds_a_phone_vpa_or_card_digits(
+    writer: Writer,
+    ledger: StageRunner,
+    razorpay: respx.MockRouter,
+    read_rows: ReadRows,
+    caplog: pytest.LogCaptureFixture,
+    name: str,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    await fetch_once(writer, ledger, razorpay, with_personal_data(recorded_fetch(name)))
+
+    [row] = await read_rows("SELECT * FROM payments")
+    logged = [json.dumps(vars(record), default=str) for record in caplog.records]
+    assert logged  # the fetch was logged
+    for stored in [json.dumps(row), *logged]:
+        for personal in (PHONE, "9876543210", VPA, LAST4, CARD_NAME):
+            assert personal not in stored
+
+
+async def test_the_customer_email_and_description_are_kept_as_reported(
+    writer: Writer, ledger: StageRunner, razorpay: respx.MockRouter, read_rows: ReadRows
+) -> None:
+    state = recorded_fetch("payment-captured-pay_Tj66x2JuEXjIdB")
+
+    await fetch_once(writer, ledger, razorpay, state)
+
+    assert await read_rows("SELECT customer_email, customer_name, description FROM payments") == [
+        {
+            "customer_email": "customer@example.com",
+            "customer_name": None,
+            "description": "#Tj65RlqVNHm2LS",
+        }
+    ]
+
+
+async def test_a_upi_payment_with_no_email_keeps_none(
+    writer: Writer, ledger: StageRunner, razorpay: respx.MockRouter, read_rows: ReadRows
+) -> None:
+    await fetch_once(writer, ledger, razorpay, recorded_fetch("unrecorded-upi-captured"))
+
+    assert await read_rows("SELECT method, customer_email, description FROM payments") == [
+        {"method": "upi", "customer_email": None, "description": "#MLXS5jI0oFNX2a"}
+    ]

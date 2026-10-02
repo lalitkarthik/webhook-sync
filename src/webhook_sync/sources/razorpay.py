@@ -389,4 +389,7 @@ def payment_row(
         settlement_currency=state.get("base_currency") or state["currency"],
         method=_method(state),
         metadata={key: notes[key] for key in metadata_keys if key in notes},
+        # A4: email and description as reported; never `contact`, a VPA or card details.
+        customer_email=state.get("email"),
+        description=state.get("description"),
     )
