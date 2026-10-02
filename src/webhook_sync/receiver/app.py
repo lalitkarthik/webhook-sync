@@ -7,6 +7,8 @@ the writer at the end. `shut_down` runs the shutdown's steps while the app still
 
 import asyncio
 import logging
+import os
+import socket
 import sqlite3
 import time
 from collections.abc import AsyncGenerator
@@ -21,14 +23,15 @@ from webhook_sync.clock import to_db_text, utc_now
 from webhook_sync.config import Config
 from webhook_sync.db.migrations import apply_pending
 from webhook_sync.db.writer import Writer
-from webhook_sync.queue import Runners, run_reaper
+from webhook_sync.ledger import ledger_runner
+from webhook_sync.queue import Pauses, Runners, run_reaper
 from webhook_sync.receiver.checks import check_content_type, check_security_headers, read_body
 from webhook_sync.receiver.demo import FailFirst
 from webhook_sync.receiver.rate_cap import RateCap
 from webhook_sync.receiver.rejections import RejectionCounters
 from webhook_sync.receiver.store import store_delivery
 from webhook_sync.sources.base import EventDescription, Rejection, SourceAdapter, VerifiedDelivery
-from webhook_sync.sources.razorpay import EVENT_ID_HEADER, RazorpayAdapter
+from webhook_sync.sources.razorpay import EVENT_ID_HEADER, RazorpayAdapter, api_client
 
 log = logging.getLogger("webhook_sync.receiver")
 
@@ -56,6 +59,11 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         writer = await Writer.open(data_dir)
+        razorpay_api = api_client(
+            config.razorpay.api_url,
+            config.razorpay_secrets.key_id,
+            config.razorpay_secrets.key_secret,
+        )
         try:
             # Under `wsync serve`, start() has already migrated under the lock and this is a
             # no-op; it migrates an app built in process (tests).
@@ -69,13 +77,24 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
                     mode=config.razorpay.mode,
                     account=config.razorpay.account,
                     webhook_secrets=config.razorpay_secrets.webhook_secrets,
+                    api=razorpay_api,
                 ),
                 rate_cap=RateCap(),
                 rejections=RejectionCounters(),
                 fail_first=FailFirst(demo_fail_first) if demo_fail_first is not None else None,
             )
             app.state.receiver = receiver
-            runners = Runners(writer, [])  # P1 registers no production stage; P2 adds ledger
+            # One instance id and one pause set, shared by every stage runner (A15).
+            claimed_by = instance_id()
+            pauses = Pauses()
+            ledger = ledger_runner(
+                writer,
+                {receiver.razorpay.name: receiver.razorpay},
+                claimed_by=claimed_by,
+                pauses=pauses,
+                retry_profile=config.service.retry_profile,
+            )
+            runners = Runners(writer, [ledger])
             app.state.runners = runners
             runners.start()
             minutely = asyncio.create_task(_write_rejection_counts_every_minute(receiver))
@@ -95,6 +114,7 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
                     await minutely
                 await write_all_rejection_counts(receiver)
         finally:
+            await razorpay_api.aclose()
             await writer.close()
 
     app = FastAPI(lifespan=lifespan, openapi_url=None, docs_url=None, redoc_url=None)
@@ -186,6 +206,11 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
         return JSONResponse({"result": stored.result}, status_code=stored.status_code)
 
     return app
+
+
+def instance_id() -> str:
+    """This server's id on the jobs it claims (`claimed_by`): host, process id and start time."""
+    return f"{socket.gethostname()}:{os.getpid()}@{to_db_text(utc_now())}"
 
 
 async def shut_down(app: FastAPI) -> None:
