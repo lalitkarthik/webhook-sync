@@ -4,9 +4,11 @@ Times come from the caller (the one clock, A14). `enqueue` runs inside the calle
 transaction, so the change and the job it causes commit together (the outbox).
 """
 
+import random
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Literal
 
 import sqlalchemy as sa
 from sqlalchemy.dialects import sqlite
@@ -15,8 +17,8 @@ from webhook_sync.clock import to_db_text
 from webhook_sync.config import RetryProfile
 from webhook_sync.db.schema import attempts, jobs
 from webhook_sync.db.writer import Transaction, Writer
-from webhook_sync.queue.pause import Pauses
-from webhook_sync.queue.retry import max_attempts
+from webhook_sync.queue.pause import Pauses, PauseTarget
+from webhook_sync.queue.retry import backoff, max_attempts
 
 LIVE_STATUSES = ("waiting", "running")
 """A job in one of these is live: at most one per stage, sink and payment."""
@@ -54,6 +56,28 @@ class LeaseLost(Exception):
     def __init__(self, job_id: int) -> None:
         super().__init__(f"lease lost on job {job_id}")
         self.job_id = job_id
+
+
+type ErrorClass = Literal["retry", "dead", "pause"]
+"""The three error classes of queue.md: what a failed attempt does to its job."""
+
+
+@dataclass(frozen=True)
+class Failure:
+    """Why a claimed job's attempt failed, as the stage's work reports it to `fail`.
+
+    `retry_after` is the failing service's `Retry-After`, a minimum for the backoff. A `pause`
+    failure names what it pauses: the job's source or its sink.
+    """
+
+    error: str
+    error_class: ErrorClass
+    retry_after: timedelta | None = None
+    pause_target: PauseTarget | None = None
+
+    def __post_init__(self) -> None:
+        if (self.error_class == "pause") != (self.pause_target is not None):
+            raise ValueError("a pause failure, and only a pause failure, names a pause target")
 
 
 async def enqueue(
@@ -221,6 +245,65 @@ async def complete(tx: Transaction, job: ClaimedJob, *, now: datetime) -> None:
     if not await tx.execute(statement):
         raise LeaseLost(job.id)
     await _record_attempt(tx, job, outcome="ok", error=None, now=now)
+
+
+async def fail(
+    writer: Writer,
+    job: ClaimedJob,
+    failure: Failure,
+    *,
+    pauses: Pauses,
+    retry_profile: RetryProfile,
+    now: datetime,
+    rng: random.Random,
+) -> Literal["waiting", "dead"]:
+    """Record a failed attempt and move the job by its error class, in one fenced transaction.
+
+    `retry`: back to waiting after the backoff (at least `retry_after`), or dead once the
+    attempts are used up. `dead`: straight to dead. `pause`: the source or sink is paused and
+    the job goes back to waiting with its attempt refunded. Returns the job's new status;
+    raises `LeaseLost` (writing nothing, pausing nothing) if the token no longer holds the job.
+    """
+    at = to_db_text(now)
+    status: Literal["waiting", "dead"] = "waiting"
+    moves: dict[str, object] = {"rerun": 0, "run_after": at}
+    if failure.error_class == "pause":
+        moves["attempts"] = jobs.c.attempts - 1
+    elif failure.error_class == "retry" and job.attempts < job.max_attempts:
+        wait = backoff(retry_profile, job.attempts, rng=rng)
+        if wait is None:
+            status, moves = "dead", {}
+        else:
+            moves["run_after"] = to_db_text(now + max(wait, failure.retry_after or wait))
+    else:
+        status, moves = "dead", {}  # a dead job keeps its rerun flag and run_after: its history
+    statement = (
+        sa.update(jobs)
+        .where(
+            jobs.c.id == job.id,
+            jobs.c.claim_token == job.claim_token,
+            jobs.c.status == "running",
+        )
+        .values(
+            status=status,
+            claim_token=None,
+            lease_until=None,
+            last_error=failure.error,
+            last_error_class=failure.error_class,
+            updated_at=at,
+            **moves,
+        )
+        .returning(jobs.c.id)
+    )
+    async with writer.transaction() as tx:
+        if not await tx.execute(statement):
+            raise LeaseLost(job.id)
+        await _record_attempt(tx, job, outcome=failure.error_class, error=failure.error, now=now)
+    if failure.pause_target == "source":
+        pauses.pause("source", job.source)
+    elif failure.pause_target == "sink":
+        pauses.pause("sink", job.sink)
+    return status
 
 
 async def _record_attempt(

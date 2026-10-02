@@ -6,10 +6,13 @@ profiles in `retry.py`.
 
 from webhook_sync.queue.operations import (
     ClaimedJob,
+    ErrorClass,
+    Failure,
     LeaseLost,
     claim,
     complete,
     enqueue,
+    fail,
     heartbeat,
 )
 from webhook_sync.queue.pause import Pauses, PauseTarget
@@ -17,6 +20,8 @@ from webhook_sync.queue.retry import backoff, max_attempts
 
 __all__ = [
     "ClaimedJob",
+    "ErrorClass",
+    "Failure",
     "LeaseLost",
     "PauseTarget",
     "Pauses",
@@ -24,6 +29,7 @@ __all__ = [
     "claim",
     "complete",
     "enqueue",
+    "fail",
     "heartbeat",
     "max_attempts",
 ]
