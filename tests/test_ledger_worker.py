@@ -20,8 +20,8 @@ from support import (
     RECORDED_ACCOUNT,
     TEST_KEY_ID,
     TEST_KEY_SECRET,
-    ReadRows,
     TEST_WEBHOOK_SECRET,
+    ReadRows,
     recorded_api_answer,
     recorded_delivery,
     recorded_fetch,
@@ -72,9 +72,7 @@ def fetched_request(route: respx.Route) -> httpx.Request:
     return route.calls.last.request
 
 
-async def enqueue_ledger_job(
-    writer: Writer, payment_key: str, event_id: str | None = None
-) -> int:
+async def enqueue_ledger_job(writer: Writer, payment_key: str, event_id: str | None = None) -> int:
     async with writer.transaction() as tx:
         return await enqueue(
             tx,
