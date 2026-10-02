@@ -2,6 +2,7 @@
 
 import sqlite3
 from contextlib import closing
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -11,7 +12,9 @@ import pytest
 from support import TEST_ACCOUNT, ReadRows, razorpay_sample, sign_razorpay
 from time_machine import TimeMachineFixture
 
+from webhook_sync.config import Config
 from webhook_sync.db.files import database_path
+from webhook_sync.receiver.app import create_app
 
 pytestmark = pytest.mark.unrecorded
 
@@ -41,6 +44,22 @@ async def test_a_handled_event_is_stored_with_one_waiting_ledger_job(
     assert job["run_after"] == job["created_at"]
     [event] = await read_rows("SELECT outcome, job_id FROM events")
     assert event == {"outcome": "queued", "job_id": job["id"]}
+
+
+async def test_a_job_in_the_demo_retry_profile_is_allowed_six_attempts(
+    config: Config, data_dir: Path, read_rows: ReadRows
+) -> None:
+    demo = replace(config, service=replace(config.service, retry_profile="demo"))
+    app = create_app(demo, data_dir)
+    body, headers = sign_razorpay(razorpay_sample("payment.captured"))
+
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as client,
+    ):
+        await client.post("/webhooks/razorpay", content=body, headers=headers)
+
+    assert await read_rows("SELECT max_attempts FROM jobs") == [{"max_attempts": 6}]
 
 
 def payment_authorized() -> dict[str, Any]:
