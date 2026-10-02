@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator, Iterator
 from datetime import UTC, datetime
 from typing import Any
 
+import httpx
 import pytest
 import respx
 from support import (
@@ -177,6 +178,81 @@ async def test_a_failed_refund_leaves_the_refunded_amount_at_the_processed_sum(
     row = await ledger_row_after_fetch(writer, ledger, razorpay, read_rows, state)
 
     assert row == {"status": "partially_refunded", "refunded_minor": 15000}
+
+
+def refunds_page(*refunds: tuple[int, str]) -> dict[str, Any]:
+    """A page of `GET /v1/payments/{id}/refunds`, shaped like the recorded first page."""
+    return with_refunds(recorded_fetch("refunds-page-1"), *refunds)["refunds"] | {
+        "entity": "collection"
+    }
+
+
+async def test_a_full_expanded_refund_list_is_paged_and_every_page_is_summed(
+    writer: Writer, ledger: StageRunner, razorpay: respx.MockRouter, read_rows: ReadRows
+) -> None:
+    # The expanded list holds Razorpay's default page of 10, so there may be more: the refunds
+    # endpoint is paged 100 at a time until a page comes back short, and its list is used.
+    recorded = recorded_fetch(f"payment-captured-partly-refunded-{PARTLY_REFUNDED}")
+    razorpay.get(f"/v1/payments/{PARTLY_REFUNDED}").respond(
+        200, json=with_refunds(recorded, *[(100, "processed")] * 10)
+    )
+    answers = iter(
+        [
+            refunds_page(*[(100, "processed")] * 99, (500, "pending")),
+            refunds_page((1000, "processed"), (2000, "failed")),
+        ]
+    )
+    asked: list[list[tuple[str, str]]] = []
+
+    def refunds_endpoint(request: httpx.Request) -> httpx.Response:
+        asked.append(request.url.params.multi_items())
+        return httpx.Response(200, json=next(answers))
+
+    razorpay.get(f"/v1/payments/{PARTLY_REFUNDED}/refunds").mock(side_effect=refunds_endpoint)
+    await enqueue_ledger_job(writer, PARTLY_REFUNDED)
+
+    await ledger.run_once()
+
+    assert await read_rows("SELECT status, refunded_minor FROM payments") == [
+        {"status": "partially_refunded", "refunded_minor": 99 * 100 + 1000}
+    ]
+    assert asked == [
+        [("count", "100"), ("skip", "0")],
+        [("count", "100"), ("skip", "100")],
+    ]
+
+
+async def test_a_dropped_connection_while_paging_refunds_retries_and_writes_nothing(
+    writer: Writer, ledger: StageRunner, razorpay: respx.MockRouter, read_rows: ReadRows
+) -> None:
+    recorded = recorded_fetch(f"payment-captured-partly-refunded-{PARTLY_REFUNDED}")
+    razorpay.get(f"/v1/payments/{PARTLY_REFUNDED}").respond(
+        200, json=with_refunds(recorded, *[(100, "processed")] * 10)
+    )
+    razorpay.get(f"/v1/payments/{PARTLY_REFUNDED}/refunds").mock(
+        side_effect=httpx.ConnectError("connection dropped")
+    )
+    await enqueue_ledger_job(writer, PARTLY_REFUNDED)
+
+    await ledger.run_once()
+
+    assert await read_rows("SELECT * FROM payments") == []
+    assert await read_rows("SELECT status, attempts FROM jobs") == [
+        {"status": "waiting", "attempts": 1}
+    ]
+
+
+async def test_fewer_than_ten_expanded_refunds_are_the_whole_list(
+    writer: Writer, ledger: StageRunner, razorpay: respx.MockRouter, read_rows: ReadRows
+) -> None:
+    recorded = recorded_fetch(f"payment-captured-partly-refunded-{PARTLY_REFUNDED}")
+    state = with_refunds(recorded, *[(100, "processed")] * 9)
+    pages = razorpay.get(f"/v1/payments/{PARTLY_REFUNDED}/refunds")
+
+    row = await ledger_row_after_fetch(writer, ledger, razorpay, read_rows, state)
+
+    assert row == {"status": "partially_refunded", "refunded_minor": 900}
+    assert pages.call_count == 0
 
 
 async def test_an_uncaptured_authorisation_auto_refunded_is_canceled(
