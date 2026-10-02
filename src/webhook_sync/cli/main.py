@@ -8,7 +8,7 @@ from importlib.metadata import version
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="wsync",
-        description="Receive payment events, keep one ledger row per payment, mirror it to a sheet.",
+        description="Keep one ledger row per payment and mirror it to a Google Sheet.",
     )
     parser.add_argument("--version", action="version", version=f"wsync {version('webhook-sync')}")
     parser.add_subparsers(dest="command", metavar="<command>")

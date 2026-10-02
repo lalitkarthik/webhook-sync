@@ -1,4 +1,4 @@
-"""The test toolchain works: async tests run, time is moved without sleeping, data dirs are fresh."""
+"""The test toolchain works: async tests run, time moves without sleeping, data dirs are fresh."""
 
 import asyncio
 from datetime import UTC, datetime

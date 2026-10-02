@@ -37,6 +37,8 @@ build-backend = "uv_build"
 [tool.ruff]
 line-length = 100
 target-version = "py314"
+# Agent tooling and one-off helper scripts are not part of the service.
+extend-exclude = [".claude", "scripts"]
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF", "ASYNC", "PT"]
