@@ -4,15 +4,24 @@
 profiles in `retry.py`.
 """
 
-from webhook_sync.queue.operations import ClaimedJob, claim, enqueue, heartbeat
+from webhook_sync.queue.operations import (
+    ClaimedJob,
+    LeaseLost,
+    claim,
+    complete,
+    enqueue,
+    heartbeat,
+)
 from webhook_sync.queue.pause import Pauses, PauseTarget
 from webhook_sync.queue.retry import max_attempts
 
 __all__ = [
     "ClaimedJob",
+    "LeaseLost",
     "PauseTarget",
     "Pauses",
     "claim",
+    "complete",
     "enqueue",
     "heartbeat",
     "max_attempts",

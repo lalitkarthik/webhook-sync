@@ -4,6 +4,7 @@ Real SQLite in a fresh data directory, time moved with time-machine, the jitter'
 injected. Assertions are on the returned values and the `jobs` and `attempts` rows.
 """
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -12,7 +13,7 @@ from time_machine import TimeMachineFixture
 
 from webhook_sync.clock import utc_now
 from webhook_sync.db.writer import Writer
-from webhook_sync.queue import Pauses, claim, enqueue, heartbeat
+from webhook_sync.queue import LeaseLost, Pauses, claim, complete, enqueue, heartbeat
 
 NINE = datetime(2026, 10, 2, 9, 0, tzinfo=UTC)
 INSTANCE = "wsync-test@2026-10-02T08:59:00.000000Z"
@@ -125,3 +126,76 @@ async def test_a_heartbeat_with_a_lost_lease_reports_it_and_extends_nothing(
     assert lost == {held.id, taken.id}
     leases = await read_rows("SELECT DISTINCT lease_until FROM jobs")
     assert leases == [{"lease_until": "2026-10-02T09:01:00.000000Z"}]
+
+
+async def test_complete_marks_the_job_done_and_records_an_ok_attempt(
+    writer: Writer, read_rows: ReadRows, frozen_clock: TimeMachineFixture
+) -> None:
+    job_id = await enqueue_job(writer)
+    [claimed] = await claim_ledger(writer)
+    frozen_clock.move_to(NINE + timedelta(seconds=2), tick=False)
+
+    async with writer.transaction() as tx:
+        await complete(tx, claimed, now=utc_now())
+
+    [job] = await read_rows("SELECT * FROM jobs")
+    assert (job["status"], job["attempts"], job["claim_token"], job["lease_until"]) == (
+        "done",
+        1,
+        None,
+        None,
+    )
+    assert await read_rows("SELECT * FROM attempts") == [
+        {
+            "id": 1,
+            "job_id": job_id,
+            "number": 1,
+            "started_at": "2026-10-02T09:00:00.000000Z",
+            "finished_at": "2026-10-02T09:00:02.000000Z",
+            "outcome": "ok",
+            "error": None,
+            "duration_ms": 2000,
+        }
+    ]
+
+
+async def test_complete_with_rerun_set_puts_the_job_straight_back_to_waiting(
+    writer: Writer, read_rows: ReadRows, frozen_clock: TimeMachineFixture
+) -> None:
+    await enqueue_job(writer)
+    [claimed] = await claim_ledger(writer)
+    await enqueue_job(writer)  # new work while the job runs sets rerun
+    frozen_clock.move_to(NINE + timedelta(seconds=3), tick=False)
+
+    async with writer.transaction() as tx:
+        await complete(tx, claimed, now=utc_now())
+
+    [job] = await read_rows("SELECT * FROM jobs")
+    assert (job["status"], job["rerun"], job["attempts"], job["claim_token"]) == (
+        "waiting",
+        0,
+        0,
+        None,
+    )
+    assert job["run_after"] == "2026-10-02T09:00:03.000000Z"
+    [again] = await claim_ledger(writer)
+    assert again.id == claimed.id
+
+
+async def test_complete_with_a_stale_token_matches_nothing_and_rolls_back_the_callers_writes(
+    writer: Writer, read_rows: ReadRows
+) -> None:
+    await enqueue_job(writer)
+    [claimed] = await claim_ledger(writer)
+    stale = replace(claimed, claim_token="stale-token")
+
+    with pytest.raises(LeaseLost):
+        async with writer.transaction() as tx:
+            await tx.execute("CREATE TABLE the_works_write (x INTEGER)")  # a stand-in ledger write
+            await complete(tx, stale, now=utc_now())
+
+    tables = await read_rows("SELECT name FROM sqlite_master WHERE name = 'the_works_write'")
+    assert tables == []
+    [job] = await read_rows("SELECT status, claim_token FROM jobs")
+    assert job == {"status": "running", "claim_token": claimed.claim_token}
+    assert await read_rows("SELECT * FROM attempts") == []

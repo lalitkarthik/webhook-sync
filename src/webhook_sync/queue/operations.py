@@ -13,7 +13,7 @@ from sqlalchemy.dialects import sqlite
 
 from webhook_sync.clock import to_db_text
 from webhook_sync.config import RetryProfile
-from webhook_sync.db.schema import jobs
+from webhook_sync.db.schema import attempts, jobs
 from webhook_sync.db.writer import Transaction, Writer
 from webhook_sync.queue.pause import Pauses
 from webhook_sync.queue.retry import max_attempts
@@ -41,6 +41,19 @@ class ClaimedJob:
     rerun: bool
     prefetched: str | None
     caused_by_event_id: str | None
+    claimed_at: datetime
+    """When this attempt started: the claim's `now`."""
+
+
+class LeaseLost(Exception):
+    """The job is no longer running under this claim token: the reaper or another worker has it.
+
+    Raised by `complete` inside the caller's transaction, so the stale work's writes roll back.
+    """
+
+    def __init__(self, job_id: int) -> None:
+        super().__init__(f"lease lost on job {job_id}")
+        self.job_id = job_id
 
 
 async def enqueue(
@@ -155,6 +168,7 @@ async def claim(
             rerun=bool(row["rerun"]),
             prefetched=row["prefetched"],
             caused_by_event_id=row["caused_by_event_id"],
+            claimed_at=now,
         )
         for row in rows
     ]
@@ -175,3 +189,52 @@ async def heartbeat(writer: Writer, ids: list[int], token: str, *, now: datetime
     async with writer.transaction() as tx:
         rows = await tx.execute(statement)
     return set(ids) - {row["id"] for row in rows}
+
+
+async def complete(tx: Transaction, job: ClaimedJob, *, now: datetime) -> None:
+    """Finish a claimed job inside the work's own transaction, fenced by its claim token.
+
+    With `rerun` set the job goes straight back to waiting with its attempts reset; otherwise
+    it is done. An `ok` attempt is recorded. If the token no longer holds the job, `LeaseLost`
+    is raised, so the caller's transaction rolls back with the stale work's writes.
+    """
+    at = to_db_text(now)
+    rerun = jobs.c.rerun == 1
+    statement = (
+        sa.update(jobs)
+        .where(
+            jobs.c.id == job.id,
+            jobs.c.claim_token == job.claim_token,
+            jobs.c.status == "running",
+        )
+        .values(
+            status=sa.case((rerun, "waiting"), else_="done"),
+            attempts=sa.case((rerun, 0), else_=jobs.c.attempts),
+            run_after=at,
+            rerun=0,
+            claim_token=None,
+            lease_until=None,
+            updated_at=at,
+        )
+        .returning(jobs.c.id)
+    )
+    if not await tx.execute(statement):
+        raise LeaseLost(job.id)
+    await _record_attempt(tx, job, outcome="ok", error=None, now=now)
+
+
+async def _record_attempt(
+    tx: Transaction, job: ClaimedJob, *, outcome: str, error: str | None, now: datetime
+) -> None:
+    """Append the claimed attempt's row to `attempts`: the job's timeline."""
+    await tx.execute(
+        sa.insert(attempts).values(
+            job_id=job.id,
+            number=job.attempts,
+            started_at=to_db_text(job.claimed_at),
+            finished_at=to_db_text(now),
+            outcome=outcome,
+            error=error,
+            duration_ms=round((now - job.claimed_at).total_seconds() * 1000),
+        )
+    )
