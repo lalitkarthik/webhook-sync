@@ -12,8 +12,11 @@ import pytest
 from support import TEST_ACCOUNT, ReadRows, razorpay_sample, sign_razorpay
 from time_machine import TimeMachineFixture
 
+from webhook_sync.clock import utc_now
 from webhook_sync.config import Config
 from webhook_sync.db.files import database_path
+from webhook_sync.db.writer import Writer
+from webhook_sync.queue import Pauses, claim, complete
 from webhook_sync.receiver.app import create_app
 
 pytestmark = pytest.mark.unrecorded
@@ -100,12 +103,30 @@ async def test_a_second_event_for_a_payment_whose_job_waits_folds_into_that_job(
     ]
 
 
-def force_job_state(data_dir: Path, job_id: int, *, status: str, prefetched: str | None) -> None:
-    """Put a job in a state no P1 operation reaches through the app (claim comes with #12)."""
-    with closing(sqlite3.connect(database_path(data_dir))) as connection, connection:
-        connection.execute(
-            "UPDATE jobs SET status = ?, prefetched = ? WHERE id = ?", (status, prefetched, job_id)
+async def claim_ledger_job(data_dir: Path, *, complete_it: bool = False) -> None:
+    """Claim the one waiting ledger job through the queue, as P2's ledger worker will."""
+    writer = await Writer.open(data_dir)
+    try:
+        [job] = await claim(
+            writer,
+            stage="ledger",
+            sink="ledger",
+            limit=1,
+            claimed_by="test-worker",
+            pauses=Pauses(),
+            now=utc_now(),
         )
+        if complete_it:
+            async with writer.transaction() as tx:
+                await complete(tx, job, now=utc_now())
+    finally:
+        await writer.close()
+
+
+def set_prefetched(data_dir: Path, job_id: int, prefetched: str) -> None:
+    """Give a job a listed state; no P1 operation sets one (P4's backfill does)."""
+    with closing(sqlite3.connect(database_path(data_dir))) as connection, connection:
+        connection.execute("UPDATE jobs SET prefetched = ? WHERE id = ?", (prefetched, job_id))
 
 
 async def test_a_second_event_for_a_payment_whose_job_runs_sets_rerun_on_that_job(
@@ -113,8 +134,9 @@ async def test_a_second_event_for_a_payment_whose_job_runs_sets_rerun_on_that_jo
 ) -> None:
     first, first_headers = sign_razorpay(payment_authorized(), event_id="evt_authorized01")
     await client.post("/webhooks/razorpay", content=first, headers=first_headers)
+    await claim_ledger_job(data_dir)
     [job_before] = await read_rows("SELECT * FROM jobs")
-    force_job_state(data_dir, job_before["id"], status="running", prefetched='{"listed": true}')
+    set_prefetched(data_dir, job_before["id"], '{"listed": true}')
 
     second, second_headers = sign_razorpay(
         razorpay_sample("payment.captured"), event_id="evt_captured01"
@@ -136,8 +158,7 @@ async def test_new_work_for_a_payment_whose_job_is_done_makes_a_new_job(
 ) -> None:
     first, first_headers = sign_razorpay(payment_authorized(), event_id="evt_authorized01")
     await client.post("/webhooks/razorpay", content=first, headers=first_headers)
-    [done] = await read_rows("SELECT id FROM jobs")
-    force_job_state(data_dir, done["id"], status="done", prefetched=None)
+    await claim_ledger_job(data_dir, complete_it=True)
 
     second, second_headers = sign_razorpay(
         razorpay_sample("payment.captured"), event_id="evt_captured01"
@@ -200,8 +221,8 @@ async def test_a_duplicate_makes_no_second_job_and_leaves_the_first_untouched(
 ) -> None:
     body, headers = sign_razorpay(razorpay_sample("payment.captured"), event_id="evt_captured01")
     await client.post("/webhooks/razorpay", content=body, headers=headers)
+    await claim_ledger_job(data_dir)
     [job_before] = await read_rows("SELECT * FROM jobs")
-    force_job_state(data_dir, job_before["id"], status="running", prefetched=None)
     replayed_headers = {**headers, "x-razorpay-event-id": "evt_replayed01"}
 
     again = await client.post("/webhooks/razorpay", content=body, headers=headers)
@@ -209,7 +230,8 @@ async def test_a_duplicate_makes_no_second_job_and_leaves_the_first_untouched(
 
     assert (again.status_code, replayed.status_code) == (200, 200)
     [job] = await read_rows("SELECT * FROM jobs")
-    assert job == {**job_before, "status": "running"}
+    assert job == job_before
+    assert job["status"] == "running"
 
 
 async def test_a_database_error_in_the_transaction_is_503_and_stores_nothing(

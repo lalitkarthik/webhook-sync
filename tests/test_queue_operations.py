@@ -13,8 +13,8 @@ from support import ReadRows
 from time_machine import TimeMachineFixture
 
 from webhook_sync.clock import utc_now
-from webhook_sync.db.writer import Writer
 from webhook_sync.config import RetryProfile
+from webhook_sync.db.writer import Writer
 from webhook_sync.queue import (
     ClaimedJob,
     Failure,
@@ -195,6 +195,14 @@ async def test_complete_with_rerun_set_puts_the_job_straight_back_to_waiting(
     assert again.id == claimed.id
 
 
+async def write_and_complete(writer: Writer, job: ClaimedJob, *, written_by: str) -> None:
+    """A stage's work: its own write (a stand-in for the ledger's), then complete, in one go."""
+    async with writer.transaction() as tx:
+        await tx.execute("CREATE TABLE IF NOT EXISTS ledger_stand_in (written_by TEXT)")
+        await tx.execute("INSERT INTO ledger_stand_in VALUES (:by)", {"by": written_by})
+        await complete(tx, job, now=utc_now())
+
+
 async def test_complete_with_a_stale_token_matches_nothing_and_rolls_back_the_callers_writes(
     writer: Writer, read_rows: ReadRows
 ) -> None:
@@ -203,11 +211,9 @@ async def test_complete_with_a_stale_token_matches_nothing_and_rolls_back_the_ca
     stale = replace(claimed, claim_token="stale-token")
 
     with pytest.raises(LeaseLost):
-        async with writer.transaction() as tx:
-            await tx.execute("CREATE TABLE the_works_write (x INTEGER)")  # a stand-in ledger write
-            await complete(tx, stale, now=utc_now())
+        await write_and_complete(writer, stale, written_by="stale")
 
-    tables = await read_rows("SELECT name FROM sqlite_master WHERE name = 'the_works_write'")
+    tables = await read_rows("SELECT name FROM sqlite_master WHERE name = 'ledger_stand_in'")
     assert tables == []
     [job] = await read_rows("SELECT status, claim_token FROM jobs")
     assert job == {"status": "running", "claim_token": claimed.claim_token}
@@ -254,7 +260,13 @@ async def test_a_retry_failure_puts_the_job_back_to_waiting_after_its_backoff(
     # attempt 1's wait is 5 s times 0.5-1.5, counted from the failure at 09:00:01
     assert "2026-10-02T09:00:03.500000Z" <= job["run_after"] <= "2026-10-02T09:00:08.500000Z"
     assert await read_rows("SELECT job_id, number, outcome, error, duration_ms FROM attempts") == [
-        {"job_id": job_id, "number": 1, "outcome": "retry", "error": "HTTP 503", "duration_ms": 1000}
+        {
+            "job_id": job_id,
+            "number": 1,
+            "outcome": "retry",
+            "error": "HTTP 503",
+            "duration_ms": 1000,
+        }
     ]
     assert await claim_ledger(writer) == []
     frozen_clock.move_to(NINE + timedelta(seconds=9), tick=False)
@@ -388,16 +400,11 @@ async def test_a_stalled_worker_past_its_lease_cannot_complete_and_loses_its_wri
     await reap_by_hand(writer, job_id)
     [current] = await claim_ledger(writer)
     assert current.claim_token != stalled.claim_token
-    async with writer.transaction() as tx:
-        await tx.execute("CREATE TABLE ledger_stand_in (written_by TEXT)")
-        await tx.execute("INSERT INTO ledger_stand_in VALUES ('current')")
-        await complete(tx, current, now=utc_now())
+    await write_and_complete(writer, current, written_by="current")
 
     lost = await heartbeat(writer, [job_id], stalled.claim_token, now=utc_now())
     with pytest.raises(LeaseLost):
-        async with writer.transaction() as tx:
-            await tx.execute("INSERT INTO ledger_stand_in VALUES ('stalled')")
-            await complete(tx, stalled, now=utc_now())
+        await write_and_complete(writer, stalled, written_by="stalled")
 
     assert lost == {job_id}
     assert await read_rows("SELECT written_by FROM ledger_stand_in") == [{"written_by": "current"}]
@@ -417,8 +424,8 @@ async def test_a_fail_with_a_lost_lease_writes_nothing_and_pauses_nothing(
     await reap_by_hand(writer, job_id)
     await claim_ledger(writer)
 
+    failure = Failure("HTTP 401", "pause", pause_target="source")
     with pytest.raises(LeaseLost):
-        failure = Failure("HTTP 401", "pause", pause_target="source")
         await fail_job(writer, stalled, failure, pauses=pauses)
 
     assert pauses.sources == frozenset()
