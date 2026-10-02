@@ -1,0 +1,53 @@
+[project]
+name = "webhook-sync"
+version = "0.1.0"
+description = "Receives Razorpay payment events, keeps one ledger row per payment, and mirrors it to a Google Sheet."
+requires-python = ">=3.14"
+dependencies = [
+    "aiosqlite>=0.21",
+    "fastapi>=0.118",
+    "filelock>=3.19",
+    "google-auth>=2.40",
+    "gspread>=6.2",
+    "httpx>=0.28",
+    "python-dotenv>=1.1",
+    "razorpay>=1.4",
+    "sqlalchemy[asyncio]>=2.0.43",
+    "tzdata>=2025.2",
+    "uvicorn>=0.37",
+]
+
+[project.scripts]
+wsync = "webhook_sync.cli.main:main"
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.405",
+    "pytest>=8.4",
+    "pytest-asyncio>=1.2",
+    "respx>=0.22",
+    "ruff>=0.13",
+    "time-machine>=2.19",
+]
+
+[build-system]
+requires = ["uv_build>=0.8.17,<0.13"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF", "ASYNC", "PT"]
+
+[tool.pyright]
+include = ["src", "tests"]
+pythonVersion = "3.14"
+typeCheckingMode = "strict"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--import-mode=importlib", "--strict-markers"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
