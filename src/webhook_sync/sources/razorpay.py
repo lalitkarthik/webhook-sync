@@ -220,8 +220,22 @@ class RazorpayAdapter:
                 http_status=status,
             )
         if not response.is_success:
-            return Failure(f"Razorpay answered HTTP {status}", "dead", http_status=status)
-        return cast(dict[str, Any], response.json())
+            description = _error_description(response)
+            reason = f"Razorpay answered HTTP {status}"
+            if description:
+                reason = f"{reason}: {description[:200]}"
+            return Failure(reason, "dead", http_status=status)
+        try:
+            body: object = response.json()
+        except ValueError:
+            body = None
+        if not isinstance(body, dict):
+            return Failure(
+                f"Razorpay answered HTTP {status} with a body that is not a JSON object",
+                "dead",
+                http_status=status,
+            )
+        return cast(dict[str, Any], body)
 
     def to_row(self, state: Mapping[str, Any]) -> BusinessRow | None:
         return payment_row(state, metadata_keys=self._metadata_keys)

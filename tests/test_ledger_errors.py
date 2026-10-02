@@ -355,3 +355,52 @@ async def test_throttling_and_server_errors_retry_after_the_backoff(
     # The first production wait is 5 s, times a jitter between 0.5 and 1.5.
     assert "2026-10-02T20:30:02.5" <= job["run_after"] <= "2026-10-02T20:30:07.5"
     assert await read_rows(ATTEMPTS) == [{"number": 1, "outcome": "retry"}]
+
+
+@pytest.mark.parametrize(
+    ("answer", "reason"),
+    [
+        (
+            httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "code": "BAD_REQUEST_ERROR",
+                        "description": "expand is/are not required and should not be sent",
+                    }
+                },
+            ),
+            "Razorpay answered HTTP 400: expand is/are not required and should not be sent",
+        ),
+        (
+            httpx.Response(404, text="<html>Not Found</html>"),
+            "Razorpay answered HTTP 404",
+        ),
+        (
+            httpx.Response(200, text="<html>maintenance</html>"),
+            "Razorpay answered HTTP 200 with a body that is not a JSON object",
+        ),
+        (
+            httpx.Response(200, json=[captured()]),
+            "Razorpay answered HTTP 200 with a body that is not a JSON object",
+        ),
+    ],
+    ids=["other-400", "404-html", "200-html", "200-json-list"],
+)
+async def test_an_unexpected_answer_sends_the_job_to_dead_with_its_reason(
+    writer: Writer,
+    ledger: StageRunner,
+    razorpay: respx.MockRouter,
+    read_rows: ReadRows,
+    answer: httpx.Response,
+    reason: str,
+) -> None:
+    razorpay.get(FETCH_PATH).mock(return_value=answer)
+    await enqueue_ledger_job(writer, "evt_first")
+
+    await ledger.run_once()
+
+    [job] = await read_rows(LEDGER_JOB)
+    assert (job["status"], job["last_error"], job["last_error_class"]) == ("dead", reason, "dead")
+    assert await read_rows(ATTEMPTS) == [{"number": 1, "outcome": "dead"}]
+    assert await read_rows("SELECT * FROM payments") == []
