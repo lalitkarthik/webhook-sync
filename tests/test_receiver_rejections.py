@@ -1,5 +1,6 @@
 """Every rejected request answered with its reason, and counted (seam 1: the HTTP app in process)."""
 
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 
 import httpx
@@ -43,3 +44,43 @@ async def test_the_rate_cap_refills_at_50_a_second(
     assert refilled.status_code == 400
     assert capped.status_code == 429
     assert capped.json() == {"rejection": "rate_capped"}
+
+
+ONE_MB = 1024 * 1024
+
+
+async def test_a_body_over_1_mb_is_413_too_large_even_with_another_content_type(
+    client: httpx.AsyncClient,
+) -> None:
+    body, headers = sign_razorpay(b" " * (ONE_MB + 1))
+
+    response = await client.post(
+        "/webhooks/razorpay", content=body, headers={**headers, "content-type": "text/plain"}
+    )
+
+    assert response.status_code == 413
+    assert response.json() == {"rejection": "too_large"}
+
+
+async def test_a_streamed_body_over_1_mb_without_a_length_is_413_too_large(
+    client: httpx.AsyncClient,
+) -> None:
+    _, headers = sign_razorpay(b"{}")
+
+    async def chunks() -> AsyncIterator[bytes]:
+        for _ in range(3):
+            yield b" " * (ONE_MB // 2)
+
+    response = await client.post("/webhooks/razorpay", content=chunks(), headers=headers)
+
+    assert response.status_code == 413
+    assert response.json() == {"rejection": "too_large"}
+
+
+async def test_a_body_of_exactly_1_mb_is_read_and_checked(client: httpx.AsyncClient) -> None:
+    body, headers = sign_razorpay(b"{}" + b" " * (ONE_MB - 2))
+
+    response = await client.post("/webhooks/razorpay", content=body, headers=headers)
+
+    assert response.status_code == 400
+    assert response.json() == {"rejection": "malformed"}
