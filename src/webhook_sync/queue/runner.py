@@ -84,9 +84,15 @@ class StageRunner:
         self._stopping = False
 
     async def run(self) -> None:
-        """Claim and run due jobs until `stop`; wait a second whenever nothing is due."""
+        """Claim and run due jobs until `stop`; wait a second whenever nothing is due. A pass
+        that raises is logged and the next one tried; a job it left running is reaped."""
         while not self._stopping:
-            if await self.run_once() == 0 and not self._stopping:
+            try:
+                claimed = await self.run_once()
+            except Exception:
+                log.exception("stage runner pass failed; trying again shortly")
+                claimed = 0
+            if claimed == 0 and not self._stopping:
                 await self._sleep(IDLE_WAIT.total_seconds())
 
     def stop(self) -> None:
@@ -127,16 +133,16 @@ class StageRunner:
     async def _attempt(self, job: ClaimedJob, leases: _Leases) -> None:
         try:
             done = await leases.guard(job.id, self._work(job))
+            async with self._writer.transaction() as tx:
+                if done.writes is not None:
+                    await done.writes(tx)
+                await complete(tx, job, now=utc_now())
+        except LeaseLost:
+            raise
         except StageFailed as failed:
             await self._fail(job, failed.failure)
-            return
         except Exception as error:  # our own bug: retrying can't help
             await self._fail(job, Failure(f"{type(error).__name__}: {error}", "dead"))
-            return
-        async with self._writer.transaction() as tx:
-            if done.writes is not None:
-                await done.writes(tx)
-            await complete(tx, job, now=utc_now())
 
     async def _fail(self, job: ClaimedJob, failure: Failure) -> None:
         await fail(

@@ -459,6 +459,88 @@ async def test_the_served_app_runs_the_reaper(
     assert await read_rows("SELECT outcome FROM attempts") == [{"outcome": "reaped"}]
 
 
+async def test_a_stage_whose_writes_raise_ends_its_job_dead_and_the_runner_claims_the_next(
+    writer: Writer, read_rows: ReadRows
+) -> None:
+    await enqueue_job(writer, "pay_A")
+    await enqueue_job(writer, "pay_B")
+    runner: StageRunner
+
+    async def broken_write(tx: Transaction) -> None:
+        await tx.execute("INSERT INTO no_such_table VALUES (1)")
+
+    async def work(job: ClaimedJob) -> Done:
+        if job.payment_key == "pay_A":
+            return Done(writes=broken_write)
+        runner.stop()
+        return Done()
+
+    runner = runner_for(writer, work)
+    await asyncio.wait_for(runner.run(), timeout=5)
+
+    rows = await read_rows("SELECT payment_key, status FROM jobs ORDER BY id")
+    assert rows == [
+        {"payment_key": "pay_A", "status": "dead"},
+        {"payment_key": "pay_B", "status": "done"},
+    ]
+    outcomes = await read_rows("SELECT outcome, error FROM attempts ORDER BY id")
+    assert [row["outcome"] for row in outcomes] == ["dead", "ok"]
+    assert "OperationalError" in outcomes[0]["error"]
+
+
+async def test_a_pass_that_cannot_record_its_outcome_is_logged_and_the_runner_goes_on(
+    writer: Writer, read_rows: ReadRows, caplog: pytest.LogCaptureFixture
+) -> None:
+    await enqueue_job(writer, "pay_A")
+    await enqueue_job(writer, "pay_B")
+    async with writer.transaction() as tx:  # pay_A's failure can't be written
+        await tx.execute(
+            "CREATE TRIGGER refuse_pay_a BEFORE UPDATE ON jobs "
+            "WHEN OLD.payment_key = 'pay_A' AND NEW.status = 'dead' "
+            "BEGIN SELECT RAISE(ABORT, 'row refuses updates'); END"
+        )
+    runner: StageRunner
+    waits: list[float] = []
+
+    async def idle(seconds: float) -> None:
+        waits.append(seconds)
+
+    async def work(job: ClaimedJob) -> Done:
+        if job.payment_key == "pay_A":
+            raise KeyError("amount")
+        runner.stop()
+        return Done()
+
+    runner = runner_for(writer, work, sleep=idle)
+    await asyncio.wait_for(runner.run(), timeout=5)
+
+    rows = await read_rows("SELECT payment_key, status FROM jobs ORDER BY id")
+    assert rows == [
+        {"payment_key": "pay_A", "status": "running"},  # left for the reaper
+        {"payment_key": "pay_B", "status": "done"},
+    ]
+    assert [r for r in caplog.records if r.getMessage().startswith("stage runner pass failed")]
+    assert 1 in waits
+
+
+async def test_a_stage_whose_writes_raise_stage_failed_fails_by_its_class(
+    writer: Writer, read_rows: ReadRows
+) -> None:
+    await enqueue_job(writer)
+
+    async def refused_write(tx: Transaction) -> None:
+        raise StageFailed(Failure("sheet changed during write", "retry"))
+
+    async def work(job: ClaimedJob) -> Done:
+        return Done(writes=refused_write)
+
+    await runner_for(writer, work).run_once()
+
+    assert await read_rows("SELECT status, last_error_class FROM jobs") == [
+        {"status": "waiting", "last_error_class": "retry"}
+    ]
+
+
 async def test_a_stopped_runner_finishes_the_job_it_holds_and_claims_no_more(
     writer: Writer, read_rows: ReadRows
 ) -> None:
