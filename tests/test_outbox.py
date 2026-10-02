@@ -162,3 +162,29 @@ async def test_a_duplicate_makes_no_second_job_and_leaves_the_first_untouched(
     assert (again.status_code, replayed.status_code) == (200, 200)
     [job] = await read_rows("SELECT * FROM jobs")
     assert job == {**job_before, "status": "running"}
+
+
+async def test_a_database_error_in_the_transaction_is_503_and_stores_nothing(
+    client: httpx.AsyncClient, read_rows: ReadRows, data_dir: Path
+) -> None:
+    # The delivery row is the transaction's last write: failing it comes after the event and
+    # its job are written, so all three must roll back together.
+    with closing(sqlite3.connect(database_path(data_dir))) as connection, connection:
+        connection.execute(
+            "CREATE TRIGGER fail_deliveries BEFORE INSERT ON deliveries "
+            "BEGIN SELECT RAISE(ABORT, 'forced failure'); END"
+        )
+    body, headers = sign_razorpay(razorpay_sample("payment.captured"), event_id="evt_captured01")
+
+    response = await client.post("/webhooks/razorpay", content=body, headers=headers)
+
+    assert response.status_code == 503
+    assert await read_rows("SELECT * FROM events") == []
+    assert await read_rows("SELECT * FROM jobs") == []
+    assert await read_rows("SELECT * FROM deliveries") == []
+
+    with closing(sqlite3.connect(database_path(data_dir))) as connection, connection:
+        connection.execute("DROP TRIGGER fail_deliveries")
+    retried = await client.post("/webhooks/razorpay", content=body, headers=headers)
+    assert retried.status_code == 202
+    assert len(await read_rows("SELECT * FROM jobs")) == 1
