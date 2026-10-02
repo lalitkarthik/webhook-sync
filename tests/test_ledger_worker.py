@@ -105,6 +105,7 @@ async def ledger(writer: Writer) -> AsyncIterator[StageRunner]:
         yield ledger_runner(
             writer,
             {"razorpay": adapter},
+            mirror_sinks=("sheets",),
             claimed_by="wsync-test",
             pauses=Pauses(),
             retry_profile="production",
@@ -140,7 +141,9 @@ async def test_a_delivered_captured_payment_becomes_its_ledger_row(
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://wsync.test") as client:
             response = await client.post("/webhooks/razorpay", content=body, headers=headers)
-            await wait_for(read_rows, "SELECT status FROM jobs", [{"status": "done"}])
+            await wait_for(
+                read_rows, "SELECT status FROM jobs WHERE stage = 'ledger'", [{"status": "done"}]
+            )
 
     assert response.status_code == 202
     [row] = await read_rows("SELECT * FROM payments")
@@ -209,7 +212,7 @@ async def test_an_authorized_payment_has_its_fee_and_net_pending(
             "net_minor": None,
         }
     ]
-    assert await read_rows("SELECT status FROM jobs") == [{"status": "done"}]
+    assert await read_rows("SELECT status FROM jobs WHERE stage = 'ledger'") == [{"status": "done"}]
 
 
 async def test_a_failed_payment_gives_a_failed_row(
@@ -233,7 +236,7 @@ async def test_a_failed_payment_gives_a_failed_row(
             "net_minor": None,
         }
     ]
-    assert await read_rows("SELECT status FROM jobs") == [{"status": "done"}]
+    assert await read_rows("SELECT status FROM jobs WHERE stage = 'ledger'") == [{"status": "done"}]
 
 
 async def test_a_payment_still_created_gives_no_row_and_a_done_job(
@@ -247,7 +250,7 @@ async def test_a_payment_still_created_gives_no_row_and_a_done_job(
     await ledger.run_once()
 
     assert await read_rows("SELECT * FROM payments") == []
-    assert await read_rows("SELECT status FROM jobs") == [{"status": "done"}]
+    assert await read_rows("SELECT status FROM jobs WHERE stage = 'ledger'") == [{"status": "done"}]
 
 
 async def test_two_fetches_of_the_same_state_leave_one_row_at_version_1(
@@ -271,7 +274,10 @@ async def test_two_fetches_of_the_same_state_leave_one_row_at_version_1(
     assert await read_rows("SELECT status, row_version, updated_at FROM payments") == [
         {"status": "succeeded", "row_version": 1, "updated_at": "2026-10-02T20:30:00.000000Z"}
     ]
-    assert await read_rows("SELECT status FROM jobs") == [{"status": "done"}, {"status": "done"}]
+    assert await read_rows("SELECT status FROM jobs WHERE stage = 'ledger'") == [
+        {"status": "done"},
+        {"status": "done"},
+    ]
 
 
 async def test_no_transaction_is_open_while_the_fetch_waits(
@@ -299,7 +305,7 @@ async def test_no_transaction_is_open_while_the_fetch_waits(
     answered.set()
     await asyncio.wait_for(running, timeout=5)
 
-    assert await read_rows("SELECT id, status FROM jobs ORDER BY id") == [
+    assert await read_rows("SELECT id, status FROM jobs WHERE stage = 'ledger' ORDER BY id") == [
         {"id": other - 1, "status": "done"},
         {"id": other, "status": "waiting"},
     ]

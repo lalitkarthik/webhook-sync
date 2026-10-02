@@ -82,6 +82,12 @@ class Config:
     sheets: SheetsConfig
     demo: DemoConfig = DemoConfig()
 
+    @property
+    def sinks(self) -> tuple[str, ...]:
+        """The configured sinks' names, one per `[sinks.*]` section: today always `sheets`,
+        which the config requires. Each real ledger change makes one mirror job per sink (A19)."""
+        return ("sheets",)
+
 
 SECRET_NAMES = ("RAZORPAY_KEY_ID", "RAZORPAY_KEY_SECRET", "RAZORPAY_WEBHOOK_SECRET")
 
