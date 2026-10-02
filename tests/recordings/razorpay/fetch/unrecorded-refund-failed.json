@@ -1,7 +1,7 @@
 {
   "unrecorded": true,
   "source": "https://razorpay.com/docs/webhooks/refunds/",
-  "note": "Put together from the refund.failed webhook sample: its payment entity, with its failed refund placed in `refunds` as ?expand[]=refunds returns it. The sample's amount_refunded (190000) and refund_status (partial) are the same snapshot as the other refund samples, so they don't show what a failed refund does to those fields.",
+  "note": "Put together from the refund.failed webhook sample: its payment entity, with its failed refund placed in `refunds` as ?expand[]=refunds returns it. The sample's amount_refunded (190000) and refund_status (partial) are the same snapshot as the other refund samples, so they don't show what a failed refund does to those fields. Redacted: email placeholder; contact and vpa removed; acquirer_data.bank_transaction_id blanked.",
   "request": "GET /v1/payments/{id}?expand[]=refunds&expand[]=card",
   "http": 200,
   "body": {

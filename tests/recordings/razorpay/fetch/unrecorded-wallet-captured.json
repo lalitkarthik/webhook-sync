@@ -1,7 +1,7 @@
 {
   "unrecorded": true,
   "source": "https://razorpay.com/docs/api/payments/fetch-with-id/",
-  "note": "The fetch page's Wallet sample (airtelmoney).",
+  "note": "The fetch page's Wallet sample (airtelmoney). Redacted: email placeholder; contact and vpa removed.",
   "request": "GET /v1/payments/{id}?expand[]=refunds&expand[]=card",
   "http": 200,
   "body": {

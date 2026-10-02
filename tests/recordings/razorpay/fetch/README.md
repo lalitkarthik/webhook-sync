@@ -24,6 +24,8 @@ The fetch is P2's own call, `GET /v1/payments/{id}?expand[]=refunds&expand[]=car
 | `not-found-malformed.json` | Fetch of `abc`: the same 400 |
 | `refunds-unknown-payment.json` | `GET /v1/payments/pay_00000000000000/refunds?count=1`: **200 with an empty list**, not a 400 |
 
+**Paging.** Because `count` only counts the page, it can't show that more refunds exist. The fetch pages through `GET /v1/payments/{id}/refunds` when the expanded `refunds` list holds as many items as a full page could hold, that is, when the item count reaches the page size. Issue #22 settles the exact threshold.
+
 No authorised-but-uncaptured payment exists on the account, and every payment is netbanking in INR, so `card` is `null` on all of them.
 
 ## Unrecorded (Razorpay's documented samples)
@@ -47,4 +49,21 @@ SSL_CERT_FILE=/root/.ccr/ca-bundle.crt uv run python scripts/p2/record_fetch.py 
 uv run python scripts/p2/record_fetch.py samples
 ```
 
-`live` overwrites the files above and adds one per new payment. Check the redaction afterwards with the grep in issue #20.
+`live` overwrites the files above and adds one per new payment. The documented samples are kept already redacted in the script's `SAMPLES`, so the script's source holds no personal data either.
+
+## Redaction check
+
+Run from the repo root after any re-recording. Each command must print `0`, apart from the email one, which must print only `customer@example.com`. The key commands read the values from the environment and never print them.
+
+```bash
+D=tests/recordings/razorpay/fetch
+grep -rlF "$RAZORPAY_KEY_ID" "$D" scripts/p2 | wc -l              # key id
+grep -rlF "$RAZORPAY_KEY_SECRET" "$D" scripts/p2 | wc -l          # key secret
+grep -rnE 'rzp_(live|test)_[A-Za-z0-9]' "$D" scripts/p2 | wc -l  # any key-shaped string
+grep -rhoE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[a-z]+' "$D" scripts/p2 | sort -u  # emails
+grep -rnE '(\+91|\b0?)[6-9][0-9]{9}\b' "$D" scripts/p2 | wc -l    # Indian phone numbers
+grep -rnE --include='*.json' '"(contact|vpa|last4|phone)"' "$D" | wc -l  # contact, VPA, card digits
+grep -rn --include='*.json' '"name"' "$D" | wc -l                        # cardholder name
+```
+
+On 2026-10-02 every count was 0 and the only email was `customer@example.com`. A wider check, `grep -rnE '[0-9]{12,19}' "$D"`, finds only `uber-trace-id` headers and the id `pay_00000000000000`.

@@ -1,7 +1,7 @@
 {
   "unrecorded": true,
   "source": "https://razorpay.com/docs/payments/international-payments/currency-conversion/",
-  "note": "Payment Entity sample for a $1 payment. Documented without `captured` or `card`; fee and tax are in base_currency (paise).",
+  "note": "Payment Entity sample for a $1 payment. Documented without `captured` or `card`; fee and tax are in base_currency (paise). Redacted: email placeholder, contact removed.",
   "request": "GET /v1/payments/{id}?expand[]=refunds&expand[]=card",
   "http": 200,
   "body": {

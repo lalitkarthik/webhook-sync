@@ -1,7 +1,7 @@
 {
   "unrecorded": true,
   "source": "https://razorpay.com/docs/api/payments/fetch-with-id/",
-  "note": "The fetch page's UPI sample: `email` null, `upi` inline (its vpa removed).",
+  "note": "The fetch page's UPI sample: `email` null, `upi` inline. Redacted: contact, vpa and upi.vpa removed; acquirer_data.rrn blanked.",
   "request": "GET /v1/payments/{id}?expand[]=refunds&expand[]=card",
   "http": 200,
   "body": {

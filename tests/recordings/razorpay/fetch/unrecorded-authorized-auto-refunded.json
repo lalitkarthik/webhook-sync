@@ -1,7 +1,7 @@
 {
   "unrecorded": true,
   "source": "https://razorpay.com/docs/payments/payments/capture-settings/",
-  "note": "CONSTRUCTED, not a Razorpay sample: no page shows an uncaptured payment after its auto-refund (G66, spike S-Q7a). The source documents only that uncaptured payments are refunded automatically. This body is the fetch page's Netbanking sample shape with status refunded, captured false, fee and tax null, amount_refunded = amount and refund_status full, as the canceled rule (A7, A22) assumes. Replace it with a recording once S-Q7a runs.",
+  "note": "CONSTRUCTED, not a Razorpay sample: no page shows an uncaptured payment after its auto-refund (G66, spike S-Q7a). The source documents only that uncaptured payments are refunded automatically. This body is the fetch page's Netbanking sample shape with status refunded, captured false, fee and tax null, amount_refunded = amount and refund_status full, as the canceled rule (A7, A22) assumes. Replace it with a recording once S-Q7a runs. Redacted like the others: email placeholder; contact and vpa removed.",
   "request": "GET /v1/payments/{id}?expand[]=refunds&expand[]=card",
   "http": 200,
   "body": {

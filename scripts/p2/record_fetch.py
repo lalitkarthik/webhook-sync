@@ -167,8 +167,9 @@ def live() -> None:
     save("refunds-unknown-payment", c.get("/payments/pay_00000000000000/refunds?count=1"))
 
 
-# Razorpay's documented samples for answers test mode can't produce here. Each is saved as
-# documented apart from redaction; `note` says what, if anything, was put together.
+# Razorpay's documented samples for answers test mode can't produce here. Each is kept here
+# already redacted (the same rules as `redact`), so no sample's personal data is in the repo;
+# `note` says what was removed and what, if anything, was put together.
 FETCH = "https://razorpay.com/docs/api/payments/fetch-with-id/"
 EXPANDED_CARD = "https://razorpay.com/docs/api/payments/fetch-payment-expanded-card/"
 INTERNATIONAL = "https://razorpay.com/docs/payments/international-payments/currency-conversion/"
@@ -179,7 +180,8 @@ SAMPLES: dict[str, dict[str, Any]] = {
     "unrecorded-international-captured": {
         "source": INTERNATIONAL,
         "note": "Payment Entity sample for a $1 payment. Documented without `captured` or "
-        "`card`; fee and tax are in base_currency (paise).",
+        "`card`; fee and tax are in base_currency (paise). Redacted: email placeholder, "
+        "contact removed.",
         "body": {
             "id": "pay_Donb2t6WkJYhfU",
             "entity": "payment",
@@ -195,8 +197,7 @@ SAMPLES: dict[str, dict[str, Any]] = {
             "refund_status": None,
             "description": "Payment at the Dollar Store",
             "card_id": "card_Donb2wk8eC8EDN",
-            "email": "<email>",
-            "contact": "<phone>",
+            "email": "customer@example.com",
             "notes": [],
             "fee": 207,
             "tax": 0,
@@ -208,7 +209,8 @@ SAMPLES: dict[str, dict[str, Any]] = {
     "unrecorded-card-captured-expanded": {
         "source": FETCH,
         "note": "The fetch page's expanded-card Success sample (?expand[]=card): a captured "
-        "Visa debit payment.",
+        "Visa debit payment. Redacted: email placeholder; contact, card.name and card.last4 "
+        "removed; acquirer_data.auth_code blanked.",
         "body": {
             "id": "pay_DG4ZdRK8ZnXC3k",
             "entity": "payment",
@@ -227,8 +229,6 @@ SAMPLES: dict[str, dict[str, Any]] = {
             "card": {
                 "id": "card_LPpN6ubeosLH4g",
                 "entity": "card",
-                "name": "",
-                "last4": "0153",
                 "network": "Visa",
                 "type": "debit",
                 "issuer": None,
@@ -238,8 +238,7 @@ SAMPLES: dict[str, dict[str, Any]] = {
             },
             "bank": None,
             "wallet": None,
-            "email": "<email>",
-            "contact": "<phone>",
+            "email": "customer@example.com",
             "notes": {"address": "Corporate Office"},
             "fee": 100,
             "tax": 0,
@@ -248,14 +247,16 @@ SAMPLES: dict[str, dict[str, Any]] = {
             "error_source": None,
             "error_step": None,
             "error_reason": None,
-            "acquirer_data": {"auth_code": "878694"},
+            "acquirer_data": {"auth_code": "<redacted>"},
             "created_at": 1678452635,
         },
     },
     "unrecorded-card-failed-expanded": {
         "source": EXPANDED_CARD,
         "note": "The expanded-card page's Success sample: a failed RuPay credit payment whose "
-        "notes carry an email and phone (redacted here).",
+        "notes carried an email and a phone. Redacted: email and notes.email placeholder; "
+        "contact, vpa, notes.phone, card.name and card.last4 removed; "
+        "acquirer_data.authentication_reference_number blanked.",
         "body": {
             "id": "pay_H9oR0gLCaVlV6m",
             "entity": "payment",
@@ -275,8 +276,6 @@ SAMPLES: dict[str, dict[str, Any]] = {
             "card": {
                 "id": "card_H9oR0ocen1cmZq",
                 "entity": "card",
-                "name": "Gaurav",
-                "last4": "1213",
                 "network": "RuPay",
                 "type": "credit",
                 "issuer": "UTIB",
@@ -286,10 +285,8 @@ SAMPLES: dict[str, dict[str, Any]] = {
             },
             "bank": None,
             "wallet": None,
-            "vpa": None,
-            "email": "gaurav.kumar@example.com",
-            "contact": "+919000090000",
-            "notes": {"email": "gaurav.kumar@example.com", "phone": "09000090000"},
+            "email": "customer@example.com",
+            "notes": {"email": "customer@example.com"},
             "fee": None,
             "tax": None,
             "error_code": "BAD_REQUEST_ERROR",
@@ -299,14 +296,15 @@ SAMPLES: dict[str, dict[str, Any]] = {
             "error_reason": "incorrect_card_details",
             "acquirer_data": {
                 "auth_code": None,
-                "authentication_reference_number": "100222021120200000000742753928",
+                "authentication_reference_number": "<redacted>",
             },
             "created_at": 1620807547,
         },
     },
     "unrecorded-upi-captured": {
         "source": FETCH,
-        "note": "The fetch page's UPI sample: `email` null, `upi` inline (its vpa removed).",
+        "note": "The fetch page's UPI sample: `email` null, `upi` inline. Redacted: contact, "
+        "vpa and upi.vpa removed; acquirer_data.rrn blanked.",
         "body": {
             "id": "pay_MT3PgKGazkDUUM",
             "entity": "payment",
@@ -324,9 +322,7 @@ SAMPLES: dict[str, dict[str, Any]] = {
             "card_id": None,
             "bank": None,
             "wallet": None,
-            "vpa": "gaurav.kumar@examplebank",
             "email": None,
-            "contact": "+919000090000",
             "notes": [],
             "fee": 24,
             "tax": 4,
@@ -335,18 +331,18 @@ SAMPLES: dict[str, dict[str, Any]] = {
             "error_source": None,
             "error_step": None,
             "error_reason": None,
-            "acquirer_data": {"rrn": "322398320067"},
+            "acquirer_data": {"rrn": "<redacted>"},
             "created_at": 1692694191,
             "upi": {
                 "payer_account_type": "credit_card",
-                "vpa": "gaurav.kumar@examplebank",
                 "flow": "intent",
             },
         },
     },
     "unrecorded-wallet-captured": {
         "source": FETCH,
-        "note": "The fetch page's Wallet sample (airtelmoney).",
+        "note": "The fetch page's Wallet sample (airtelmoney). Redacted: email placeholder; "
+        "contact and vpa removed.",
         "body": {
             "id": "pay_MT4GRFUHBfMCNf",
             "entity": "payment",
@@ -364,9 +360,7 @@ SAMPLES: dict[str, dict[str, Any]] = {
             "card_id": None,
             "bank": None,
             "wallet": "airtelmoney",
-            "vpa": None,
-            "email": "gaurav.kumar@example.com",
-            "contact": "+919000090000",
+            "email": "customer@example.com",
             "notes": [],
             "fee": 5900,
             "tax": 900,
@@ -384,7 +378,9 @@ SAMPLES: dict[str, dict[str, Any]] = {
         "note": "Put together from the refund.failed webhook sample: its payment entity, with "
         "its failed refund placed in `refunds` as ?expand[]=refunds returns it. The sample's "
         "amount_refunded (190000) and refund_status (partial) are the same snapshot as the "
-        "other refund samples, so they don't show what a failed refund does to those fields.",
+        "other refund samples, so they don't show what a failed refund does to those fields. "
+        "Redacted: email placeholder; contact and vpa removed; "
+        "acquirer_data.bank_transaction_id blanked.",
         "body": {
             "id": "pay_FPoJKWQQ8lK13n",
             "entity": "payment",
@@ -404,9 +400,7 @@ SAMPLES: dict[str, dict[str, Any]] = {
             "card_id": None,
             "bank": "HDFC",
             "wallet": None,
-            "vpa": None,
-            "email": "gaurav.kumar@example.com",
-            "contact": "+919000090000",
+            "email": "customer@example.com",
             "notes": [],
             "fee": 11800,
             "tax": 1800,
@@ -415,7 +409,7 @@ SAMPLES: dict[str, dict[str, Any]] = {
             "error_source": None,
             "error_step": None,
             "error_reason": None,
-            "acquirer_data": {"bank_transaction_id": "4827433"},
+            "acquirer_data": {"bank_transaction_id": "<redacted>"},
             "created_at": 1597226379,
             "refunds": {
                 "entity": "collection",
@@ -447,7 +441,8 @@ SAMPLES: dict[str, dict[str, Any]] = {
         "payments are refunded automatically. This body is the fetch page's Netbanking "
         "sample shape with status refunded, captured false, fee and tax null, "
         "amount_refunded = amount and refund_status full, as the canceled rule (A7, A22) "
-        "assumes. Replace it with a recording once S-Q7a runs.",
+        "assumes. Replace it with a recording once S-Q7a runs. Redacted like the others: "
+        "email placeholder; contact and vpa removed.",
         "body": {
             "id": "pay_UnrecordedAutoRf",
             "entity": "payment",
@@ -466,9 +461,7 @@ SAMPLES: dict[str, dict[str, Any]] = {
             "card": None,
             "bank": "HDFC",
             "wallet": None,
-            "vpa": None,
-            "email": "gaurav.kumar@example.com",
-            "contact": "+919000090000",
+            "email": "customer@example.com",
             "notes": [],
             "fee": None,
             "tax": None,
