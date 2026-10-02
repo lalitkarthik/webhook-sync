@@ -44,3 +44,56 @@ async def test_a_signed_payment_captured_is_stored_as_one_new_event(
     assert [(d["event_id"], d["result"], d["status_code"]) for d in deliveries] == [
         ("evt_captured01", "new", 202)
     ]
+
+
+async def test_the_same_delivery_again_is_a_counted_duplicate(
+    client: httpx.AsyncClient, read_rows: ReadRows
+) -> None:
+    body, headers = sign_razorpay(razorpay_sample("payment.captured"), event_id="evt_captured01")
+    first = await client.post("/webhooks/razorpay", content=body, headers=headers)
+
+    again = await client.post("/webhooks/razorpay", content=body, headers=headers)
+
+    assert (first.status_code, again.status_code) == (202, 200)
+    assert len(await read_rows("SELECT * FROM events")) == 1
+    deliveries = await read_rows("SELECT * FROM deliveries ORDER BY id")
+    assert [(d["event_id"], d["result"], d["status_code"]) for d in deliveries] == [
+        ("evt_captured01", "new", 202),
+        ("evt_captured01", "duplicate", 200),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("event_type", "payment_key"),
+    [
+        ("payment.dispute.created", "pay_EFtmUsbwpXwBHI"),
+        ("order.paid", "pay_DESlfW9H8K9uqM"),
+    ],
+)
+async def test_an_unhandled_type_is_stored_as_ignored_with_a_reason_and_keeps_its_payment(
+    client: httpx.AsyncClient, read_rows: ReadRows, event_type: str, payment_key: str
+) -> None:
+    body, headers = sign_razorpay(razorpay_sample(event_type), event_id="evt_ignored01")
+
+    response = await client.post("/webhooks/razorpay", content=body, headers=headers)
+
+    assert response.status_code == 202
+    events = await read_rows("SELECT * FROM events")
+    assert [(e["type"], e["outcome"], e["ignore_reason"], e["payment_key"]) for e in events] == [
+        (event_type, "ignored", "unhandled_type", payment_key)
+    ]
+    deliveries = await read_rows("SELECT result, status_code FROM deliveries")
+    assert deliveries == [{"result": "new", "status_code": 202}]
+
+
+async def test_a_dispute_is_fingerprinted_by_the_dispute_not_the_payment(
+    client: httpx.AsyncClient, read_rows: ReadRows
+) -> None:
+    body, headers = sign_razorpay(razorpay_sample("payment.dispute.created"))
+
+    await client.post("/webhooks/razorpay", content=body, headers=headers)
+
+    [event] = await read_rows("SELECT fingerprint FROM events")
+    assert event["fingerprint"] == fingerprint(
+        "payment.dispute.created", "disp_EsIAlDcoUr8CaQ", "1589907977", "test"
+    )
