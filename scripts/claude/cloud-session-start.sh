@@ -30,7 +30,7 @@ fi
 
 # Which secrets this environment was given: names only.
 for name in RAZORPAY_KEY_ID RAZORPAY_KEY_SECRET RAZORPAY_WEBHOOK_SECRET \
-            GOOGLE_SERVICE_ACCOUNT_JSON SHEET_ID FIRECRAWL_API_KEY; do
+            GOOGLE_SERVICE_ACCOUNT_B64 SHEET_ID FIRECRAWL_API_KEY; do
   if [ -n "${!name}" ]; then echo "env $name: set"; else echo "env $name: not set"; fi
 done
 
