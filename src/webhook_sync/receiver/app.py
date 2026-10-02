@@ -19,6 +19,7 @@ from webhook_sync.clock import utc_now
 from webhook_sync.config import Config
 from webhook_sync.db.migrations import apply_pending
 from webhook_sync.db.writer import Writer
+from webhook_sync.receiver.rate_cap import RateCap
 from webhook_sync.receiver.store import store_delivery
 from webhook_sync.sources.base import Rejection, SourceAdapter
 from webhook_sync.sources.razorpay import EVENT_ID_HEADER, RazorpayAdapter
@@ -28,11 +29,12 @@ log = logging.getLogger("webhook_sync.receiver")
 
 @dataclass
 class Receiver:
-    """What the routes share: the config, the writer and the source adapters."""
+    """What the routes share: the config, the writer, the source adapters and the rate cap."""
 
     config: Config
     writer: Writer
     razorpay: SourceAdapter
+    rate_cap: RateCap
 
 
 def create_app(config: Config, data_dir: Path) -> FastAPI:
@@ -52,6 +54,7 @@ def create_app(config: Config, data_dir: Path) -> FastAPI:
                     mode=config.razorpay.mode,
                     webhook_secrets=config.razorpay_secrets.webhook_secrets,
                 ),
+                rate_cap=RateCap(),
             )
             yield
         finally:
@@ -69,6 +72,10 @@ def create_app(config: Config, data_dir: Path) -> FastAPI:
         received_at = utc_now()
         receiver: Receiver = request.app.state.receiver
         adapter = receiver.razorpay
+        if not receiver.rate_cap.allow(adapter.name):
+            return _rejected(
+                adapter.name, Rejection("rate_capped", 429), request.headers.get(EVENT_ID_HEADER)
+            )
         raw_body = await request.body()
 
         verified = adapter.verify(raw_body, request.headers)
