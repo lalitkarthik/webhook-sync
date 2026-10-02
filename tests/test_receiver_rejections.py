@@ -1,12 +1,17 @@
 """Every rejected request answered with its reason, and counted (seam 1: the HTTP app)."""
 
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from datetime import UTC, datetime
+from pathlib import Path
 
 import httpx
 import pytest
 from support import ReadRows, razorpay_sample, sign_razorpay
 from time_machine import TimeMachineFixture
+
+from webhook_sync.config import Config
+from webhook_sync.receiver.app import create_app
 
 pytestmark = pytest.mark.unrecorded
 
@@ -158,3 +163,28 @@ async def test_a_duplicated_security_header_is_reported_before_a_bad_signature(
     )
 
     assert response.json() == {"rejection": "duplicate_header"}
+
+
+NEW_SECRET = "fixture-webhook-secret-new"
+OLD_SECRET = "fixture-webhook-secret-old"
+
+
+@pytest.mark.parametrize(
+    ("secret", "status_code"), [(NEW_SECRET, 202), (OLD_SECRET, 202), ("neither", 400)]
+)
+async def test_with_two_secrets_a_body_signed_with_either_passes(
+    config: Config, data_dir: Path, secret: str, status_code: int
+) -> None:
+    rotating = replace(
+        config,
+        razorpay_secrets=replace(config.razorpay_secrets, webhook_secrets=(NEW_SECRET, OLD_SECRET)),
+    )
+    body, headers = sign_razorpay(razorpay_sample("payment.captured"), secret=secret)
+
+    app = create_app(rotating, data_dir)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://wsync.test") as client:
+            response = await client.post("/webhooks/razorpay", content=body, headers=headers)
+
+    assert response.status_code == status_code
