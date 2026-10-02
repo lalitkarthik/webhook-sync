@@ -1,4 +1,4 @@
-Status: planned
+Status: implemented
 
 # P1: receive Razorpay events exactly once, and queue their work
 
@@ -123,6 +123,23 @@ The queue offers its six operations, and a stage runner claims, heartbeats, comp
 - Q115 changes the prototype's "without the tests" (Q114) for P1 and adds about 1-2 h; the 8 October GIF date already depends on P0 being done by 4 October.
 - The cloud environment resolves Python to 3.14.0rc2; the scaffolding ticket checks whether a final 3.14 is installable and says so.
 - The design pages were aligned with round 12 in the same planning branch: ports, the Razorpay and demo config sections, `wrong_account`, conflicts logged until alerts exist, the partial body-hash index, `payment_key` on ignored events, and the migration file name.
+
+## Decisions made during the build
+
+Settled by the implementers or in review, within what this spec and the design leave open:
+
+- Python: the final 3.14 (3.14.8) is installable with a newer uv; the bundled uv 0.8.17 only offers 3.14.0rc2 (A27). CI installs the newest final 3.14.
+- Response bodies: a rejection is `{"rejection": "<reason>"}`; a stored delivery `{"result": "new" | "duplicate" | "conflict"}`; a database error 503 `{"error": "database_error"}`; shutting down 503 `{"error": "shutting_down"}`, not counted as a rejection.
+- Ignore reasons: `unhandled_type`, and `no_payment` for a handled type that names no payment (edge case F8; stored, answered 202, no job). A signed body with a lone UTF-16 surrogate is `malformed`.
+- The rate cap's reason is `rate_capped`; 1 MB is 1,048,576 bytes; a garbage `Content-Length` is ignored and the limit enforced while streaming.
+- Rejection counts are written once their minute has closed (on the next request, an idle tick, or shutdown); a minute written twice adds up.
+- A body `account_id` of `null` counts as missing.
+- `.env` is read next to the config file. `[service] timezone` defaults to `Asia/Kolkata` (Q20). A secret in the TOML is caught by key name and by matching the three secret values. A refusal exits with code 2.
+- Times are stored as `YYYY-MM-DDTHH:MM:SS.ffffffZ` text.
+- `complete` writes an `ok` attempts row; a reaped job gets `last_error` "lease expired", class `retry`; an unclassified exception from a stage's work, its writes or `complete` sends the job to dead; a failed runner pass is logged and the runner goes on.
+- The reaper's first pass is 30 s after start (startup has just reclaimed every running job). Startup reclaim and shutdown release cover every `running` job: one server per database makes them all ours (ADR 0007).
+- The writer rolls back any transaction whose `BEGIN`, work or `COMMIT` is cancelled or fails, so a runner cancelled at the 20 s limit can't block the release.
+- The demo switch counts an attempt only once its delivery has committed; its log lines add `attempt`, `received_at` and `body_sha256`.
 
 ## Assumptions
 
