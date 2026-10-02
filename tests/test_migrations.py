@@ -10,6 +10,7 @@ from webhook_sync.config import Config
 from webhook_sync.receiver.app import create_app
 
 P1_TABLES = {"events", "deliveries", "rejection_counts", "jobs", "attempts", "schema_version"}
+P2_TABLES = {"payments"}
 
 
 async def start_and_stop(config: Config, data_dir: Path) -> None:
@@ -18,7 +19,7 @@ async def start_and_stop(config: Config, data_dir: Path) -> None:
         pass
 
 
-async def test_the_first_start_creates_every_p1_table_and_records_version_1(
+async def test_the_first_start_creates_every_table_and_records_each_version(
     config: Config,
     data_dir: Path,
     read_rows: ReadRows,
@@ -29,9 +30,10 @@ async def test_the_first_start_creates_every_p1_table_and_records_version_1(
     await start_and_stop(config, data_dir)
 
     tables = await read_rows("SELECT name FROM sqlite_master WHERE type = 'table'")
-    assert {t["name"] for t in tables} >= P1_TABLES
+    assert {t["name"] for t in tables} >= P1_TABLES | P2_TABLES
     assert await read_rows("SELECT version, applied_at FROM schema_version") == [
-        {"version": 1, "applied_at": "2026-10-02T09:00:00.000000Z"}
+        {"version": 1, "applied_at": "2026-10-02T09:00:00.000000Z"},
+        {"version": 2, "applied_at": "2026-10-02T09:00:00.000000Z"},
     ]
 
 

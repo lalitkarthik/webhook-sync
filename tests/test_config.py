@@ -2,9 +2,10 @@
 
 from pathlib import Path
 
+import pytest
 from support import TEST_ACCOUNT, TEST_SPREADSHEET_ID
 
-from webhook_sync.config import load_config
+from webhook_sync.config import ConfigError, load_config
 
 MINIMAL_TOML = f"""
 [service]
@@ -63,3 +64,26 @@ def test_secrets_never_appear_in_the_configs_repr(tmp_path: Path) -> None:
     config = load_config(write_config(tmp_path, DOTENV), environ={})
 
     assert "dotenv" not in repr(config)
+
+
+def test_the_fetch_calls_razorpays_api_unless_api_url_points_elsewhere(tmp_path: Path) -> None:
+    default = load_config(write_config(tmp_path / "default", DOTENV), environ={})
+    path = write_config(tmp_path / "faked", DOTENV)
+    path.write_text(
+        MINIMAL_TOML.replace("[sinks.sheets]", 'api_url = "http://127.0.0.1:9/"\n\n[sinks.sheets]')
+    )
+
+    faked = load_config(path, environ={})
+
+    assert default.razorpay.api_url == "https://api.razorpay.com"
+    assert faked.razorpay.api_url == "http://127.0.0.1:9"
+
+
+def test_an_api_url_that_is_not_an_http_address_refuses_to_start(tmp_path: Path) -> None:
+    path = write_config(tmp_path, DOTENV)
+    path.write_text(
+        MINIMAL_TOML.replace("[sinks.sheets]", 'api_url = "api.razorpay.com"\n\n[sinks.sheets]')
+    )
+
+    with pytest.raises(ConfigError, match=r"sources\.razorpay\.api_url"):
+        load_config(path, environ={})

@@ -13,6 +13,7 @@ mode = "test"                       # secrets: RAZORPAY_KEY_ID, RAZORPAY_KEY_SEC
                                     # RAZORPAY_WEBHOOK_SECRET (comma-separated, newest first)
 account = "acc_XXXXXXXXXXXXXX"      # or the bare Merchant ID from the Dashboard
 metadata_keys = ["order_id"]
+# api_url = "https://api.razorpay.com"  # the default; only tests and fakes point it elsewhere
 # [sources.stripe] is refused while Stripe is parked (Q103): mode, account, metadata_keys;
 # secrets STRIPE_WEBHOOK_SECRETS (newest first), STRIPE_RESTRICTED_KEY
 

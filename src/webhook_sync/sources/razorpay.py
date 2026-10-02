@@ -4,19 +4,33 @@ Signature: `x-razorpay-signature`, hex HMAC-SHA256 of the raw body, no timestamp
 the SDK (constant time). Event id: the `x-razorpay-event-id` header, which the signature doesn't
 cover. Razorpay events carry no mode; the configured mode is used, and the key prefix is checked at
 start. Every exception becomes a rejection reason, never a 500.
+
+Fetch: one call, `GET /v1/payments/{id}?expand[]=refunds&expand[]=card`, made directly with
+async httpx (basic auth, a 10 s timeout, A11), never the synchronous SDK. `payment_row` maps the
+answer to a business row, a pure function (sources.md, "Fetch").
 """
 
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
+import httpx
 from razorpay import Utility  # pyright: ignore[reportMissingTypeStubs]
 from razorpay.errors import SignatureVerificationError  # pyright: ignore[reportMissingTypeStubs]
 
 from webhook_sync.config import Mode
-from webhook_sync.sources.base import EventDescription, Rejection, VerifiedDelivery
+from webhook_sync.queue import Failure
+from webhook_sync.sources.base import (
+    BusinessRow,
+    EventDescription,
+    Fetched,
+    FetchResult,
+    PaymentStatus,
+    Rejection,
+    VerifiedDelivery,
+)
 
 SIGNATURE_HEADER = "x-razorpay-signature"
 EVENT_ID_HEADER = "x-razorpay-event-id"
@@ -71,13 +85,49 @@ _ENTITY_FIELDS = frozenset(
 _PAYMENT_KEY_PATHS = (("payment", "id"), ("refund", "payment_id"), ("dispute", "payment_id"))
 
 
+FETCH_TIMEOUT = timedelta(seconds=10)
+"""How long one fetch may take before it is given up and retried (A11)."""
+
+
+def api_client(api_url: str, key_id: str, key_secret: str) -> httpx.AsyncClient:
+    """The client every Razorpay API call goes through: basic auth with the key, 10 s timeout."""
+    return httpx.AsyncClient(
+        base_url=api_url,
+        auth=httpx.BasicAuth(key_id, key_secret),
+        timeout=FETCH_TIMEOUT.total_seconds(),
+    )
+
+
 class RazorpayAdapter:
     name = "razorpay"
 
-    def __init__(self, *, mode: Mode, account: str, webhook_secrets: Sequence[str]) -> None:
+    def __init__(
+        self,
+        *,
+        mode: Mode,
+        account: str,
+        webhook_secrets: Sequence[str],
+        api: httpx.AsyncClient,
+    ) -> None:
         self._mode = mode
         self._account = account
         self._secrets = tuple(webhook_secrets)
+        self._api = api
+
+    async def fetch(self, payment_key: str) -> FetchResult:
+        """The payment's current state, with its refunds and card expanded."""
+        try:
+            response = await self._api.get(
+                f"/v1/payments/{payment_key}",
+                params=[("expand[]", "refunds"), ("expand[]", "card")],
+            )
+        except httpx.TransportError as error:  # a timeout, a refused or dropped connection
+            return Failure(f"fetch failed: {type(error).__name__}", "retry")
+        response.raise_for_status()
+        return Fetched(cast(dict[str, Any], response.json()))
+
+    def to_row(self, state: Mapping[str, Any]) -> BusinessRow | None:
+        return payment_row(state)
 
     def verify(self, raw_body: bytes, headers: Mapping[str, str]) -> VerifiedDelivery | Rejection:
         try:
@@ -220,3 +270,41 @@ def _entity_field(body: Mapping[str, Any], entity_name: str, field: str) -> str 
             return None
         node = cast(dict[str, object], node).get(key)
     return node if isinstance(node, str) and node else None
+
+
+_STATUSES: dict[str, PaymentStatus] = {
+    "authorized": "authorized",
+    "captured": "succeeded",
+    "failed": "failed",
+}
+
+
+def payment_row(state: Mapping[str, Any]) -> BusinessRow | None:
+    """A fetched Razorpay payment as its business row, or None while it is still `created`.
+
+    Fee and fee tax (GST) are null until capture: pending. They are in the settlement currency
+    (`base_currency`, else `currency`), and net is `(base_amount or amount) - fee` (Q130).
+    """
+    source_status: str = state["status"]
+    if source_status == "created":
+        return None  # nothing attempted yet: no row (G41)
+    status = _STATUSES.get(source_status)
+    if status is None:
+        raise ValueError(f"unmapped Razorpay payment status {source_status!r}")
+    amount: int = state["amount"]
+    fee: int | None = state.get("fee")
+    created_at = state.get("created_at")
+    return BusinessRow(
+        payment_id=state["id"],
+        status=status,
+        source_status=source_status,
+        amount_minor=amount,
+        currency=state["currency"],
+        source_created_at=(
+            datetime.fromtimestamp(created_at, UTC) if isinstance(created_at, int) else None
+        ),
+        fee_minor=fee,
+        fee_tax_minor=state.get("tax"),
+        net_minor=None if fee is None else (state.get("base_amount") or amount) - fee,
+        settlement_currency=state.get("base_currency") or state["currency"],
+    )

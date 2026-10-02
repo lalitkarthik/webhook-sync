@@ -6,9 +6,7 @@ attempts; each is a `deliveries` row with status 500 and a log line (A6, Q120).
 
 import hashlib
 import logging
-import sqlite3
 from collections.abc import AsyncIterator
-from contextlib import closing
 from pathlib import Path
 
 import httpx
@@ -18,12 +16,12 @@ from support import (
     TEST_KEY_SECRET,
     TEST_WEBHOOK_SECRET,
     ReadRows,
+    execute_aside,
     razorpay_sample,
     sign_razorpay,
 )
 
 from webhook_sync.config import Config
-from webhook_sync.db.files import database_path
 from webhook_sync.receiver.app import create_app
 
 pytestmark = pytest.mark.unrecorded
@@ -122,16 +120,15 @@ async def test_an_attempt_answered_503_by_a_database_error_is_not_counted(
     data_dir: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    with closing(sqlite3.connect(database_path(data_dir))) as connection, connection:
-        connection.execute(
-            "CREATE TRIGGER fail_deliveries BEFORE INSERT ON deliveries "
-            "BEGIN SELECT RAISE(ABORT, 'forced failure'); END"
-        )
+    await execute_aside(
+        data_dir,
+        "CREATE TRIGGER fail_deliveries BEFORE INSERT ON deliveries "
+        "BEGIN SELECT RAISE(ABORT, 'forced failure'); END",
+    )
     body, headers = sign_razorpay(razorpay_sample("payment.captured"), event_id="evt_rolled01")
     failed = await demo_client.post("/webhooks/razorpay", content=body, headers=headers)
     assert failed.status_code == 503
-    with closing(sqlite3.connect(database_path(data_dir))) as connection, connection:
-        connection.execute("DROP TRIGGER fail_deliveries")
+    await execute_aside(data_dir, "DROP TRIGGER fail_deliveries")
 
     with caplog.at_level(logging.INFO):
         statuses = [
