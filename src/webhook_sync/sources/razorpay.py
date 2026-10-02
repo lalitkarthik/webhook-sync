@@ -352,6 +352,17 @@ def _method(state: Mapping[str, Any]) -> str | None:
     return f"{method} ({detail})" if isinstance(detail, str) and detail else method
 
 
+class BadAmount(ValueError):
+    """The source answered an amount that is negative or not an integer: bad data, never
+    written. The stage runner sends the job to dead with this message (A14, edge case D4)."""
+
+
+def _amount(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise BadAmount(f"bad amount from Razorpay: {value!r} is not a non-negative integer")
+    return value
+
+
 def payment_row(
     state: Mapping[str, Any], *, metadata_keys: Sequence[str] = ()
 ) -> BusinessRow | None:
@@ -361,11 +372,13 @@ def payment_row(
     refunded by its processed refunds against the amount; `refunded` uncaptured is canceled (A7).
     Fee and fee tax (GST) are null until capture: pending. They are in the settlement currency
     (`base_currency`, else `currency`), and net is `(base_amount or amount) - fee` (Q130).
+    Metadata is the `metadata_keys` found in `notes`, values as given (Q131). A negative or
+    non-integer amount raises `BadAmount`; an unknown currency is written as given (A14).
     """
     source_status: str = state["status"]
     if source_status == "created":
         return None  # nothing attempted yet: no row (G41)
-    amount: int = state["amount"]
+    amount = _amount(state.get("amount"))
     refunded = _processed_refunds(state)
     status = _status(source_status, captured=state.get("captured") is True)
     if status == "succeeded" and refunded > 0:

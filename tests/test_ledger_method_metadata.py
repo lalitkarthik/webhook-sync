@@ -268,3 +268,57 @@ async def test_a_upi_payment_with_no_email_keeps_none(
     assert await read_rows("SELECT method, customer_email, description FROM payments") == [
         {"method": "upi", "customer_email": None, "description": "#MLXS5jI0oFNX2a"}
     ]
+
+
+async def test_an_international_payment_has_its_fee_and_net_in_the_settlement_currency(
+    writer: Writer, ledger: StageRunner, razorpay: respx.MockRouter, read_rows: ReadRows
+) -> None:
+    # $1.00 settled as ₹71.29, fee ₹2.07 (Razorpay's currency-conversion sample).
+    await fetch_once(writer, ledger, razorpay, recorded_fetch("unrecorded-international-captured"))
+
+    assert await read_rows(
+        "SELECT status, amount_minor, currency, fee_minor, fee_tax_minor, net_minor,"
+        " settlement_currency, settlement_minor FROM payments"
+    ) == [
+        {
+            "status": "succeeded",
+            "amount_minor": 100,
+            "currency": "USD",
+            "fee_minor": 207,
+            "fee_tax_minor": 0,
+            "net_minor": 6922,
+            "settlement_currency": "INR",
+            "settlement_minor": None,
+        }
+    ]
+
+
+async def test_an_unknown_currency_is_still_written(
+    writer: Writer, ledger: StageRunner, razorpay: respx.MockRouter, read_rows: ReadRows
+) -> None:
+    state = {**recorded_fetch("payment-captured-pay_Tj9rKBOXWcsMeE"), "currency": "XQZ"}
+
+    await fetch_once(writer, ledger, razorpay, state)
+
+    assert await read_rows("SELECT currency, amount_minor FROM payments") == [
+        {"currency": "XQZ", "amount_minor": 50000}
+    ]
+    assert await read_rows("SELECT status FROM jobs") == [{"status": "done"}]
+
+
+@pytest.mark.parametrize("amount", [-100, 499.5, "50000", True, None])
+async def test_a_negative_or_non_integer_amount_sends_the_job_to_dead_with_no_row(
+    writer: Writer,
+    ledger: StageRunner,
+    razorpay: respx.MockRouter,
+    read_rows: ReadRows,
+    amount: object,
+) -> None:
+    state = {**recorded_fetch("payment-captured-pay_Tj9rKBOXWcsMeE"), "amount": amount}
+
+    await fetch_once(writer, ledger, razorpay, state)
+
+    assert await read_rows("SELECT * FROM payments") == []
+    [job] = await read_rows("SELECT status, last_error FROM jobs")
+    assert job["status"] == "dead"
+    assert "amount" in job["last_error"]

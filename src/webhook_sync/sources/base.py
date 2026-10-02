@@ -70,8 +70,9 @@ class BusinessRow:
     """A payment's business columns as its source reports them now (data-model.md, `payments`).
 
     Amounts are integers in minor units. A null fee, fee tax or net is pending, not zero.
-    `metadata` holds the configured metadata keys found, each value as the source gave it. The ledger adds the key's source and
-    account and the bookkeeping columns (`row_hash`, `row_version`, `via`, ...).
+    `metadata` holds the configured metadata keys found, each value as the source gave it. The
+    ledger adds the key's source and account and the bookkeeping columns (`row_hash`,
+    `row_version`, `via`, ...).
     """
 
     payment_id: str
