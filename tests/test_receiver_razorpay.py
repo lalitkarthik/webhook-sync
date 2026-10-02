@@ -172,3 +172,15 @@ async def test_garbage_is_a_4xx_never_a_500_and_stores_nothing(
     assert response.json()["rejection"] in {"bad_signature", "malformed", "missing_id"}
     assert await read_rows("SELECT * FROM events") == []
     assert await read_rows("SELECT * FROM deliveries") == []
+
+
+async def test_a_signed_body_nested_too_deeply_to_parse_is_malformed(
+    client: httpx.AsyncClient, read_rows: ReadRows
+) -> None:
+    body, headers = sign_razorpay(b"[" * 200_000 + b"]" * 200_000)
+
+    response = await client.post("/webhooks/razorpay", content=body, headers=headers)
+
+    assert response.status_code == 400
+    assert response.json() == {"rejection": "malformed"}
+    assert await read_rows("SELECT * FROM events") == []

@@ -36,6 +36,8 @@ class StoredDelivery:
     """For a conflict, the fingerprint of the event kept."""
     attempt: int | None = None
     """With the demo fail-first switch on, this delivery's attempt number for its event id."""
+    job_id: int | None = None
+    """For a new handled event, the ledger job it was stored with or folded into."""
 
 
 async def store_delivery(
@@ -83,8 +85,9 @@ async def store_delivery(
             .returning(events.c.event_id)
         )
         if inserted:
+            job_id = None
             if description.handled:
-                await _enqueue_ledger_job(
+                job_id = await _enqueue_ledger_job(
                     tx,
                     source=source,
                     account=account,
@@ -93,7 +96,7 @@ async def store_delivery(
                     retry_profile=retry_profile,
                     now=received_at,
                 )
-            stored = StoredDelivery("new", 202, delivery.event_id)
+            stored = StoredDelivery("new", 202, delivery.event_id, job_id=job_id)
         else:
             stored = await _repeat(tx, source, delivery, description.fingerprint)
         if fail_first is not None:
@@ -125,10 +128,11 @@ async def _enqueue_ledger_job(
     payment_key: str | None,
     retry_profile: RetryProfile,
     now: datetime,
-) -> None:
+) -> int:
     """Enqueue the payment's ledger job and point the event at it (`events.job_id`, F17)."""
-    if payment_key is None:  # the adapter rejects a handled event that names no payment
-        raise ValueError(f"handled event {event_id} names no payment")
+    # A handled event always names its payment: the adapter stores one that doesn't as
+    # ignored with reason `no_payment`.
+    assert payment_key is not None
     job_id = await enqueue(
         tx,
         stage="ledger",
@@ -145,6 +149,7 @@ async def _enqueue_ledger_job(
         .where(events.c.source == source, events.c.event_id == event_id)
         .values(job_id=job_id)
     )
+    return job_id
 
 
 async def _repeat(

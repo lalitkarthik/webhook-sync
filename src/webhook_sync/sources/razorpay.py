@@ -103,7 +103,7 @@ class RazorpayAdapter:
             return Rejection("bad_signature")
         try:
             body: object = json.loads(text)
-        except ValueError:
+        except ValueError, RecursionError:
             return Rejection("malformed")
         if not _encodes_as_utf8(body) or not isinstance(body, dict):
             return Rejection("malformed")

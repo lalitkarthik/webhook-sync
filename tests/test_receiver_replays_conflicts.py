@@ -180,3 +180,16 @@ async def test_the_stored_payload_of_every_documented_sample_keeps_only_allow_li
         assert set(entity) <= ENTITY_FIELDS, name
         assert entity["id"] == sample["payload"][name]["entity"]["id"]
         assert not {"email", "contact", "notes", "card", "vpa", "bank"} & set(entity)
+
+
+async def test_the_delivery_log_names_the_job_of_a_new_handled_event(
+    client: httpx.AsyncClient, read_rows: ReadRows, caplog: pytest.LogCaptureFixture
+) -> None:
+    body, headers = sign_razorpay(razorpay_sample("payment.captured"), event_id="evt_jobid01")
+
+    with caplog.at_level(logging.INFO):
+        await client.post("/webhooks/razorpay", content=body, headers=headers)
+
+    [job] = await read_rows("SELECT id FROM jobs")
+    [stored] = records(caplog, "delivery stored")
+    assert stored.__dict__["job_id"] == job["id"]

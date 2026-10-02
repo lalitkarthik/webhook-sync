@@ -57,6 +57,8 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         writer = await Writer.open(data_dir)
         try:
+            # Under `wsync serve`, start() has already migrated under the lock and this is a
+            # no-op; it migrates an app built in process (tests).
             applied = await apply_pending(writer)
             if applied:
                 log.info("migrations applied: %s", ", ".join(f"{v:04d}" for v in applied))
@@ -164,6 +166,7 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
             "source": adapter.name,
             "event_id": stored.event_id,
             "payment_key": description.payment_key,
+            "job_id": stored.job_id,
             "result": stored.result,
             "status_code": stored.status_code,
             "reason": description.ignore_reason,
