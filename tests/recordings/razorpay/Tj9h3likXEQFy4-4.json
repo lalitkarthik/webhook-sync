@@ -1,0 +1,32 @@
+{
+  "received_at": "2026-10-02T19:29:35.672+00:00",
+  "epoch": 1790969375.672,
+  "path": "/webhooks/razorpay",
+  "event_id": "Tj9h3likXEQFy4",
+  "signature": "87ef3425245a6ebe971d3ee14b355590f9fd976ff7897acd0859073a5a9485eb",
+  "user_agent": "Razorpay-Webhook/v1",
+  "body_sha256": "251d4cd30f08a28bdc41b3300508741a472bc6a121dcf99b08db802b9156ef28",
+  "body_bytes": 748,
+  "signature_valid": true,
+  "event": "payment.authorized",
+  "attempt": 4,
+  "answer": 500,
+  "headers": {
+    "Host": "wsync-demo.shares.zrok.io",
+    "User-Agent": "Razorpay-Webhook/v1",
+    "Content-Length": "748",
+    "Accept-Encoding": "gzip",
+    "Content-Type": "application/json",
+    "Request-Id": "Tj9h3likXEQFy4",
+    "X-Amzn-Trace-Id": "Root=1-6ac0061f-74e20be11179094a4cae7992",
+    "X-Forwarded-For": "52.66.76.63, 10.22.2.224",
+    "X-Forwarded-Port": "443",
+    "X-Forwarded-Proto": "https",
+    "X-Proxy": "zrok",
+    "X-Razorpay-Event-Id": "Tj9h3likXEQFy4",
+    "X-Razorpay-Signature": "87ef3425245a6ebe971d3ee14b355590f9fd976ff7897acd0859073a5a9485eb"
+  },
+  "body": "{\"entity\":\"event\",\"account_id\":\"acc_Tj5AnsI7BH2aLR\",\"event\":\"payment.authorized\",\"contains\":[\"payment\"],\"payload\":{\"payment\":{\"entity\":{\"id\":\"pay_Tj9gmEfed6kRqO\",\"entity\":\"payment\",\"amount\":50000,\"currency\":\"INR\",\"status\":\"authorized\",\"order_id\":\"order_Tj9f2VW29YPycU\",\"invoice_id\":null,\"international\":false,\"method\":\"netbanking\",\"amount_refunded\":0,\"refund_status\":null,\"captured\":false,\"description\":null,\"card_id\":null,\"bank\":\"ALLA\",\"wallet\":null,\"vpa\":null,\"email\":\"p0@example.com\",\"contact\":\"+919123456780\",\"notes\":[],\"fee\":null,\"tax\":null,\"error_code\":null,\"error_description\":null,\"error_source\":null,\"error_step\":null,\"error_reason\":null,\"acquirer_data\":{\"bank_transaction_id\":\"6844830\"},\"created_at\":1790969339}}},\"created_at\":1790969354}",
+  "body_base64": null,
+  "redacted": "The payer mobile number in the body was replaced by the dummy +919123456780 (same length) after recording. body_sha256 and signature describe the bytes as received, so this body no longer verifies."
+}

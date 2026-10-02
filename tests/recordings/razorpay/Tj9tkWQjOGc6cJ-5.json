@@ -1,0 +1,32 @@
+{
+  "received_at": "2026-10-02T19:41:59.208+00:00",
+  "epoch": 1790970119.209,
+  "path": "/webhooks/razorpay",
+  "event_id": "Tj9tkWQjOGc6cJ",
+  "signature": "79582bb45b24d63a01d00eca3128bcb608892ac9db6fbcaefc624a2d5a9571a1",
+  "user_agent": "Razorpay-Webhook/v1",
+  "body_sha256": "3a991cb6b2ddd633d45d92c65c883871c5034f945a6d753cd608fbbfe9ac897c",
+  "body_bytes": 1453,
+  "signature_valid": true,
+  "event": "refund.created",
+  "attempt": 5,
+  "answer": 200,
+  "headers": {
+    "Host": "wsync-demo.shares.zrok.io",
+    "User-Agent": "Razorpay-Webhook/v1",
+    "Content-Length": "1453",
+    "Accept-Encoding": "gzip",
+    "Content-Type": "application/json",
+    "Request-Id": "Tj9tkWQjOGc6cJ",
+    "X-Amzn-Trace-Id": "Root=1-6ac00906-799d60bc5675d71c43ca8410",
+    "X-Forwarded-For": "52.66.75.174, 10.22.1.71",
+    "X-Forwarded-Port": "443",
+    "X-Forwarded-Proto": "https",
+    "X-Proxy": "zrok",
+    "X-Razorpay-Event-Id": "Tj9tkWQjOGc6cJ",
+    "X-Razorpay-Signature": "79582bb45b24d63a01d00eca3128bcb608892ac9db6fbcaefc624a2d5a9571a1"
+  },
+  "body": "{\"account_id\":\"acc_Tj5AnsI7BH2aLR\",\"contains\":[\"refund\",\"payment\"],\"created_at\":1790970047,\"entity\":\"event\",\"event\":\"refund.created\",\"payload\":{\"payment\":{\"entity\":{\"account_id\":null,\"acquirer_data\":{\"bank_transaction_id\":\"6844830\"},\"amount\":50000,\"amount_refunded\":20000,\"amount_transferred\":0,\"bank\":\"ALLA\",\"base_amount\":50000,\"captured\":true,\"card_id\":null,\"contact\":\"+919123456780\",\"created_at\":1790969339,\"currency\":\"INR\",\"customer_id\":null,\"description\":null,\"device_id\":null,\"email\":\"p0@example.com\",\"entity\":\"payment\",\"error_code\":null,\"error_description\":null,\"error_reason\":null,\"error_source\":null,\"error_step\":null,\"fee\":1180,\"fee_bearer\":null,\"gateway_merchant_id\":null,\"gateway_provider\":\"Razorpay\",\"gateway_terminal_id\":null,\"id\":\"pay_Tj9gmEfed6kRqO\",\"internal_status\":null,\"international\":false,\"invoice_id\":null,\"method\":\"netbanking\",\"notes\":[],\"optimizer_provider\":null,\"order_id\":\"order_Tj9f2VW29YPycU\",\"provider\":null,\"receiver_type\":null,\"refund_status\":\"partial\",\"settled_by\":null,\"source_channel\":\"online\",\"status\":\"captured\",\"store_id\":null,\"tax\":180,\"terminal_id\":null,\"token_id\":null,\"vpa\":null,\"wallet\":null}},\"refund\":{\"entity\":{\"acquirer_data\":{\"arn\":\"10000000000000\"},\"amount\":10000,\"batch_id\":null,\"created_at\":1790970043,\"currency\":\"INR\",\"entity\":\"refund\",\"id\":\"rfnd_Tj9tB2hm5WLvww\",\"notes\":[],\"payment_id\":\"pay_Tj9gmEfed6kRqO\",\"receipt\":null,\"speed_processed\":\"normal\",\"speed_requested\":\"normal\",\"status\":\"processed\"}}}}",
+  "body_base64": null,
+  "redacted": "The payer mobile number in the body was replaced by the dummy +919123456780 (same length) after recording. body_sha256 and signature describe the bytes as received, so this body no longer verifies."
+}

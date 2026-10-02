@@ -1,0 +1,22 @@
+{
+  "request": "GET /refunds/rfnd_Tj9tMhKlOulF3Q",
+  "http": 200,
+  "at": 1790970071.2802973,
+  "body": {
+    "acquirer_data": {
+      "arn": "10000000000000"
+    },
+    "amount": 10000,
+    "batch_id": null,
+    "created_at": 1790970053,
+    "currency": "INR",
+    "entity": "refund",
+    "id": "rfnd_Tj9tMhKlOulF3Q",
+    "notes": [],
+    "payment_id": "pay_Tj9gmEfed6kRqO",
+    "receipt": null,
+    "speed_processed": "normal",
+    "speed_requested": "optimum",
+    "status": "processed"
+  }
+}

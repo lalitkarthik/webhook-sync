@@ -1,0 +1,38 @@
+{
+  "request": "GET /payments/pay_Tj9rKBOXWcsMeE",
+  "http": 200,
+  "at": 1790969987.7430074,
+  "body": {
+    "id": "pay_Tj9rKBOXWcsMeE",
+    "entity": "payment",
+    "amount": 50000,
+    "currency": "INR",
+    "status": "authorized",
+    "order_id": "order_Tj9pfte3cmgCOG",
+    "invoice_id": null,
+    "international": false,
+    "method": "netbanking",
+    "amount_refunded": 0,
+    "refund_status": null,
+    "captured": false,
+    "description": null,
+    "card_id": null,
+    "bank": "CNRB",
+    "wallet": null,
+    "vpa": null,
+    "email": "p0@example.com",
+    "contact": "+919123456780",
+    "notes": [],
+    "fee": null,
+    "tax": null,
+    "error_code": null,
+    "error_description": null,
+    "error_source": null,
+    "error_step": null,
+    "error_reason": null,
+    "acquirer_data": {
+      "bank_transaction_id": "5952502"
+    },
+    "created_at": 1790969938
+  }
+}

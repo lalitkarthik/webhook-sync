@@ -1,0 +1,31 @@
+{
+  "received_at": "2026-10-02T19:40:23.178+00:00",
+  "epoch": 1790970023.179,
+  "path": "/webhooks/razorpay",
+  "event_id": "Tj9sobwBnTgcRB",
+  "signature": "8f8c331fd060a3c91ab254364d3187911cd4ac11f2eaa39f45be546113b3e317",
+  "user_agent": "Razorpay-Webhook/v1",
+  "body_sha256": "79dbacd3e782717600174481718141f221f2754dc53cf563afc220227efad35d",
+  "body_bytes": 892,
+  "signature_valid": true,
+  "event": "payment.failed",
+  "attempt": 1,
+  "answer": 500,
+  "headers": {
+    "Host": "wsync-demo.shares.zrok.io",
+    "User-Agent": "Razorpay-Webhook/v1",
+    "Content-Length": "892",
+    "Accept-Encoding": "gzip",
+    "Content-Type": "application/json",
+    "Request-Id": "Tj9sobwBnTgcRB",
+    "X-Amzn-Trace-Id": "Root=1-6ac008a6-704ab8c66d1d54ab6c36ae08",
+    "X-Forwarded-For": "52.66.76.63, 10.22.0.127",
+    "X-Forwarded-Port": "443",
+    "X-Forwarded-Proto": "https",
+    "X-Proxy": "zrok",
+    "X-Razorpay-Event-Id": "Tj9sobwBnTgcRB",
+    "X-Razorpay-Signature": "8f8c331fd060a3c91ab254364d3187911cd4ac11f2eaa39f45be546113b3e317"
+  },
+  "body": "{\"entity\":\"event\",\"account_id\":\"acc_Tj5AnsI7BH2aLR\",\"event\":\"payment.failed\",\"contains\":[\"payment\"],\"payload\":{\"payment\":{\"entity\":{\"id\":\"pay_Tj9sm13R8h2378\",\"entity\":\"payment\",\"amount\":50000,\"currency\":\"INR\",\"status\":\"failed\",\"order_id\":\"order_Tj9sW2HbfQCR9T\",\"invoice_id\":null,\"international\":false,\"method\":\"netbanking\",\"amount_refunded\":0,\"refund_status\":null,\"captured\":false,\"description\":null,\"card_id\":null,\"bank\":\"CNRB\",\"wallet\":null,\"vpa\":null,\"email\":\"p0@example.com\",\"contact\":\"+919123456780\",\"notes\":[],\"fee\":null,\"tax\":null,\"error_code\":\"BAD_REQUEST_ERROR\",\"error_description\":\"Your payment didn't go through as it was declined by the bank. Try another payment method or contact your bank.\",\"error_source\":\"bank\",\"error_step\":\"payment_authorization\",\"error_reason\":\"payment_failed\",\"acquirer_data\":{\"bank_transaction_id\":null},\"created_at\":1790970020}}},\"created_at\":1790970022}",
+  "body_base64": null
+}

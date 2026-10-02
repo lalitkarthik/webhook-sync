@@ -1,0 +1,32 @@
+{
+  "received_at": "2026-10-02T19:29:18.093+00:00",
+  "epoch": 1790969358.094,
+  "path": "/webhooks/razorpay",
+  "event_id": "Tj9h5yWwCUvsUn",
+  "signature": "4e852b6b2f0dc700f5e9bb0fae1bcf4670af16c5aaf671de79c1a6ca0c7c1a61",
+  "user_agent": "Razorpay-Webhook/v1",
+  "body_sha256": "9c9ea31d8c926d91e7dee3fb3aa37a8404151420c7bf86b9feb15c211447eb78",
+  "body_bytes": 1032,
+  "signature_valid": true,
+  "event": "order.paid",
+  "attempt": 2,
+  "answer": 500,
+  "headers": {
+    "Host": "wsync-demo.shares.zrok.io",
+    "User-Agent": "Razorpay-Webhook/v1",
+    "Content-Length": "1032",
+    "Accept-Encoding": "gzip",
+    "Content-Type": "application/json",
+    "Request-Id": "Tj9h5yWwCUvsUn",
+    "X-Amzn-Trace-Id": "Root=1-6ac0060d-175525bc7c968c5f27f8d579",
+    "X-Forwarded-For": "52.66.75.174, 10.22.2.224",
+    "X-Forwarded-Port": "443",
+    "X-Forwarded-Proto": "https",
+    "X-Proxy": "zrok",
+    "X-Razorpay-Event-Id": "Tj9h5yWwCUvsUn",
+    "X-Razorpay-Signature": "4e852b6b2f0dc700f5e9bb0fae1bcf4670af16c5aaf671de79c1a6ca0c7c1a61"
+  },
+  "body": "{\"entity\":\"event\",\"account_id\":\"acc_Tj5AnsI7BH2aLR\",\"event\":\"order.paid\",\"contains\":[\"payment\",\"order\"],\"payload\":{\"payment\":{\"entity\":{\"id\":\"pay_Tj9gmEfed6kRqO\",\"entity\":\"payment\",\"amount\":50000,\"currency\":\"INR\",\"status\":\"captured\",\"order_id\":\"order_Tj9f2VW29YPycU\",\"invoice_id\":null,\"international\":false,\"method\":\"netbanking\",\"amount_refunded\":0,\"refund_status\":null,\"captured\":true,\"description\":null,\"card_id\":null,\"bank\":\"ALLA\",\"wallet\":null,\"vpa\":null,\"email\":\"p0@example.com\",\"contact\":\"+919123456780\",\"notes\":[],\"fee\":1180,\"tax\":180,\"error_code\":null,\"error_description\":null,\"error_source\":null,\"error_step\":null,\"error_reason\":null,\"acquirer_data\":{\"bank_transaction_id\":\"6844830\"},\"created_at\":1790969339,\"reward\":null}},\"order\":{\"entity\":{\"id\":\"order_Tj9f2VW29YPycU\",\"entity\":\"order\",\"amount\":50000,\"amount_paid\":50000,\"amount_due\":0,\"currency\":\"INR\",\"receipt\":\"p0-1790969239\",\"offer_id\":null,\"status\":\"paid\",\"attempts\":1,\"notes\":[],\"created_at\":1790969240,\"description\":null,\"checkout\":null}}},\"created_at\":1790969356}",
+  "body_base64": null,
+  "redacted": "The payer mobile number in the body was replaced by the dummy +919123456780 (same length) after recording. body_sha256 and signature describe the bytes as received, so this body no longer verifies."
+}
