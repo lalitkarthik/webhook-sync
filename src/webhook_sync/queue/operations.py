@@ -4,6 +4,7 @@ Times come from the caller (the one clock, A14). `enqueue` runs inside the calle
 transaction, so the change and the job it causes commit together (the outbox).
 """
 
+import logging
 import random
 import uuid
 from dataclasses import dataclass
@@ -19,6 +20,8 @@ from webhook_sync.db.schema import attempts, jobs
 from webhook_sync.db.writer import Transaction, Writer
 from webhook_sync.queue.pause import Pauses, PauseTarget
 from webhook_sync.queue.retry import backoff, max_attempts
+
+log = logging.getLogger("webhook_sync.queue")
 
 LIVE_STATUSES = ("waiting", "running")
 """A job in one of these is live: at most one per stage, sink and payment."""
@@ -307,6 +310,104 @@ async def fail(
     elif failure.pause_target == "sink":
         pauses.pause("sink", job.sink)
     return status
+
+
+REAPED_ERROR = "lease expired"
+"""The `last_error` and attempt error of a reaped job: its worker vanished or stalled."""
+
+
+async def reap(
+    writer: Writer, *, retry_profile: RetryProfile, now: datetime, rng: random.Random
+) -> list[int]:
+    """Take back every running job whose lease has expired, one row at a time.
+
+    Each goes back to waiting after the backoff for its attempt, or to dead once its attempts
+    are used up, with an `attempts` row `reaped`; its claim token is cleared, so the stalled
+    worker's late completion matches nothing. A row that fails is logged and left for the next
+    pass; the others are still reaped. Returns the ids taken back.
+    """
+    expired = sa.select(jobs.c.id).where(
+        jobs.c.status == "running", jobs.c.lease_until < to_db_text(now)
+    )
+    return await _take_back(writer, expired, retry_profile=retry_profile, now=now, rng=rng)
+
+
+async def reclaim(
+    writer: Writer, *, retry_profile: RetryProfile, now: datetime, rng: random.Random
+) -> list[int]:
+    """At start, before serving: take back every job still running, lease expired or not.
+
+    One server per database (ADR 0007) makes each a leftover of a crashed run (A13). Each is
+    reaped as `reap` does it: its attempt counted, backoff or dead, an `attempts` row `reaped`,
+    so a job that crashes the process every time still reaches dead. Returns the ids.
+    """
+    running = sa.select(jobs.c.id).where(jobs.c.status == "running")
+    return await _take_back(writer, running, retry_profile=retry_profile, now=now, rng=rng)
+
+
+async def _take_back(
+    writer: Writer,
+    which: sa.Select[tuple[int]],
+    *,
+    retry_profile: RetryProfile,
+    now: datetime,
+    rng: random.Random,
+) -> list[int]:
+    """Reap the running jobs `which` selects, each in its own transaction."""
+    async with writer.transaction() as tx:
+        ids = [row["id"] for row in await tx.execute(which.order_by(jobs.c.id))]
+    taken: list[int] = []
+    for job_id in ids:
+        try:
+            async with writer.transaction() as tx:
+                if await _reap_one(tx, which.where(jobs.c.id == job_id), retry_profile, now, rng):
+                    taken.append(job_id)
+        except Exception:
+            log.exception("job not reaped", extra={"job_id": job_id})
+    return taken
+
+
+async def _reap_one(
+    tx: Transaction,
+    which: sa.Select[tuple[int]],
+    retry_profile: RetryProfile,
+    now: datetime,
+    rng: random.Random,
+) -> bool:
+    """Reap one job if `which` still selects it (a heartbeat may have saved it meanwhile)."""
+    rows = await tx.execute(sa.select(jobs).where(jobs.c.id.in_(which.scalar_subquery())))
+    if not rows:
+        return False
+    [job] = rows
+    at = to_db_text(now)
+    wait = backoff(retry_profile, job["attempts"], rng=rng)
+    moves: dict[str, object] = {"status": "dead"}
+    if job["attempts"] < job["max_attempts"] and wait is not None:
+        moves = {"status": "waiting", "rerun": 0, "run_after": to_db_text(now + wait)}
+    await tx.execute(
+        sa.update(jobs)
+        .where(jobs.c.id == job["id"], jobs.c.claim_token == job["claim_token"])
+        .values(
+            claim_token=None,
+            lease_until=None,
+            last_error=REAPED_ERROR,
+            last_error_class="retry",
+            updated_at=at,
+            **moves,
+        )
+    )
+    await tx.execute(
+        sa.insert(attempts).values(
+            job_id=job["id"],
+            number=job["attempts"],
+            started_at=None,
+            finished_at=at,
+            outcome="reaped",
+            error=REAPED_ERROR,
+            duration_ms=None,
+        )
+    )
+    return True
 
 
 async def _record_attempt(

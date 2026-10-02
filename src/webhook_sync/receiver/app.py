@@ -1,7 +1,7 @@
 """The public app: `POST /webhooks/razorpay` and `GET /health` (receiver.md).
 
 Built from a config object and a data directory. Its lifespan opens the writer and applies
-pending migrations before the first request, and closes the writer at the end.
+pending migrations before the first request, starts the reaper, and closes the writer at the end.
 """
 
 import asyncio
@@ -20,6 +20,7 @@ from webhook_sync.clock import to_db_text, utc_now
 from webhook_sync.config import Config
 from webhook_sync.db.migrations import apply_pending
 from webhook_sync.db.writer import Writer
+from webhook_sync.queue import run_reaper
 from webhook_sync.receiver.checks import check_content_type, check_security_headers, read_body
 from webhook_sync.receiver.demo import FailFirst
 from webhook_sync.receiver.rate_cap import RateCap
@@ -70,9 +71,15 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
             )
             app.state.receiver = receiver
             minutely = asyncio.create_task(_write_rejection_counts_every_minute(receiver))
+            reaper = asyncio.create_task(
+                run_reaper(writer, retry_profile=config.service.retry_profile)
+            )
             try:
                 yield
             finally:
+                reaper.cancel()
+                with suppress(asyncio.CancelledError):
+                    await reaper
                 minutely.cancel()
                 with suppress(asyncio.CancelledError):
                     await minutely

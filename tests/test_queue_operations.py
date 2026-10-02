@@ -25,6 +25,7 @@ from webhook_sync.queue import (
     enqueue,
     fail,
     heartbeat,
+    reap,
 )
 
 NINE = datetime(2026, 10, 2, 9, 0, tzinfo=UTC)
@@ -381,14 +382,11 @@ async def test_a_retry_after_shorter_than_the_backoff_does_not_shorten_it(
     assert "2026-10-02T09:00:02.500000Z" <= job["run_after"] <= "2026-10-02T09:00:07.500000Z"
 
 
-async def reap_by_hand(writer: Writer, job_id: int) -> None:
-    """Return an expired lease to waiting, as the reaper (#13) does."""
-    async with writer.transaction() as tx:
-        await tx.execute(
-            "UPDATE jobs SET status = 'waiting', claim_token = NULL, lease_until = NULL "
-            "WHERE id = :id AND status = 'running'",
-            {"id": job_id},
-        )
+async def reap_after_the_lease(writer: Writer, frozen_clock: TimeMachineFixture) -> None:
+    """Let the lease expire, reap, then move past the reaped job's backoff."""
+    frozen_clock.move_to(NINE + timedelta(seconds=61), tick=False)
+    await reap(writer, retry_profile="production", now=utc_now(), rng=random.Random(7))
+    frozen_clock.move_to(NINE + timedelta(minutes=2), tick=False)
 
 
 async def test_a_stalled_worker_past_its_lease_cannot_complete_and_loses_its_writes(
@@ -396,8 +394,7 @@ async def test_a_stalled_worker_past_its_lease_cannot_complete_and_loses_its_wri
 ) -> None:
     job_id = await enqueue_job(writer)
     [stalled] = await claim_ledger(writer)
-    frozen_clock.move_to(NINE + timedelta(seconds=61), tick=False)
-    await reap_by_hand(writer, job_id)
+    await reap_after_the_lease(writer, frozen_clock)
     [current] = await claim_ledger(writer)
     assert current.claim_token != stalled.claim_token
     await write_and_complete(writer, current, written_by="current")
@@ -410,25 +407,26 @@ async def test_a_stalled_worker_past_its_lease_cannot_complete_and_loses_its_wri
     assert await read_rows("SELECT written_by FROM ledger_stand_in") == [{"written_by": "current"}]
     [job] = await read_rows("SELECT status, attempts FROM jobs")
     assert job == {"status": "done", "attempts": 2}
-    assert await read_rows("SELECT number, outcome FROM attempts") == [
-        {"number": 2, "outcome": "ok"}
+    assert await read_rows("SELECT number, outcome FROM attempts ORDER BY id") == [
+        {"number": 1, "outcome": "reaped"},
+        {"number": 2, "outcome": "ok"},
     ]
 
 
 async def test_a_fail_with_a_lost_lease_writes_nothing_and_pauses_nothing(
-    writer: Writer, read_rows: ReadRows
+    writer: Writer, read_rows: ReadRows, frozen_clock: TimeMachineFixture
 ) -> None:
     pauses = Pauses()
-    job_id = await enqueue_job(writer)
+    await enqueue_job(writer)
     [stalled] = await claim_ledger(writer)
-    await reap_by_hand(writer, job_id)
-    await claim_ledger(writer)
+    await reap_after_the_lease(writer, frozen_clock)
+    [current] = await claim_ledger(writer)
 
     failure = Failure("HTTP 401", "pause", pause_target="source")
     with pytest.raises(LeaseLost):
         await fail_job(writer, stalled, failure, pauses=pauses)
 
     assert pauses.sources == frozenset()
-    [job] = await read_rows("SELECT status, last_error FROM jobs")
-    assert job == {"status": "running", "last_error": None}
-    assert await read_rows("SELECT * FROM attempts") == []
+    [job] = await read_rows("SELECT status, claim_token FROM jobs")
+    assert job == {"status": "running", "claim_token": current.claim_token}
+    assert await read_rows("SELECT outcome FROM attempts") == [{"outcome": "reaped"}]
