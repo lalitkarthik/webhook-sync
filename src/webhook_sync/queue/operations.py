@@ -4,7 +4,9 @@ Times come from the caller (the one clock, A14). `enqueue` runs inside the calle
 transaction, so the change and the job it causes commit together (the outbox).
 """
 
-from datetime import datetime
+import uuid
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 import sqlalchemy as sa
 from sqlalchemy.dialects import sqlite
@@ -12,11 +14,33 @@ from sqlalchemy.dialects import sqlite
 from webhook_sync.clock import to_db_text
 from webhook_sync.config import RetryProfile
 from webhook_sync.db.schema import jobs
-from webhook_sync.db.writer import Transaction
+from webhook_sync.db.writer import Transaction, Writer
+from webhook_sync.queue.pause import Pauses
 from webhook_sync.queue.retry import max_attempts
 
 LIVE_STATUSES = ("waiting", "running")
 """A job in one of these is live: at most one per stage, sink and payment."""
+
+LEASE = timedelta(seconds=60)
+"""How long a claim or a heartbeat holds a job before the reaper may take it back."""
+
+
+@dataclass(frozen=True)
+class ClaimedJob:
+    """A job `claim` handed out: what the stage's work needs, and the token that fences it."""
+
+    id: int
+    claim_token: str
+    stage: str
+    sink: str
+    source: str
+    account: str
+    payment_key: str
+    attempts: int
+    max_attempts: int
+    rerun: bool
+    prefetched: str | None
+    caused_by_event_id: str | None
 
 
 async def enqueue(
@@ -71,3 +95,66 @@ async def enqueue(
     ).returning(jobs.c.id)
     [row] = await tx.execute(statement)
     return row["id"]
+
+
+async def claim(
+    writer: Writer,
+    *,
+    stage: str,
+    sink: str,
+    limit: int,
+    claimed_by: str,
+    pauses: Pauses,
+    now: datetime,
+) -> list[ClaimedJob]:
+    """Take up to `limit` due waiting jobs of a stage and sink, oldest `run_after` first.
+
+    Each gets a 60 s lease, one shared new claim token, `claimed_by` (the server's instance id
+    and start time) and one more attempt. Nothing of a paused source or sink is taken.
+    """
+    token = uuid.uuid4().hex
+    at = to_db_text(now)
+    due = (
+        sa.select(jobs.c.id)
+        .where(
+            jobs.c.stage == stage,
+            jobs.c.sink == sink,
+            jobs.c.status == "waiting",
+            jobs.c.run_after <= at,
+        )
+        .order_by(jobs.c.run_after, jobs.c.id)
+        .limit(limit)
+    )
+    statement = (
+        sa.update(jobs)
+        .where(jobs.c.id.in_(due.scalar_subquery()))
+        .values(
+            status="running",
+            claim_token=token,
+            claimed_by=claimed_by,
+            lease_until=to_db_text(now + LEASE),
+            attempts=jobs.c.attempts + 1,
+            updated_at=at,
+        )
+        .returning(*jobs.c)
+    )
+    async with writer.transaction() as tx:
+        rows = await tx.execute(statement)
+    rows.sort(key=lambda row: (row["run_after"], row["id"]))
+    return [
+        ClaimedJob(
+            id=row["id"],
+            claim_token=token,
+            stage=row["stage"],
+            sink=row["sink"],
+            source=row["source"],
+            account=row["account"],
+            payment_key=row["payment_key"],
+            attempts=row["attempts"],
+            max_attempts=row["max_attempts"],
+            rerun=bool(row["rerun"]),
+            prefetched=row["prefetched"],
+            caused_by_event_id=row["caused_by_event_id"],
+        )
+        for row in rows
+    ]

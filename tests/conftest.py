@@ -21,7 +21,9 @@ from support import (
 )
 
 from webhook_sync.config import Config, RazorpayConfig, RazorpaySecrets, ServiceConfig
+from webhook_sync.db.migrations import apply_pending
 from webhook_sync.db.reader import Reader
+from webhook_sync.db.writer import Writer
 from webhook_sync.receiver.app import create_app
 
 
@@ -66,3 +68,14 @@ def read_rows(data_dir: Path) -> ReadRows:
             return await reader.fetch_all(sql)
 
     return read
+
+
+@pytest.fixture
+async def writer(data_dir: Path) -> AsyncIterator[Writer]:
+    """The writer on a fresh database in `data_dir`, migrated to the current schema."""
+    opened = await Writer.open(data_dir)
+    try:
+        await apply_pending(opened)
+        yield opened
+    finally:
+        await opened.close()
