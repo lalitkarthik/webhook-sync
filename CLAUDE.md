@@ -10,8 +10,8 @@ to a Google Sheet, and proves nothing was lost or written twice. Designed, not y
 - **Secrets:** environment variables named in `.env.example`; test-mode keys only; never in a
   file in the repo, a commit, an issue or a log.
 - **Commits and PRs** carry no attribution lines of any kind.
-- **Sub-agents:** one at a time, except the orchestrator's implementers (at most 2), and none may
-  start agents of its own.
+- **Sub-agents:** run them in parallel wherever the work is independent (research, exploration,
+  implementers); none may start agents of its own.
 - **Skills** live in `.claude/skills/`: `/feature-loop`, and the `/mp-*` skills it calls.
 
 <!-- feature-loop:start -->
