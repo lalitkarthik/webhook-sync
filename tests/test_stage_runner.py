@@ -346,3 +346,57 @@ async def test_a_stage_that_outlives_its_lease_without_heartbeating_is_reaped_an
     assert await read_rows("SELECT outcome FROM attempts") == [{"outcome": "reaped"}]
     tables = await read_rows("SELECT name FROM sqlite_master WHERE name = 'ledger_stand_in'")
     assert tables == []
+
+
+async def test_a_stage_working_past_60_seconds_keeps_its_job_by_heartbeating_every_20(
+    writer: Writer, read_rows: ReadRows, frozen_clock: TimeMachineFixture
+) -> None:
+    await enqueue_job(writer)
+    slept: list[float] = []
+
+    async def time_passes(seconds: float) -> None:
+        slept.append(seconds)
+        frozen_clock.shift(timedelta(seconds=seconds))
+        await asyncio.sleep(0)
+
+    async def slow(job: ClaimedJob) -> Done:
+        while utc_now() < NINE + timedelta(seconds=90):
+            await asyncio.sleep(0)
+        assert await reap_now(writer) == []
+        return Done()
+
+    await asyncio.wait_for(runner_for(writer, slow, sleep=time_passes).run_once(), timeout=5)
+
+    assert set(slept) == {20}
+    assert await read_rows("SELECT status, attempts FROM jobs") == [
+        {"status": "done", "attempts": 1}
+    ]
+    assert await read_rows("SELECT outcome FROM attempts") == [{"outcome": "ok"}]
+
+
+async def test_a_heartbeat_that_finds_the_lease_lost_stops_the_work_without_writing(
+    writer: Writer, read_rows: ReadRows, frozen_clock: TimeMachineFixture
+) -> None:
+    job_id = await enqueue_job(writer)
+    started, reaped = asyncio.Event(), asyncio.Event()
+
+    async def after_the_reap(seconds: float) -> None:
+        await reaped.wait()
+
+    async def never_finishes(job: ClaimedJob) -> Done:
+        started.set()
+        await asyncio.Event().wait()
+        return Done(writes=write_stand_in)
+
+    runner = runner_for(writer, never_finishes, sleep=after_the_reap)
+    running = asyncio.create_task(runner.run_once())
+    await started.wait()
+    frozen_clock.move_to(NINE + timedelta(seconds=61), tick=False)
+    assert await reap_now(writer) == [job_id]
+    reaped.set()
+    await asyncio.wait_for(running, timeout=5)
+
+    assert await read_rows("SELECT status, attempts FROM jobs") == [
+        {"status": "waiting", "attempts": 1}
+    ]
+    assert await read_rows("SELECT outcome FROM attempts") == [{"outcome": "reaped"}]

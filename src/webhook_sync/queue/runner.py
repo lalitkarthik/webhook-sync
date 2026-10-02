@@ -8,13 +8,23 @@ the one clock (A14); the sleeps are injected, so tests drive the runner without 
 import asyncio
 import logging
 import random
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
+from datetime import timedelta
+from typing import Any
 
 from webhook_sync.clock import utc_now
 from webhook_sync.config import RetryProfile
 from webhook_sync.db.writer import Transaction, Writer
-from webhook_sync.queue.operations import ClaimedJob, Failure, LeaseLost, claim, complete, fail
+from webhook_sync.queue.operations import (
+    ClaimedJob,
+    Failure,
+    LeaseLost,
+    claim,
+    complete,
+    fail,
+    heartbeat,
+)
 from webhook_sync.queue.pause import Pauses
 
 log = logging.getLogger("webhook_sync.queue")
@@ -38,7 +48,7 @@ class StageFailed(Exception):
         self.failure = failure
 
 
-type Work = Callable[[ClaimedJob], Awaitable[Done]]
+type Work = Callable[[ClaimedJob], Coroutine[Any, Any, Done]]
 """A stage's work on one claimed job: returns `Done` or raises `StageFailed`. Any other
 exception is our own bug, so the job goes to dead (queue.md's error classes)."""
 
@@ -82,20 +92,29 @@ class StageRunner:
             pauses=self._pauses,
             now=utc_now(),
         )
-        for job in claimed:
-            await self._run(job)
+        if not claimed:
+            return 0
+        leases = _Leases(self._writer, claimed, self._sleep)
+        beating = asyncio.create_task(leases.keep_alive())
+        try:
+            for job in claimed:
+                await self._run(job, leases)
+        finally:
+            beating.cancel()
         return len(claimed)
 
-    async def _run(self, job: ClaimedJob) -> None:
+    async def _run(self, job: ClaimedJob, leases: "_Leases") -> None:
         try:
-            await self._attempt(job)
+            await self._attempt(job, leases)
         except LeaseLost:
             # The reaper or another worker has the job: this attempt's result is discarded.
             log.warning("lease lost: result discarded", extra={"job_id": job.id})
+        finally:
+            leases.release(job.id)
 
-    async def _attempt(self, job: ClaimedJob) -> None:
+    async def _attempt(self, job: ClaimedJob, leases: "_Leases") -> None:
         try:
-            done = await self._work(job)
+            done = await leases.guard(job.id, self._work(job))
         except StageFailed as failed:
             await self._fail(job, failed.failure)
             return
@@ -117,3 +136,60 @@ class StageRunner:
             now=utc_now(),
             rng=self._rng,
         )
+
+
+HEARTBEAT_EVERY = timedelta(seconds=20)
+"""How often a running batch pushes its leases forward (a third of the 60 s lease)."""
+
+
+class _Leases:
+    """One claimed batch's leases: a heartbeat every 20 s for the jobs not yet finished; the
+    work of a job whose lease is lost is cancelled, so it stops without writing."""
+
+    def __init__(self, writer: Writer, claimed: list[ClaimedJob], sleep: Sleep) -> None:
+        self._writer = writer
+        self._token = claimed[0].claim_token
+        self._sleep = sleep
+        self._held = {job.id for job in claimed}
+        self._lost: set[int] = set()
+        self._working: tuple[int, asyncio.Task[Done]] | None = None
+
+    async def keep_alive(self) -> None:
+        while self._held:
+            await self._sleep(HEARTBEAT_EVERY.total_seconds())
+            try:
+                lost = await heartbeat(
+                    self._writer, sorted(self._held), self._token, now=utc_now()
+                )
+            except Exception:
+                log.exception("heartbeat failed; trying again at the next beat")
+                continue
+            self._held -= lost
+            self._lost |= lost
+            if self._working is not None and self._working[0] in lost:
+                self._working[1].cancel()
+
+    async def guard(self, job_id: int, work: Coroutine[Any, Any, Done]) -> Done:
+        """Run a job's work, raising `LeaseLost` if a heartbeat finds its lease gone."""
+        task = asyncio.create_task(work)
+        if job_id in self._lost:
+            task.cancel()
+        self._working = (job_id, task)
+        try:
+            return await task
+        except asyncio.CancelledError:
+            if job_id in self._lost and not _cancelling():
+                raise LeaseLost(job_id) from None
+            raise
+        finally:
+            self._working = None
+
+    def release(self, job_id: int) -> None:
+        """The job is finished: stop heartbeating it."""
+        self._held.discard(job_id)
+
+
+def _cancelling() -> bool:
+    """Whether the current task itself is being cancelled, not only the work inside it."""
+    current = asyncio.current_task()
+    return current is not None and current.cancelling() > 0
