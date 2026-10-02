@@ -16,9 +16,8 @@ SECRETS = {
 
 def write_config(directory: Path, service_lines: str) -> Path:
     path = directory / "webhook-sync.toml"
-    path.write_text(
-        f'[service]\n{service_lines}\n[sources.razorpay]\nmode = "test"\naccount = "{TEST_ACCOUNT}"\n'
-    )
+    razorpay = f'[sources.razorpay]\nmode = "test"\naccount = "{TEST_ACCOUNT}"\n'
+    path.write_text(f"[service]\n{service_lines}\n{razorpay}")
     return path
 
 

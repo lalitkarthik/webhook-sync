@@ -30,13 +30,12 @@ async def enqueue(
     event_id: str | None,
     retry_profile: RetryProfile,
     now: datetime,
-    prefetched: str | None = None,
 ) -> int:
     """Insert a waiting job for the payment, or fold the work into its one live job.
 
     A running live job gets `rerun` set; a live job has `prefetched` cleared (a newer event
     beats a listed state) and `caused_by_event_id` updated; `run_after` is left alone, so a job
-    in backoff stays in backoff. Returns the job's id.
+    in backoff stays in backoff. Returns the job's id. (P4's backfill adds a `prefetched` state.)
     """
     at = to_db_text(now)
     insert = sqlite.insert(jobs).values(
@@ -51,12 +50,17 @@ async def enqueue(
         max_attempts=max_attempts(retry_profile),
         run_after=at,
         caused_by_event_id=event_id,
-        prefetched=prefetched,
         created_at=at,
         updated_at=at,
     )
     statement = insert.on_conflict_do_update(
-        index_elements=[jobs.c.stage, jobs.c.sink, jobs.c.source, jobs.c.account, jobs.c.payment_key],
+        index_elements=[
+            jobs.c.stage,
+            jobs.c.sink,
+            jobs.c.source,
+            jobs.c.account,
+            jobs.c.payment_key,
+        ],
         index_where=jobs.c.status.in_(LIVE_STATUSES),
         set_={
             "rerun": sa.case((jobs.c.status == "running", 1), else_=jobs.c.rerun),

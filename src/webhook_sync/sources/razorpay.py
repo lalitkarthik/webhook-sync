@@ -110,7 +110,11 @@ class RazorpayAdapter:
         )
         entity_id = _entity_field(body, entity_name, "id") if entity_name else None
         payment_key = next(
-            (key for name, field in _PAYMENT_KEY_PATHS if (key := _entity_field(body, name, field))),
+            (
+                key
+                for name, field in _PAYMENT_KEY_PATHS
+                if (key := _entity_field(body, name, field))
+            ),
             None,
         )
         # A handled event's job is keyed by its payment, so it must name one.
