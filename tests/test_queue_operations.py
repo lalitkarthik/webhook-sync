@@ -12,7 +12,7 @@ from time_machine import TimeMachineFixture
 
 from webhook_sync.clock import utc_now
 from webhook_sync.db.writer import Writer
-from webhook_sync.queue import Pauses, claim, enqueue
+from webhook_sync.queue import Pauses, claim, enqueue, heartbeat
 
 NINE = datetime(2026, 10, 2, 9, 0, tzinfo=UTC)
 INSTANCE = "wsync-test@2026-10-02T08:59:00.000000Z"
@@ -96,3 +96,32 @@ async def test_claim_takes_no_job_before_its_run_after(writer: Writer) -> None:
         await tx.execute("UPDATE jobs SET run_after = '2026-10-02T09:00:00.000001Z'")
 
     assert await claim_ledger(writer) == []
+
+
+async def test_a_heartbeat_pushes_the_lease_60_seconds_past_now(
+    writer: Writer, read_rows: ReadRows, frozen_clock: TimeMachineFixture
+) -> None:
+    await enqueue_job(writer)
+    [claimed] = await claim_ledger(writer)
+    frozen_clock.move_to(NINE + timedelta(seconds=20), tick=False)
+
+    lost = await heartbeat(writer, [claimed.id], claimed.claim_token, now=utc_now())
+
+    assert lost == set()
+    assert await read_rows("SELECT lease_until FROM jobs") == [
+        {"lease_until": "2026-10-02T09:01:20.000000Z"}
+    ]
+
+
+async def test_a_heartbeat_with_a_lost_lease_reports_it_and_extends_nothing(
+    writer: Writer, read_rows: ReadRows
+) -> None:
+    await enqueue_job(writer, "pay_A")
+    await enqueue_job(writer, "pay_B")
+    held, taken = await claim_ledger(writer, limit=2)
+
+    lost = await heartbeat(writer, [held.id, taken.id], "stale-token", now=utc_now())
+
+    assert lost == {held.id, taken.id}
+    leases = await read_rows("SELECT DISTINCT lease_until FROM jobs")
+    assert leases == [{"lease_until": "2026-10-02T09:01:00.000000Z"}]

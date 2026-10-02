@@ -158,3 +158,20 @@ async def claim(
         )
         for row in rows
     ]
+
+
+async def heartbeat(writer: Writer, ids: list[int], token: str, *, now: datetime) -> set[int]:
+    """Push the lease of each job still held under `token` to 60 s past now.
+
+    Returns the ids whose lease was lost (no longer running under this token): the worker
+    stops those without writing. An empty set means every lease is still held.
+    """
+    statement = (
+        sa.update(jobs)
+        .where(jobs.c.id.in_(ids), jobs.c.claim_token == token, jobs.c.status == "running")
+        .values(lease_until=to_db_text(now + LEASE), updated_at=to_db_text(now))
+        .returning(jobs.c.id)
+    )
+    async with writer.transaction() as tx:
+        rows = await tx.execute(statement)
+    return set(ids) - {row["id"] for row in rows}
