@@ -192,7 +192,7 @@ URLs: https://razorpay.com/docs/api/payments/fetch-all-payments/, https://razorp
 
 | Tunnel | Free | Account | Stable URL | Interstitial risk | Razorpay doc |
 |---|---|---|---|---|---|
-| zrok (`*.share.zrok.io`) | yes, 5 GB a day | yes (myzrok.io) | yes, reserved name | **yes** for unverified free accounts; answers 200 | **suggested** |
+| zrok (`*.shares.zrok.io`; corrected by the P0 run) | yes, 5 GB a day | yes (myzrok.io) | yes, reserved name | **yes** for unverified free accounts; answers 200 | **suggested** |
 | Cloudflare Quick Tunnel (`*.trycloudflare.com`) | yes | no | no, new each run | none documented | not listed |
 | Tailscale Funnel (`*.ts.net`) | yes, Personal plan | yes | yes | none documented | not listed |
 | localhost.run (`*.lhr.life`) | yes, speed-limited | no | no, unless signed up | none documented | not listed |
@@ -209,7 +209,7 @@ URLs: https://razorpay.com/docs/api/payments/fetch-all-payments/, https://razorp
 **Open point / Spike** (owner's laptop, Windows 11, test mode):
 1. Install zrok (`windows.mdx` steps), sign up at myzrok.io, then `zrok2 enable <your_account_token>`, `zrok2 status`.
 2. `zrok2 create name -n public wsync-demo`, then, with the receiver on port 8080, `zrok2 share public localhost:8080 -n public:wsync-demo`.
-3. In Dashboard test mode, add webhook `https://wsync-demo.share.zrok.io/webhooks/razorpay` (OTP `754081`). Record whether it saves or the exact error text.
+3. In Dashboard test mode, add webhook `https://wsync-demo.shares.zrok.io/webhooks/razorpay` (OTP `754081`). Record whether it saves or the exact error text.
 4. Pay one test Payment Link. In the Dashboard log, open the delivery's **Response**. If it's zrok's HTML page rather than our receiver's reply, the interstitial caught it. Note the request's `User-Agent` either way.
 5. If caught: either add a card at myzrok.io and repeat, or switch to `cloudflared tunnel --url http://localhost:8080`, edit the webhook URL to the printed `https://<random>.trycloudflare.com/webhooks/razorpay`, and repeat step 4.
 6. Optional: try saving a webhook at an `ngrok-free.app` URL and at a `ts.net` Funnel URL, and record whether each is accepted. That settles the unlisted hosts.

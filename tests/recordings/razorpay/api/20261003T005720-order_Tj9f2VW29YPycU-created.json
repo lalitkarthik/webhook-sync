@@ -1,0 +1,19 @@
+{
+  "request": "POST /orders",
+  "http": 200,
+  "at": 1790969240.3690984,
+  "body": {
+    "amount": 50000,
+    "amount_due": 50000,
+    "amount_paid": 0,
+    "attempts": 0,
+    "created_at": 1790969240,
+    "currency": "INR",
+    "entity": "order",
+    "id": "order_Tj9f2VW29YPycU",
+    "notes": [],
+    "offer_id": null,
+    "receipt": "p0-1790969239",
+    "status": "created"
+  }
+}
