@@ -1,7 +1,8 @@
 """The one transaction: store a verified delivery's event if absent, and always its delivery row.
 
-receiver.md, "The one transaction". A new event (handled or ignored) is answered 202; an event
-already stored, by event id or by the signed body's hash, is a duplicate answered 200.
+receiver.md, "The one transaction". A new handled event is stored with its ledger job (the
+outbox); a new event (handled or ignored) is answered 202; an event already stored, by event id
+or by the signed body's hash, is a duplicate answered 200 and makes no job.
 """
 
 import time
@@ -13,9 +14,10 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import sqlite
 
 from webhook_sync.clock import to_db_text
-from webhook_sync.config import Mode
+from webhook_sync.config import Mode, RetryProfile
 from webhook_sync.db.schema import deliveries, events
 from webhook_sync.db.writer import Transaction, Writer
+from webhook_sync.queue import enqueue
 from webhook_sync.sources.base import EventDescription, VerifiedDelivery
 
 type DeliveryResult = Literal["new", "duplicate"]
@@ -35,6 +37,7 @@ async def store_delivery(
     source: str,
     account: str,
     mode: Mode,
+    retry_profile: RetryProfile,
     delivery: VerifiedDelivery,
     description: EventDescription,
     received_at: datetime,
@@ -67,6 +70,16 @@ async def store_delivery(
             .returning(events.c.event_id)
         )
         if inserted:
+            if description.handled:
+                await _enqueue_ledger_job(
+                    tx,
+                    source=source,
+                    account=account,
+                    event_id=delivery.event_id,
+                    payment_key=description.payment_key,
+                    retry_profile=retry_profile,
+                    now=received_at,
+                )
             stored = StoredDelivery("new", 202, delivery.event_id)
         else:
             stored = StoredDelivery("duplicate", 200, await _stored_event_id(tx, source, delivery))
@@ -81,6 +94,37 @@ async def store_delivery(
             )
         )
     return stored
+
+
+async def _enqueue_ledger_job(
+    tx: Transaction,
+    *,
+    source: str,
+    account: str,
+    event_id: str,
+    payment_key: str | None,
+    retry_profile: RetryProfile,
+    now: datetime,
+) -> None:
+    """Enqueue the payment's ledger job and point the event at it (`events.job_id`, F17)."""
+    if payment_key is None:  # the adapter rejects a handled event that names no payment
+        raise ValueError(f"handled event {event_id} names no payment")
+    job_id = await enqueue(
+        tx,
+        stage="ledger",
+        sink="ledger",
+        source=source,
+        account=account,
+        payment_key=payment_key,
+        event_id=event_id,
+        retry_profile=retry_profile,
+        now=now,
+    )
+    await tx.execute(
+        sa.update(events)
+        .where(events.c.source == source, events.c.event_id == event_id)
+        .values(job_id=job_id)
+    )
 
 
 async def _stored_event_id(tx: Transaction, source: str, delivery: VerifiedDelivery) -> str:

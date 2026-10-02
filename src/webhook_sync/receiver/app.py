@@ -5,6 +5,7 @@ pending migrations before the first request, and closes the writer at the end.
 """
 
 import logging
+import sqlite3
 import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -77,16 +78,30 @@ def create_app(config: Config, data_dir: Path) -> FastAPI:
         if isinstance(description, Rejection):
             return _rejected(adapter.name, description, verified.event_id)
 
-        stored = await store_delivery(
-            receiver.writer,
-            source=adapter.name,
-            account=receiver.config.razorpay.account,
-            mode=receiver.config.razorpay.mode,
-            delivery=verified,
-            description=description,
-            received_at=received_at,
-            started=started,
-        )
+        try:
+            stored = await store_delivery(
+                receiver.writer,
+                source=adapter.name,
+                account=receiver.config.razorpay.account,
+                mode=receiver.config.razorpay.mode,
+                retry_profile=receiver.config.service.retry_profile,
+                delivery=verified,
+                description=description,
+                received_at=received_at,
+                started=started,
+            )
+        except sqlite3.Error:
+            # The transaction rolled back as a whole: nothing is stored, so the source retries.
+            log.exception(
+                "delivery not stored: database error",
+                extra={
+                    "source": adapter.name,
+                    "event_id": verified.event_id,
+                    "payment_key": description.payment_key,
+                    "status_code": 503,
+                },
+            )
+            return JSONResponse({"error": "database_error"}, status_code=503)
         log.info(
             "delivery stored",
             extra={

@@ -15,6 +15,7 @@ from typing import Any, Literal, cast
 from dotenv import dotenv_values
 
 type Mode = Literal["test", "live"]
+type RetryProfile = Literal["production", "demo"]
 
 
 class ConfigError(Exception):
@@ -25,6 +26,7 @@ class ConfigError(Exception):
 class ServiceConfig:
     public_listen: str
     data_dir: Path
+    retry_profile: RetryProfile = "production"
 
 
 @dataclass(frozen=True)
@@ -67,12 +69,16 @@ def load_config(path: Path, environ: Mapping[str, str] | None = None) -> Config:
     mode = _string(razorpay, "mode", "sources.razorpay")
     if mode not in ("test", "live"):
         raise ConfigError("sources.razorpay.mode must be 'test' or 'live'")
+    retry_profile = _string(service, "retry_profile", "service", default="production")
+    if retry_profile not in ("production", "demo"):
+        raise ConfigError("service.retry_profile must be 'production' or 'demo'")
 
     secrets = _secrets(path.parent / ".env", os.environ if environ is None else environ)
     return Config(
         service=ServiceConfig(
             public_listen=_string(service, "public_listen", "service", default="0.0.0.0:8080"),
             data_dir=(path.parent / data_dir).resolve(),
+            retry_profile=retry_profile,
         ),
         razorpay=RazorpayConfig(
             mode=mode, account=_string(razorpay, "account", "sources.razorpay")
