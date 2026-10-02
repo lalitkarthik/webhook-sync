@@ -149,6 +149,8 @@ async def claim(
     Each gets a 60 s lease, one shared new claim token, `claimed_by` (the server's instance id
     and start time) and one more attempt. Nothing of a paused source or sink is taken.
     """
+    if sink in pauses.sinks:
+        return []
     token = uuid.uuid4().hex
     at = to_db_text(now)
     due = (
@@ -156,6 +158,7 @@ async def claim(
         .where(
             jobs.c.stage == stage,
             jobs.c.sink == sink,
+            jobs.c.source.not_in(pauses.sources),
             jobs.c.status == "waiting",
             jobs.c.run_after <= at,
         )

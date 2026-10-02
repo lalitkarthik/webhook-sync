@@ -300,3 +300,44 @@ async def test_a_dead_failure_sends_the_job_straight_to_dead(
     assert await read_rows("SELECT number, outcome, error FROM attempts") == [
         {"number": 1, "outcome": "dead", "error": "mapped field missing: amount"}
     ]
+
+
+async def test_a_pause_failure_pauses_the_sink_and_refunds_the_attempt(
+    writer: Writer, read_rows: ReadRows
+) -> None:
+    pauses = Pauses()
+    job_id = await enqueue_job(writer, "pay_A", sink="sheets")
+    await enqueue_job(writer, "pay_B", sink="sheets")
+    other_sink = await enqueue_job(writer, "pay_C", sink="ledger")
+    [claimed] = await claim_ledger(writer, sink="sheets", pauses=pauses)
+
+    failure = Failure("spreadsheet not found", "pause", pause_target="sink")
+    status = await fail_job(writer, claimed, failure, pauses=pauses)
+
+    assert status == "waiting"
+    assert pauses.sinks == {"sheets"}
+    job = (await read_rows(f"SELECT * FROM jobs WHERE id = {job_id}"))[0]
+    assert (job["status"], job["attempts"], job["claim_token"]) == ("waiting", 0, None)
+    assert job["run_after"] == "2026-10-02T09:00:00.000000Z"
+    assert await read_rows("SELECT number, outcome FROM attempts") == [
+        {"number": 1, "outcome": "pause"}
+    ]
+    assert await claim_ledger(writer, sink="sheets", pauses=pauses, limit=5) == []
+    [ledger_job] = await claim_ledger(writer, sink="ledger", pauses=pauses)
+    assert ledger_job.id == other_sink
+
+
+async def test_a_pause_failure_naming_the_source_stops_claims_of_that_sources_jobs(
+    writer: Writer,
+) -> None:
+    pauses = Pauses()
+    await enqueue_job(writer, "pay_A", source="razorpay")
+    other_source = await enqueue_job(writer, "pay_B", source="stripe")
+    [claimed] = await claim_ledger(writer, pauses=pauses)
+
+    failure = Failure("HTTP 401 on GET /payments", "pause", pause_target="source")
+    await fail_job(writer, claimed, failure, pauses=pauses)
+
+    assert pauses.sources == {"razorpay"}
+    [claimed_next] = await claim_ledger(writer, pauses=pauses, limit=5)
+    assert claimed_next.id == other_source
