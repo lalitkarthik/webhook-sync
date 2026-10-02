@@ -274,3 +274,37 @@ async def test_two_fetches_of_the_same_state_leave_one_row_at_version_1(
         {"status": "succeeded", "row_version": 1, "updated_at": "2026-10-02T20:30:00.000000Z"}
     ]
     assert await read_rows("SELECT status FROM jobs") == [{"status": "done"}, {"status": "done"}]
+
+
+async def test_no_transaction_is_open_while_the_fetch_waits(
+    writer: Writer, ledger: StageRunner, razorpay: respx.MockRouter, read_rows: ReadRows
+) -> None:
+    fetching = asyncio.Event()
+    answered = asyncio.Event()
+
+    async def slow_razorpay(request: httpx.Request) -> httpx.Response:
+        fetching.set()
+        await answered.wait()
+        return answer("payment-captured-pay_Tj9rKBOXWcsMeE")
+
+    razorpay.get("/v1/payments/pay_Tj9rKBOXWcsMeE").mock(side_effect=slow_razorpay)
+    await enqueue_ledger_job(writer, "pay_Tj9rKBOXWcsMeE")
+    running = asyncio.create_task(ledger.run_once())
+    await asyncio.wait_for(fetching.wait(), timeout=5)
+
+    # Another payment's work commits while the fetch is still waiting for Razorpay.
+    try:
+        other = await asyncio.wait_for(enqueue_ledger_job(writer, "pay_Tj9sm13R8h2378"), 2)
+    except TimeoutError:
+        running.cancel()
+        pytest.fail("a write waited for the fetch: a transaction was open during it")
+    answered.set()
+    await asyncio.wait_for(running, timeout=5)
+
+    assert await read_rows("SELECT id, status FROM jobs ORDER BY id") == [
+        {"id": other - 1, "status": "done"},
+        {"id": other, "status": "waiting"},
+    ]
+    assert await read_rows("SELECT payment_id FROM payments") == [
+        {"payment_id": "pay_Tj9rKBOXWcsMeE"}
+    ]
