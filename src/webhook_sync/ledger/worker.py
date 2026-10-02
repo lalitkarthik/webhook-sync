@@ -11,7 +11,7 @@ import hashlib
 import json
 import logging
 import random
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
 
@@ -122,9 +122,11 @@ def ledger_work(
             _log_fetch(job, "failed", fetched.error_class)
             raise StageFailed(fetched)
         if isinstance(fetched, NotFound):
-            return Done(writes=_not_found_writes(job))
-        _log_fetch(job, "fetched")
-        row = source.to_row(fetched.state)
+            _log_fetch(job, "not_found")
+            row: BusinessRow | NotFound | None = fetched
+        else:
+            _log_fetch(job, "fetched")
+            row = source.to_row(fetched.state)
 
         async def writes(tx: Transaction) -> None:
             await write_row(
@@ -140,33 +142,32 @@ NOT_FOUND_WITHOUT_ROW = "not found at source: possible mode or account mix-up"
 """Why a job ends dead when the source doesn't know a payment the ledger has no row for (A5)."""
 
 
-def _not_found_writes(job: ClaimedJob) -> Callable[[Transaction], Awaitable[None]]:
-    """The source doesn't know the payment: with no row, the job fails dead (A5)."""
-
-    async def writes(tx: Transaction) -> None:
-        stored = await _stored_row(tx, job)
-        if stored is None:
-            raise StageFailed(Failure(NOT_FOUND_WITHOUT_ROW, "dead"))
-
-    return writes
-
-
 async def write_row(
     tx: Transaction,
     job: ClaimedJob,
-    row: BusinessRow | None,
+    row: BusinessRow | NotFound | None,
     *,
     mirror_sinks: Sequence[str],
     retry_profile: RetryProfile,
     now: datetime,
 ) -> None:
     """Upsert the payment's business row if its hash changed, and enqueue one mirror job per
-    sink, all in the runner's transaction with the job's fenced `complete` (A2, A19)."""
+    sink, all in the runner's transaction with the job's fenced `complete` (A2, A19).
+
+    `NotFound`: the stored row keeps its values and gets `not_found_at` (a real change the
+    first time); with no stored row the job fails dead (A5). A fetched row always clears
+    `not_found_at`: the payment is back (A17)."""
     if row is None:
         return  # not yet attempted: no row (F10)
     stored = await _stored_row(tx, job)
-    columns = _business_columns(row)
-    columns["dispute_status"] = stored["dispute_status"] if stored else None
+    if isinstance(row, NotFound):
+        if stored is None:
+            raise StageFailed(Failure(NOT_FOUND_WITHOUT_ROW, "dead", http_status=row.http_status))
+        columns = {name: stored[name] for name in HASHED_COLUMNS}
+        columns["not_found_at"] = stored["not_found_at"] or to_db_text(now)
+    else:
+        columns = _business_columns(row)
+        columns["dispute_status"] = stored["dispute_status"] if stored else None
     new_hash = row_hash(columns)
     if stored is not None and stored["row_hash"] == new_hash:
         return  # nothing changed: nothing written

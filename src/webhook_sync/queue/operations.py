@@ -71,13 +71,15 @@ class Failure:
     """Why a claimed job's attempt failed, as the stage's work reports it to `fail`.
 
     `retry_after` is the failing service's `Retry-After`, a minimum for the backoff. A `pause`
-    failure names what it pauses: the job's source or its sink.
+    failure names what it pauses: the job's source or its sink. `http_status` is the failing
+    service's answer, when it gave one, for the log line.
     """
 
     error: str
     error_class: ErrorClass
     retry_after: timedelta | None = None
     pause_target: PauseTarget | None = None
+    http_status: int | None = None
 
     def __post_init__(self) -> None:
         if (self.error_class == "pause") != (self.pause_target is not None):
