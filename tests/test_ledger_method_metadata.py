@@ -77,6 +77,7 @@ async def ledger(writer: Writer) -> AsyncIterator[StageRunner]:
         yield ledger_runner(
             writer,
             {"razorpay": adapter},
+            mirror_sinks=("sheets",),
             claimed_by="wsync-test",
             pauses=Pauses(),
             retry_profile="production",
@@ -154,7 +155,7 @@ async def test_metadata_is_the_configured_notes_keys(
 
     [row] = await read_rows("SELECT metadata FROM payments")
     assert json.loads(row["metadata"]) == metadata
-    assert await read_rows("SELECT status FROM jobs") == [{"status": "done"}]
+    assert await read_rows("SELECT status FROM jobs WHERE stage = 'ledger'") == [{"status": "done"}]
 
 
 async def test_serve_uses_the_configured_metadata_keys(
@@ -303,7 +304,7 @@ async def test_an_unknown_currency_is_still_written(
     assert await read_rows("SELECT currency, amount_minor FROM payments") == [
         {"currency": "XQZ", "amount_minor": 50000}
     ]
-    assert await read_rows("SELECT status FROM jobs") == [{"status": "done"}]
+    assert await read_rows("SELECT status FROM jobs WHERE stage = 'ledger'") == [{"status": "done"}]
 
 
 @pytest.mark.parametrize("amount", [-100, 499.5, "50000", True, None])
@@ -319,6 +320,6 @@ async def test_a_negative_or_non_integer_amount_sends_the_job_to_dead_with_no_ro
     await fetch_once(writer, ledger, razorpay, state)
 
     assert await read_rows("SELECT * FROM payments") == []
-    [job] = await read_rows("SELECT status, last_error FROM jobs")
+    [job] = await read_rows("SELECT status, last_error FROM jobs WHERE stage = 'ledger'")
     assert job["status"] == "dead"
     assert "amount" in job["last_error"]
