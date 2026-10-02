@@ -13,13 +13,14 @@ from webhook_sync.queue.operations import (
     heartbeat,
 )
 from webhook_sync.queue.pause import Pauses, PauseTarget
-from webhook_sync.queue.retry import max_attempts
+from webhook_sync.queue.retry import backoff, max_attempts
 
 __all__ = [
     "ClaimedJob",
     "LeaseLost",
     "PauseTarget",
     "Pauses",
+    "backoff",
     "claim",
     "complete",
     "enqueue",
