@@ -80,7 +80,7 @@ class RazorpayAdapter:
             body: object = json.loads(text)
         except ValueError:
             return Rejection("malformed")
-        if not isinstance(body, dict):
+        if not _encodes_as_utf8(body) or not isinstance(body, dict):
             return Rejection("malformed")
         event_id = headers.get(EVENT_ID_HEADER, "").strip()
         if not event_id:
@@ -140,6 +140,15 @@ class RazorpayAdapter:
             ),
             ignore_reason=None if handled else "unhandled_type",
         )
+
+
+def _encodes_as_utf8(body: object) -> bool:
+    """False when a `\\ud800`-style escape left a lone surrogate, which SQLite can't store."""
+    try:
+        json.dumps(body, ensure_ascii=False).encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
 
 
 def _entity_field(body: Mapping[str, Any], entity_name: str, field: str) -> str | None:

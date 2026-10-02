@@ -141,6 +141,10 @@ def _garbage() -> list[GarbageCase]:
         signed("signed, event not a string", b'{"event": 7}'),
         signed("signed handled type, no entity", b'{"event": "payment.captured"}'),
         signed("signed, payload not an object", b'{"event": "refund.created", "payload": 1}'),
+        signed(
+            "signed, lone surrogate payment id",
+            b'{"event":"order.paid","payload":{"payment":{"entity":{"id":"\\ud800"}}}}',
+        ),
         (
             "signed, no event id header",
             valid_body,
