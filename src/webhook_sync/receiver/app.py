@@ -127,6 +127,10 @@ def create_app(config: Config, data_dir: Path) -> FastAPI:
                 "result": stored.result,
                 "status_code": stored.status_code,
                 "reason": description.ignore_reason,
+                # A body-hash replay is stored under the first event's id; the header's id (A17).
+                "header_event_id": (
+                    verified.event_id if verified.event_id != stored.event_id else None
+                ),
             },
         )
         return JSONResponse({"result": stored.result}, status_code=stored.status_code)
