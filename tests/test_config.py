@@ -60,6 +60,12 @@ def test_secrets_come_from_dotenv_and_the_real_environment_wins(tmp_path: Path) 
     assert secrets.webhook_secrets == ("newest-from-env", "older-from-env")
 
 
+def test_the_configured_sinks_are_the_sinks_sections_present(tmp_path: Path) -> None:
+    config = load_config(write_config(tmp_path, DOTENV), environ={})
+
+    assert config.sinks == ("sheets",)
+
+
 def test_secrets_never_appear_in_the_configs_repr(tmp_path: Path) -> None:
     config = load_config(write_config(tmp_path, DOTENV), environ={})
 

@@ -61,6 +61,7 @@ def config(data_dir: Path) -> Config:
             webhook_secrets=(TEST_WEBHOOK_SECRET,),
         ),
         sheets=SheetsConfig(spreadsheet_id=TEST_SPREADSHEET_ID),
+        sinks=("sheets",),
     )
 
 
