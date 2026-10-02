@@ -44,6 +44,8 @@ class Receiver:
     rejections: RejectionCounters
     fail_first: FailFirst | None = None
     """The demo fail-first switch, when `wsync serve --demo-fail-first N` turned it on."""
+    shutting_down: bool = False
+    """Set by `shut_down`: every new delivery is answered 503 (check 1)."""
 
 
 def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = None) -> FastAPI:
@@ -99,6 +101,9 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
         received_at = utc_now()
         receiver: Receiver = request.app.state.receiver
         adapter = receiver.razorpay
+        if receiver.shutting_down:
+            # Check 1: a delivery taken now might not commit; 503 makes the source retry (Q37).
+            return JSONResponse({"error": "shutting_down"}, status_code=503)
         if receiver.rejections.has_closed_minutes():
             await _write_rejection_counts(receiver)
         checked = await _check(request, receiver.rate_cap, adapter)
@@ -172,6 +177,14 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
         return JSONResponse({"result": stored.result}, status_code=stored.status_code)
 
     return app
+
+
+async def shut_down(app: FastAPI) -> None:
+    """The shutdown's steps before the listener closes (operations.md): answer 503 to new
+    deliveries, then write the rejection counts, the open minute's included."""
+    receiver: Receiver = app.state.receiver
+    receiver.shutting_down = True
+    await write_all_rejection_counts(receiver)
 
 
 async def _write_rejection_counts(receiver: Receiver) -> None:
