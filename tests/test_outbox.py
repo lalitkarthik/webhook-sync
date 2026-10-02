@@ -166,7 +166,7 @@ async def test_an_ignored_event_makes_no_job(
     assert await read_rows("SELECT job_id FROM events") == [{"job_id": None}]
 
 
-async def test_a_handled_event_that_names_no_payment_is_malformed_and_stores_nothing(
+async def test_a_handled_event_that_names_no_payment_is_stored_as_ignored_with_no_job(
     client: httpx.AsyncClient, read_rows: ReadRows
 ) -> None:
     body, headers = sign_razorpay(
@@ -181,8 +181,17 @@ async def test_a_handled_event_that_names_no_payment_is_malformed_and_stores_not
 
     response = await client.post("/webhooks/razorpay", content=body, headers=headers)
 
-    assert (response.status_code, response.json()) == (400, {"rejection": "malformed"})
-    assert await read_rows("SELECT * FROM events") == []
+    assert response.status_code == 202
+    events = await read_rows("SELECT type, outcome, ignore_reason, payment_key, job_id FROM events")
+    assert events == [
+        {
+            "type": "refund.created",
+            "outcome": "ignored",
+            "ignore_reason": "no_payment",
+            "payment_key": None,
+            "job_id": None,
+        }
+    ]
     assert await read_rows("SELECT * FROM jobs") == []
 
 

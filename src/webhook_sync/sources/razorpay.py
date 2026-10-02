@@ -117,9 +117,12 @@ class RazorpayAdapter:
             ),
             None,
         )
-        # A handled event's job is keyed by its payment, so it must name one.
-        if handled and (entity_id is None or payment_key is None):
+        if handled and entity_id is None:
             return Rejection("malformed")
+        # A job is keyed by its payment: a handled type that names none is kept, ignored, no job.
+        ignore_reason = (
+            "unhandled_type" if not handled else "no_payment" if payment_key is None else None
+        )
 
         created_at = body.get("created_at")
         created_seconds = (
@@ -140,7 +143,7 @@ class RazorpayAdapter:
             source_created_at=(
                 None if created_seconds is None else datetime.fromtimestamp(created_seconds, UTC)
             ),
-            ignore_reason=None if handled else "unhandled_type",
+            ignore_reason=ignore_reason,
         )
 
 
