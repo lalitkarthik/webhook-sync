@@ -332,6 +332,19 @@ async def reap(
     return await _take_back(writer, expired, retry_profile=retry_profile, now=now, rng=rng)
 
 
+async def reclaim(
+    writer: Writer, *, retry_profile: RetryProfile, now: datetime, rng: random.Random
+) -> list[int]:
+    """At start, before serving: take back every job still running, lease expired or not.
+
+    One server per database (ADR 0007) makes each a leftover of a crashed run (A13). Each is
+    reaped as `reap` does it: its attempt counted, backoff or dead, an `attempts` row `reaped`,
+    so a job that crashes the process every time still reaches dead. Returns the ids.
+    """
+    running = sa.select(jobs.c.id).where(jobs.c.status == "running")
+    return await _take_back(writer, running, retry_profile=retry_profile, now=now, rng=rng)
+
+
 async def _take_back(
     writer: Writer,
     which: sa.Select[tuple[int]],

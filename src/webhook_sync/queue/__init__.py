@@ -15,6 +15,7 @@ from webhook_sync.queue.operations import (
     fail,
     heartbeat,
     reap,
+    reclaim,
 )
 from webhook_sync.queue.pause import Pauses, PauseTarget
 from webhook_sync.queue.retry import backoff, max_attempts
@@ -39,5 +40,6 @@ __all__ = [
     "heartbeat",
     "max_attempts",
     "reap",
+    "reclaim",
     "run_reaper",
 ]
