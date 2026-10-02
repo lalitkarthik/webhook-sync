@@ -46,10 +46,15 @@ select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF", "ASYNC", "PT"]
 [tool.pyright]
 include = ["src", "tests"]
 pythonVersion = "3.14"
+extraPaths = ["src", "tests"]
 typeCheckingMode = "strict"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = ["--import-mode=importlib", "--strict-markers"]
+pythonpath = ["tests"]
+markers = [
+    "unrecorded: uses Razorpay's documented samples, not recorded deliveries (Q113)",
+]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
