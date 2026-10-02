@@ -111,3 +111,79 @@ async def test_a_partly_refunded_payment_is_partially_refunded_by_its_processed_
 
     assert row == {"status": "partially_refunded", "refunded_minor": 20000}
     assert await read_rows("SELECT status FROM jobs") == [{"status": "done"}]
+
+
+def with_refunds(state: dict[str, Any], *refunds: tuple[int, str]) -> dict[str, Any]:
+    """`state` with its expanded refunds replaced by these (amount, status) pairs, each shaped
+    like the recorded first refund."""
+    recorded = recorded_fetch(f"payment-captured-partly-refunded-{PARTLY_REFUNDED}")
+    template = recorded["refunds"]["items"][0]
+    items = [
+        {**template, "id": f"rfnd_Test{n:010d}", "amount": amount, "status": status}
+        for n, (amount, status) in enumerate(refunds)
+    ]
+    return {**state, "refunds": {"entity": "collection", "count": len(items), "items": items}}
+
+
+async def test_processed_refunds_equal_to_the_amount_make_it_refunded(
+    writer: Writer, ledger: StageRunner, razorpay: respx.MockRouter, read_rows: ReadRows
+) -> None:
+    recorded = recorded_fetch(f"payment-captured-partly-refunded-{PARTLY_REFUNDED}")
+    state = with_refunds(
+        {**recorded, "status": "refunded"}, (30000, "processed"), (20000, "processed")
+    )
+
+    row = await ledger_row_after_fetch(writer, ledger, razorpay, read_rows, state)
+
+    assert row == {"status": "refunded", "refunded_minor": 50000}
+
+
+async def test_a_pending_refund_counts_for_nothing_until_it_is_processed(
+    writer: Writer, ledger: StageRunner, razorpay: respx.MockRouter, read_rows: ReadRows
+) -> None:
+    recorded = recorded_fetch(f"payment-captured-partly-refunded-{PARTLY_REFUNDED}")
+    fetch = razorpay.get(f"/v1/payments/{PARTLY_REFUNDED}")
+    fetch.respond(200, json=with_refunds(recorded, (10000, "pending")))
+    await enqueue_ledger_job(writer, PARTLY_REFUNDED)
+    await ledger.run_once()
+    pending = await read_rows("SELECT status, refunded_minor, row_version FROM payments")
+
+    fetch.respond(200, json=with_refunds(recorded, (10000, "processed")))
+    await enqueue_ledger_job(writer, PARTLY_REFUNDED)
+    await ledger.run_once()
+
+    assert pending == [{"status": "succeeded", "refunded_minor": 0, "row_version": 1}]
+    assert await read_rows("SELECT status, refunded_minor, row_version FROM payments") == [
+        {"status": "partially_refunded", "refunded_minor": 10000, "row_version": 2}
+    ]
+
+
+async def test_a_failed_refund_alone_refunds_nothing(
+    writer: Writer, ledger: StageRunner, razorpay: respx.MockRouter, read_rows: ReadRows
+) -> None:
+    documented = recorded_fetch("unrecorded-refund-failed")  # its one refund failed
+
+    row = await ledger_row_after_fetch(writer, ledger, razorpay, read_rows, documented)
+
+    assert row == {"status": "succeeded", "refunded_minor": 0}
+
+
+async def test_a_failed_refund_leaves_the_refunded_amount_at_the_processed_sum(
+    writer: Writer, ledger: StageRunner, razorpay: respx.MockRouter, read_rows: ReadRows
+) -> None:
+    recorded = recorded_fetch(f"payment-captured-partly-refunded-{PARTLY_REFUNDED}")
+    state = with_refunds(recorded, (10000, "processed"), (25000, "failed"), (5000, "processed"))
+
+    row = await ledger_row_after_fetch(writer, ledger, razorpay, read_rows, state)
+
+    assert row == {"status": "partially_refunded", "refunded_minor": 15000}
+
+
+async def test_an_uncaptured_authorisation_auto_refunded_is_canceled(
+    writer: Writer, ledger: StageRunner, razorpay: respx.MockRouter, read_rows: ReadRows
+) -> None:
+    documented = recorded_fetch("unrecorded-authorized-auto-refunded")
+
+    row = await ledger_row_after_fetch(writer, ledger, razorpay, read_rows, documented)
+
+    assert row == {"status": "canceled", "refunded_minor": 0}
