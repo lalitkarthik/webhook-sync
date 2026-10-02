@@ -6,15 +6,29 @@ injected sleep, so a test decides when it is over instead of waiting for it.
 
 import asyncio
 import random
+import sqlite3
+from contextlib import closing, suppress
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from support import ReadRows
 from time_machine import TimeMachineFixture
 
 from webhook_sync.clock import utc_now
+from webhook_sync.db.files import database_path
 from webhook_sync.db.writer import Writer
-from webhook_sync.queue import ClaimedJob, Done, Pauses, Runners, StageRunner, Work, enqueue
+from webhook_sync.queue import (
+    ClaimedJob,
+    Done,
+    Pauses,
+    Runners,
+    StageRunner,
+    Work,
+    claim,
+    enqueue,
+    release,
+)
 
 NINE = datetime(2026, 10, 2, 9, 0, tzinfo=UTC)
 INSTANCE = "wsync-test@2026-10-02T08:59:00.000000Z"
@@ -121,4 +135,40 @@ async def test_a_job_still_running_after_20_seconds_is_released_with_its_attempt
     ]
     assert await read_rows("SELECT number, outcome, finished_at FROM attempts") == [
         {"number": 1, "outcome": "released", "finished_at": "2026-10-02T09:00:00.000000Z"}
+    ]
+
+
+async def test_a_runner_cancelled_while_waiting_to_begin_a_transaction_does_not_block_the_release(
+    writer: Writer, data_dir: Path, read_rows: ReadRows
+) -> None:
+    job_id = await enqueue_job(writer)
+    await claim(
+        writer,
+        stage="ledger",
+        sink="ledger",
+        limit=1,
+        claimed_by=INSTANCE,
+        pauses=Pauses(),
+        now=utc_now(),
+    )
+
+    async def heartbeat_like_write() -> None:
+        async with writer.transaction():
+            pass
+
+    with closing(sqlite3.connect(database_path(data_dir), isolation_level=None)) as other:
+        other.execute("BEGIN IMMEDIATE")  # the runner's BEGIN waits on busy_timeout
+        cut_short = asyncio.create_task(heartbeat_like_write())
+        for _ in range(5):
+            await asyncio.sleep(0)  # the runner is now waiting inside its BEGIN
+        cut_short.cancel()  # the 20 s are up
+        other.execute("ROLLBACK")  # the BEGIN cut short now goes through all the same
+    with suppress(asyncio.CancelledError):
+        await cut_short
+
+    released = await asyncio.wait_for(release(writer, now=utc_now()), timeout=10)
+
+    assert released == [job_id]
+    assert await read_rows("SELECT status, attempts FROM jobs") == [
+        {"status": "waiting", "attempts": 0}
     ]
