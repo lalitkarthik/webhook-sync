@@ -84,7 +84,7 @@ Treating an event as a hint that one object changed, fetching that object's curr
 _Avoid_: pull mode, refresh
 
 **Not found at source**:
-A payment whose fetch returns 404, usually deleted test data. The row is marked, verify lists it, nothing else is written.
+A payment whose fetch says the id doesn't exist (Razorpay: 400 "The id provided does not exist"), usually deleted test data or a mode or account mix-up. The row is marked, verify lists it, nothing else is written.
 _Avoid_: orphan (verify's word for the same row seen from the other side)
 
 **Fee** / **Net**:
