@@ -4,6 +4,8 @@
 
 **How to read it.** Read the first five sections, then follow the reading order at the bottom. Words in **bold** are defined in [CONTEXT.md](../../CONTEXT.md). Everything here is a **decision, not a description**: none of it is built. The questions behind each decision are in [grilling-log.md](grilling-log.md).
 
+**Being revised (2026-10-02).** Razorpay becomes the first source and Stripe the second: see [razorpay-first-brief.md](razorpay-first-brief.md), which wins over this page on that point until grilling round 11 folds it in.
+
 **Status (2026-09-30).** Designed in ten grilling rounds (Q1-Q102), audited independently ([38 findings](audit/2026-09-30-design-audit.md)), revised, and checked against primary sources ([research-gaps.md](research-gaps.md), 2026-10-01); [the audit response](audit/2026-09-30-audit-response.md) maps every finding to its change. Awaiting review. The implementation plan is written later.
 
 ## What it is, in one paragraph

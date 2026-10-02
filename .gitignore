@@ -14,3 +14,9 @@ __pycache__/
 *.db-journal
 *.sqlite3
 out/
+
+# Feature-loop worktrees
+.claude/worktrees/
+
+# Research scratch
+.firecrawl/
