@@ -23,6 +23,7 @@ from webhook_sync.db.writer import Writer
 from webhook_sync.logs import configure_logging
 from webhook_sync.queue import reclaim
 from webhook_sync.receiver.app import create_app
+from webhook_sync.receiver.demo import check_demo_switch
 
 log = logging.getLogger("webhook_sync.serve")
 
@@ -42,15 +43,31 @@ def add_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) 
         default=DEFAULT_CONFIG,
         help="the config file (default: ./webhook-sync.toml)",
     )
+    parser.add_argument(
+        "--demo-fail-first",
+        type=_at_least_one,
+        metavar="N",
+        help="demo only: answer 500 to the first N attempts of each stored event",
+    )
     parser.set_defaults(handler=serve)
+
+
+def _at_least_one(text: str) -> int:
+    try:
+        n = int(text)
+    except ValueError:
+        n = 0
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"must be a whole number of at least 1, not {text!r}")
+    return n
 
 
 def serve(args: argparse.Namespace) -> int:
     configure_logging()
     try:
-        with start(args.config) as config:
+        with start(args.config, demo_fail_first=args.demo_fail_first) as config:
             host, port = split_listen(config.service.public_listen)
-            app = create_app(config, config.service.data_dir)
+            app = create_app(config, config.service.data_dir, args.demo_fail_first)
             uvicorn.run(app, host=host, port=port, log_config=None, access_log=False)
     except StartRefused as refusal:
         print(f"wsync serve: {refusal}", file=sys.stderr)
@@ -59,7 +76,11 @@ def serve(args: argparse.Namespace) -> int:
 
 
 @contextmanager
-def start(config_path: Path, environ: Mapping[str, str] | None = None) -> Generator[Config]:
+def start(
+    config_path: Path,
+    environ: Mapping[str, str] | None = None,
+    demo_fail_first: int | None = None,
+) -> Generator[Config]:
     """Run the startup sequence and yield the config, holding the lock until the block ends.
 
     Order (operations.md): take the lock → validate the config → refuse a newer schema → apply
@@ -79,6 +100,8 @@ def start(config_path: Path, environ: Mapping[str, str] | None = None) -> Genera
                     f"service.data_dir {data_dir} cannot be used: {error.strerror}"
                 ) from None
             config = load_config(config_path, environ)
+            if demo_fail_first is not None:  # part of validating the config (A6)
+                check_demo_switch(config)
             asyncio.run(_prepare_database(config.service.data_dir, config.service.retry_profile))
         except (ConfigError, LockHeld, SchemaTooNew) as error:
             raise StartRefused(str(error)) from None

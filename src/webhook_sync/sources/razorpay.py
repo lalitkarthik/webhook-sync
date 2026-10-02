@@ -43,6 +43,30 @@ _PRIMARY_ENTITY = (
     ("order.", "order"),
 )
 
+# Q119 / A5: what `events.payload` keeps. Everything else (email, contact, notes, card, VPA, bank
+# details, fields Razorpay adds later) is dropped before storing.
+_TOP_LEVEL_KEYS = frozenset({"entity", "account_id", "event", "contains", "created_at"})
+_ENTITY_FIELDS = frozenset(
+    {
+        "id",
+        "entity",
+        "amount",
+        "amount_refunded",
+        "currency",
+        "status",
+        "refund_status",
+        "captured",
+        "order_id",
+        "payment_id",
+        "method",
+        "speed_requested",
+        "speed_processed",
+        "error_code",
+        "error_reason",
+        "created_at",
+    }
+)
+
 # Where an event names its payment, in order (A16): stored for ignored events too.
 _PAYMENT_KEY_PATHS = (("payment", "id"), ("refund", "payment_id"), ("dispute", "payment_id"))
 
@@ -50,8 +74,9 @@ _PAYMENT_KEY_PATHS = (("payment", "id"), ("refund", "payment_id"), ("dispute", "
 class RazorpayAdapter:
     name = "razorpay"
 
-    def __init__(self, *, mode: Mode, webhook_secrets: Sequence[str]) -> None:
+    def __init__(self, *, mode: Mode, account: str, webhook_secrets: Sequence[str]) -> None:
         self._mode = mode
+        self._account = account
         self._secrets = tuple(webhook_secrets)
 
     def verify(self, raw_body: bytes, headers: Mapping[str, str]) -> VerifiedDelivery | Rejection:
@@ -103,6 +128,10 @@ class RazorpayAdapter:
         event_type = body.get("event")
         if not isinstance(event_type, str) or not event_type:
             return Rejection("malformed")
+        # Q121: a body naming another account is refused; one naming none is the configured one's.
+        account_id = body.get("account_id")
+        if account_id is not None and account_id != self._account:
+            return Rejection("wrong_account")
         handled = event_type in HANDLED_TYPES
 
         entity_name = next(
@@ -134,17 +163,44 @@ class RazorpayAdapter:
             "" if created_seconds is None else str(created_seconds),
             self._mode,
         )
-        account_id = body.get("account_id")
         return EventDescription(
             type=event_type,
-            account_id=account_id if isinstance(account_id, str) and account_id else None,
+            account_id=account_id,
             payment_key=payment_key,
             fingerprint=hashlib.sha256("|".join(fingerprint_parts).encode()).hexdigest(),
             source_created_at=(
                 None if created_seconds is None else datetime.fromtimestamp(created_seconds, UTC)
             ),
             ignore_reason=ignore_reason,
+            payload=_allow_listed(body),
         )
+
+
+def _allow_listed(body: Mapping[str, Any]) -> dict[str, Any]:
+    """The body with only Q119's fields: allow-listed top-level keys, and under `payload` each
+    entity's allow-listed fields. Only plain values are kept, so a nested object never slips in
+    under an allowed name."""
+    kept: dict[str, Any] = {k: v for k, v in body.items() if k in _TOP_LEVEL_KEYS and _plain(v)}
+    entities = {
+        name: {"entity": {k: v for k, v in entity.items() if k in _ENTITY_FIELDS and _plain(v)}}
+        for name, wrapper in _object(body.get("payload")).items()
+        if (entity := _object(_object(wrapper).get("entity")))
+    }
+    if entities:
+        kept["payload"] = entities
+    return kept
+
+
+def _object(value: object) -> dict[str, Any]:
+    """`value` when it is a JSON object, else an empty one."""
+    return cast(dict[str, Any], value) if isinstance(value, dict) else {}
+
+
+def _plain(value: object) -> bool:
+    """A scalar, or a list of strings (`contains`)."""
+    if isinstance(value, list):
+        return all(isinstance(item, str) for item in cast(list[object], value))
+    return value is None or isinstance(value, str | int | float | bool)
 
 
 def _encodes_as_utf8(body: object) -> bool:
