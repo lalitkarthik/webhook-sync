@@ -80,13 +80,10 @@ class Config:
     razorpay: RazorpayConfig
     razorpay_secrets: RazorpaySecrets
     sheets: SheetsConfig
+    sinks: tuple[str, ...]
+    """The configured sinks' names, one per `[sinks.*]` section present (today `sheets`). Each
+    real ledger change makes one mirror job per sink (A19)."""
     demo: DemoConfig = DemoConfig()
-
-    @property
-    def sinks(self) -> tuple[str, ...]:
-        """The configured sinks' names, one per `[sinks.*]` section: today always `sheets`,
-        which the config requires. Each real ledger change makes one mirror job per sink (A19)."""
-        return ("sheets",)
 
 
 SECRET_NAMES = ("RAZORPAY_KEY_ID", "RAZORPAY_KEY_SECRET", "RAZORPAY_WEBHOOK_SECRET")
@@ -216,6 +213,7 @@ def load_config(path: Path, environ: Mapping[str, str] | None = None) -> Config:
             webhook_secrets=webhook_secrets,
         ),
         sheets=SheetsConfig(spreadsheet_id=_string(sheets, "spreadsheet_id", "sinks.sheets")),
+        sinks=tuple(_section(document, "sinks")),
         demo=DemoConfig(spreadsheet_ids=tuple(demo.get("spreadsheet_ids", []))),
     )
 
