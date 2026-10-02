@@ -260,3 +260,42 @@ async def test_a_later_good_fetch_clears_not_found(
         {"caused_by_event_id": "evt_lost"},
         {"caused_by_event_id": "evt_back"},
     ]
+
+
+@pytest.mark.parametrize("status", [401, 403])
+async def test_a_refused_key_pauses_the_source_and_refunds_the_attempt(
+    writer: Writer,
+    ledger: StageRunner,
+    razorpay: respx.MockRouter,
+    read_rows: ReadRows,
+    pauses: Pauses,
+    status: int,
+) -> None:
+    fetch = razorpay.get(FETCH_PATH).respond(
+        status, json={"error": {"code": "BAD_REQUEST_ERROR", "description": "Authentication failed"}}
+    )
+    await enqueue_ledger_job(writer, "evt_first")
+    await ledger.run_once()
+    await enqueue_ledger_job(writer, "evt_other", payment_key="pay_Tj9sm13R8h2378")
+
+    assert await ledger.run_once() == 0
+
+    assert pauses.sources == {"razorpay"}
+    assert fetch.call_count == 1
+    assert await read_rows(LEDGER_JOB) == [
+        {
+            "status": "waiting",
+            "attempts": 0,
+            "run_after": "2026-10-02T20:30:00.000000Z",
+            "last_error": f"Razorpay answered HTTP {status}",
+            "last_error_class": "pause",
+        },
+        {
+            "status": "waiting",
+            "attempts": 0,
+            "run_after": "2026-10-02T20:30:00.000000Z",
+            "last_error": None,
+            "last_error_class": None,
+        },
+    ]
+    assert await read_rows(ATTEMPTS) == [{"number": 1, "outcome": "pause"}]

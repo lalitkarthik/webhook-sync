@@ -143,44 +143,59 @@ class RazorpayAdapter:
 
     async def fetch(self, payment_key: str) -> FetchResult:
         """The payment's current state, with its refunds and card expanded."""
-        try:
-            response = await self._api.get(
-                f"/v1/payments/{payment_key}",
-                params=[("expand[]", "refunds"), ("expand[]", "card")],
-            )
-        except httpx.TransportError as error:  # a timeout, a refused or dropped connection
-            return Failure(f"fetch failed: {type(error).__name__}", "retry")
-        if response.status_code == 400 and _error_description(response) == UNKNOWN_ID:
-            return NotFound(http_status=400)
-        response.raise_for_status()
-        state = cast(dict[str, Any], response.json())
+        state = await self._get(
+            f"/v1/payments/{payment_key}", [("expand[]", "refunds"), ("expand[]", "card")]
+        )
+        if not isinstance(state, dict):
+            return state
         expanded = _object(state.get("refunds")).get("items")
         if isinstance(expanded, list) and len(cast(list[object], expanded)) >= EXPANDED_PAGE:
             refunds = await self._all_refunds(payment_key)
-            if isinstance(refunds, Failure):
+            if not isinstance(refunds, list):
                 return refunds
             state = {**state, "refunds": {"entity": "collection", "items": refunds}}
         return Fetched(state)
 
-    async def _all_refunds(self, payment_key: str) -> list[dict[str, Any]] | Failure:
+    async def _all_refunds(self, payment_key: str) -> list[dict[str, Any]] | NotFound | Failure:
         """Every refund of the payment, paged 100 at a time until a page comes back short.
 
         A refunds collection's `count` is the items on that page, not a total, so a short page
-        is the only sign of the end (the fetch recordings' README; #22)."""
+        is the only sign of the end (the fetch recordings' README; #22). Each page's answer is
+        classified as the main fetch's is."""
         refunds: list[dict[str, Any]] = []
         while True:
-            try:
-                response = await self._api.get(
-                    f"/v1/payments/{payment_key}/refunds",
-                    params={"count": REFUNDS_PAGE, "skip": len(refunds)},
-                )
-            except httpx.TransportError as error:
-                return Failure(f"refunds fetch failed: {type(error).__name__}", "retry")
-            response.raise_for_status()
-            page = cast(list[dict[str, Any]], response.json()["items"])
+            answer = await self._get(
+                f"/v1/payments/{payment_key}/refunds",
+                [("count", str(REFUNDS_PAGE)), ("skip", str(len(refunds)))],
+            )
+            if not isinstance(answer, dict):
+                return answer
+            page = cast(list[dict[str, Any]], answer["items"])
             refunds.extend(page)
             if len(page) < REFUNDS_PAGE:
                 return refunds
+
+    async def _get(
+        self, path: str, params: Sequence[tuple[str, str]]
+    ) -> dict[str, Any] | NotFound | Failure:
+        """One API call: the answer's JSON object, or what its failure means (A12)."""
+        try:
+            response = await self._api.get(path, params=list(params))
+        except httpx.TransportError as error:  # a timeout, a refused or dropped connection
+            return Failure(f"Razorpay call failed: {type(error).__name__}", "retry")
+        status = response.status_code
+        if status == 400 and _error_description(response) == UNKNOWN_ID:
+            return NotFound(http_status=400)
+        if status in (401, 403):
+            return Failure(
+                f"Razorpay answered HTTP {status}",
+                "pause",
+                pause_target="source",
+                http_status=status,
+            )
+        if not response.is_success:
+            return Failure(f"Razorpay answered HTTP {status}", "dead", http_status=status)
+        return cast(dict[str, Any], response.json())
 
     def to_row(self, state: Mapping[str, Any]) -> BusinessRow | None:
         return payment_row(state, metadata_keys=self._metadata_keys)
