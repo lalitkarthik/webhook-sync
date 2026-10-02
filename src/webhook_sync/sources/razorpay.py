@@ -27,6 +27,7 @@ from razorpay.errors import SignatureVerificationError  # pyright: ignore[report
 from webhook_sync.clock import utc_now
 from webhook_sync.config import Mode
 from webhook_sync.queue import Failure
+from webhook_sync.receiver.rate_cap import RateCap
 from webhook_sync.sources.base import (
     BusinessRow,
     EventDescription,
@@ -94,6 +95,10 @@ _PAYMENT_KEY_PATHS = (("payment", "id"), ("refund", "payment_id"), ("dispute", "
 FETCH_TIMEOUT = timedelta(seconds=10)
 """How long one fetch may take before it is given up and retried (A11)."""
 
+CALLS_PER_SECOND = 10.0
+"""The source's token bucket: at most 10 API calls a second, a burst of 10 (sources.md). A
+call waits for a token, so a burst never meets Razorpay's unpublished throttle."""
+
 
 def api_client(api_url: str, key_id: str, key_secret: str) -> httpx.AsyncClient:
     """The client every Razorpay API call goes through: basic auth with the key, 10 s timeout."""
@@ -157,6 +162,7 @@ class RazorpayAdapter:
         fetch_timeout: timedelta = FETCH_TIMEOUT,
     ) -> None:
         self._fetch_timeout = fetch_timeout
+        self._bucket = RateCap(rate=CALLS_PER_SECOND, burst=CALLS_PER_SECOND)
         self._mode = mode
         self._metadata_keys = tuple(metadata_keys)
         self._account = account
@@ -200,7 +206,10 @@ class RazorpayAdapter:
     async def _get(
         self, path: str, params: Sequence[tuple[str, str]]
     ) -> dict[str, Any] | NotFound | Failure:
-        """One API call: the answer's JSON object, or what its failure means (A12)."""
+        """One API call, once the bucket gives a token: the answer's JSON object, or what its
+        failure means (A12)."""
+        while not self._bucket.allow(self.name):
+            await asyncio.sleep(1 / CALLS_PER_SECOND)
         try:
             # The whole call, not only each read, ends at the timeout: a trickle can't hang it.
             async with asyncio.timeout(self._fetch_timeout.total_seconds()):

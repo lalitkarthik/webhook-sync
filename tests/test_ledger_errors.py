@@ -487,3 +487,29 @@ async def test_a_hung_fetch_ends_at_the_timeout_as_retry(
         "retry",
     )
     assert await read_rows(ATTEMPTS) == [{"number": 1, "outcome": "retry"}]
+
+
+async def test_an_eleventh_fetch_in_the_same_instant_waits_for_the_bucket(
+    writer: Writer,
+    ledger: StageRunner,
+    razorpay: respx.MockRouter,
+    read_rows: ReadRows,
+    frozen_clock: TimeMachineFixture,
+) -> None:
+    fetch = razorpay.get(path__regex=r"^/v1/payments/pay_Test\d+$").respond(200, json=captured())
+    for n in range(11):
+        await enqueue_ledger_job(writer, f"evt_{n}", payment_key=f"pay_Test{n:02d}")
+    for _ in range(10):
+        await ledger.run_once()
+    assert fetch.call_count == 10
+
+    eleventh = asyncio.create_task(ledger.run_once())
+    await asyncio.sleep(0.3)  # real time; the clock stands still, so the bucket stays empty
+    assert fetch.call_count == 10
+    assert not eleventh.done()
+
+    frozen_clock.shift(timedelta(milliseconds=100))  # one token's worth at 10 a second
+    await asyncio.wait_for(eleventh, timeout=5)
+
+    assert fetch.call_count == 11
+    assert len(await read_rows("SELECT * FROM payments")) == 11
