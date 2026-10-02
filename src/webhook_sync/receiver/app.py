@@ -1,7 +1,8 @@
 """The public app: `POST /webhooks/razorpay` and `GET /health` (receiver.md).
 
 Built from a config object and a data directory. Its lifespan opens the writer and applies
-pending migrations before the first request, starts the reaper, and closes the writer at the end.
+pending migrations before the first request, starts the stage runners and the reaper, and closes
+the writer at the end. `shut_down` runs the shutdown's steps while the app still answers.
 """
 
 import asyncio
@@ -20,7 +21,7 @@ from webhook_sync.clock import to_db_text, utc_now
 from webhook_sync.config import Config
 from webhook_sync.db.migrations import apply_pending
 from webhook_sync.db.writer import Writer
-from webhook_sync.queue import run_reaper
+from webhook_sync.queue import Runners, run_reaper
 from webhook_sync.receiver.checks import check_content_type, check_security_headers, read_body
 from webhook_sync.receiver.demo import FailFirst
 from webhook_sync.receiver.rate_cap import RateCap
@@ -72,6 +73,9 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
                 fail_first=FailFirst(demo_fail_first) if demo_fail_first is not None else None,
             )
             app.state.receiver = receiver
+            runners = Runners(writer, [])  # P1 registers no production stage; P2 adds ledger
+            app.state.runners = runners
+            runners.start()
             minutely = asyncio.create_task(_write_rejection_counts_every_minute(receiver))
             reaper = asyncio.create_task(
                 run_reaper(writer, retry_profile=config.service.retry_profile)
@@ -79,6 +83,8 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
             try:
                 yield
             finally:
+                if not receiver.shutting_down:  # stopped some other way than `shut_down`
+                    await shut_down(app)
                 reaper.cancel()
                 with suppress(asyncio.CancelledError):
                     await reaper
@@ -181,9 +187,13 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
 
 async def shut_down(app: FastAPI) -> None:
     """The shutdown's steps before the listener closes (operations.md): answer 503 to new
-    deliveries, then write the rejection counts, the open minute's included."""
+    deliveries → stop claiming → up to 20 s for running jobs → release unfinished leases →
+    write the rejection counts, the open minute's included. The caller then stops listening
+    and releases the lock."""
     receiver: Receiver = app.state.receiver
     receiver.shutting_down = True
+    runners: Runners = app.state.runners
+    await runners.stop()
     await write_all_rejection_counts(receiver)
 
 
