@@ -66,3 +66,16 @@ jobs = sa.Table(
     sa.Column("updated_at", sa.Text, nullable=False),
     sa.Column("resolved_note", sa.Text),
 )
+
+attempts = sa.Table(
+    "attempts",
+    metadata,
+    sa.Column("id", sa.Integer, primary_key=True),
+    sa.Column("job_id", sa.Integer, nullable=False),
+    sa.Column("number", sa.Integer, nullable=False),
+    sa.Column("started_at", sa.Text),
+    sa.Column("finished_at", sa.Text, nullable=False),
+    sa.Column("outcome", sa.Text, nullable=False),
+    sa.Column("error", sa.Text),
+    sa.Column("duration_ms", sa.Integer),
+)
