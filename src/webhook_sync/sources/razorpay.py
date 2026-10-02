@@ -29,6 +29,7 @@ from webhook_sync.sources.base import (
     EventDescription,
     Fetched,
     FetchResult,
+    NotFound,
     PaymentStatus,
     Rejection,
     VerifiedDelivery,
@@ -108,6 +109,20 @@ REFUNDS_PAGE = 100
 """Refunds asked for per page of `GET /v1/payments/{id}/refunds`, the most Razorpay allows."""
 
 
+UNKNOWN_ID = "The id provided does not exist"
+"""Razorpay's 400 description for a payment id it doesn't know: not found at source (A5)."""
+
+
+def _error_description(response: httpx.Response) -> str | None:
+    """The `error.description` of a Razorpay error answer, or None when it has none."""
+    try:
+        body: object = response.json()
+    except ValueError:
+        return None
+    description = _object(_object(body).get("error")).get("description")
+    return description if isinstance(description, str) else None
+
+
 class RazorpayAdapter:
     name = "razorpay"
 
@@ -135,6 +150,8 @@ class RazorpayAdapter:
             )
         except httpx.TransportError as error:  # a timeout, a refused or dropped connection
             return Failure(f"fetch failed: {type(error).__name__}", "retry")
+        if response.status_code == 400 and _error_description(response) == UNKNOWN_ID:
+            return NotFound(http_status=400)
         response.raise_for_status()
         state = cast(dict[str, Any], response.json())
         expanded = _object(state.get("refunds")).get("items")

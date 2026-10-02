@@ -11,7 +11,7 @@ import hashlib
 import json
 import logging
 import random
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime
 from typing import Any
 
@@ -33,7 +33,7 @@ from webhook_sync.queue import (
     enqueue,
 )
 from webhook_sync.queue.runner import Sleep
-from webhook_sync.sources.base import BusinessRow, SourceAdapter
+from webhook_sync.sources.base import BusinessRow, NotFound, SourceAdapter
 
 log = logging.getLogger("webhook_sync.ledger")
 
@@ -121,6 +121,8 @@ def ledger_work(
         if isinstance(fetched, Failure):
             _log_fetch(job, "failed", fetched.error_class)
             raise StageFailed(fetched)
+        if isinstance(fetched, NotFound):
+            return Done(writes=_not_found_writes(job))
         _log_fetch(job, "fetched")
         row = source.to_row(fetched.state)
 
@@ -132,6 +134,21 @@ def ledger_work(
         return Done(writes=writes)
 
     return work
+
+
+NOT_FOUND_WITHOUT_ROW = "not found at source: possible mode or account mix-up"
+"""Why a job ends dead when the source doesn't know a payment the ledger has no row for (A5)."""
+
+
+def _not_found_writes(job: ClaimedJob) -> Callable[[Transaction], Awaitable[None]]:
+    """The source doesn't know the payment: with no row, the job fails dead (A5)."""
+
+    async def writes(tx: Transaction) -> None:
+        stored = await _stored_row(tx, job)
+        if stored is None:
+            raise StageFailed(Failure(NOT_FOUND_WITHOUT_ROW, "dead"))
+
+    return writes
 
 
 async def write_row(
