@@ -51,10 +51,10 @@ The audit trail. Written once, by the receiver or the sweeper.
 | `account` | The source account the event belongs to | The business-row key carries it ([Q76](grilling-log.md)) |
 | `type`, `mode` | Event type; test or live | Handled or ignored; the mode check |
 | `fingerprint` | Hash of type, object id, creation time and mode | A **conflict** is a different fingerprint under the same id ([Q71](grilling-log.md)) |
-| `body_sha256` | Hash of the raw body as received | Kept for information. For Razorpay, whose event id isn't signed, a unique index on `(source, body_sha256)` makes a replayed body under a fresh id a duplicate ([Q86](grilling-log.md)) |
-| `payment_key` | The payment this event is about; `NULL` for ignored events | Links event, row and job |
+| `body_sha256` | Hash of the raw body as received | Kept for information. For Razorpay, whose event id isn't signed, a unique index on `(source, body_sha256)`, partial on `body_sha256 IS NOT NULL` so synthetic events without a body never collide, makes a replayed body under a fresh id a duplicate ([Q86](grilling-log.md)) |
+| `payment_key` | The payment this event is about, whenever the body names one, ignored dispute events included; `NULL` when it names none (P1 spec) | Links event, row and job |
 | `origin` | `delivery`, `sweep`, `backfill` or `replay` | How we learned of it |
-| `outcome`, `ignore_reason` | `queued` or `ignored`, with a reason (`unhandled_type`, `no_payment_intent`, `connect_account`) | Nothing disappears without a reason |
+| `outcome`, `ignore_reason` | `queued` or `ignored`, with a reason (`unhandled_type`, `no_payment`, `no_payment_intent`, `connect_account`) | Nothing disappears without a reason |
 | `job_id` | The job this event was folded into | Traceability survives coalescing (F17) |
 | `payload` | The body with fields no adapter reads removed (addresses, phone, IP, payment-method details) | For debugging. Set to `NULL` after 30 days ([Q91](grilling-log.md)) |
 | `source_created_at`, `received_at` | The event's own time; when we stored it | |

@@ -7,7 +7,7 @@ Primary means razorpay.com/docs (read as the Markdown copies Razorpay serves for
 | Q | Question | Verdict | One-line finding |
 |---|---|---|---|
 | Q1 | Test payments from a script | **contradicted, in the good direction** | An order by API, paid in headless Chromium through `checkout.js` and Razorpay's mock bank page (Netbanking, **Success**), is captured about 28 s after launch, with no human and no feature flag. Every server-to-server route needs Razorpay support to switch it on. |
-| Q2 | Duplicate storm without a resend button | confirmed: no resend | No Dashboard or API resend; support replays one event at a time (≤ 15 days old). Razorpay retries any non-2xx for 24 h, but the intervals are not published. A recorded body verifies forever (HMAC of the body only). |
+| Q2 | Duplicate storm without a resend button | confirmed: no resend (corrected: a Dashboard replay now exists, razorpay-receiver-facts.md Q2) | No Dashboard or API resend; support replays one event at a time (≤ 15 days old). Razorpay retries any non-2xx for 24 h, but the intervals are not published. A recorded body verifies forever (HMAC of the body only). |
 | Q3 | Outage scene by polling | **settled by a run** | `GET /v1/payments` lists newest first; `from` and `to` are both **inclusive**; `created` payments are listed; an undocumented `status` filter works. Unix seconds, 2000-2121, no maximum span. Tie order inside one second is unknown. |
 | Q4 | The tunnel | recommendation | Razorpay refuses 11 testing hosts (including `ngrok.io`, `loca.lt`) plus local names; ports 80/443 only; it suggests zrok. zrok's free-account interstitial answers **200**, which could swallow a delivery. Fallback: Cloudflare Quick Tunnel. |
 | Q5 | Fee and tax in test mode | confirmed | Null while `created`; filled at capture (1298/198 paise on ₹500 netbanking). The test rate (2.2% + GST) differs from the advertised 2%, so test fees are illustrative. |
@@ -82,6 +82,8 @@ URLs: https://razorpay.com/docs/payments/payments/test-card-details/, https://ra
 ## Q2: the duplicate-storm scene without a resend button
 
 **Question.** The GIF promises "the same delivery sent five times ends as one row". Razorpay has nothing like `stripe events resend`. What can produce five deliveries, and what must the caption say for each way?
+
+**Correction (2026-10-02):** a self-service Dashboard replay now exists, for unacknowledged events up to 7 days old, 5 a day; see [razorpay-receiver-facts.md](razorpay-receiver-facts.md) Q2.
 
 **Verdict:** There's no self-service resend, by Dashboard or API. Two honest options remain. (A) Provoke Razorpay's own retries: a demo-only switch stores the event, then answers 500 to the first four attempts. (B) Replay one recorded, correctly signed delivery four times ourselves. A is the stronger proof but its timing is unknown, so the spike decides. B always works and needs an exact caption.
 
@@ -190,7 +192,7 @@ URLs: https://razorpay.com/docs/api/payments/fetch-all-payments/, https://razorp
 
 | Tunnel | Free | Account | Stable URL | Interstitial risk | Razorpay doc |
 |---|---|---|---|---|---|
-| zrok (`*.share.zrok.io`) | yes, 5 GB a day | yes (myzrok.io) | yes, reserved name | **yes** for unverified free accounts; answers 200 | **suggested** |
+| zrok (`*.shares.zrok.io`; corrected by the P0 run) | yes, 5 GB a day | yes (myzrok.io) | yes, reserved name | **yes** for unverified free accounts; answers 200 | **suggested** |
 | Cloudflare Quick Tunnel (`*.trycloudflare.com`) | yes | no | no, new each run | none documented | not listed |
 | Tailscale Funnel (`*.ts.net`) | yes, Personal plan | yes | yes | none documented | not listed |
 | localhost.run (`*.lhr.life`) | yes, speed-limited | no | no, unless signed up | none documented | not listed |
@@ -207,7 +209,7 @@ URLs: https://razorpay.com/docs/api/payments/fetch-all-payments/, https://razorp
 **Open point / Spike** (owner's laptop, Windows 11, test mode):
 1. Install zrok (`windows.mdx` steps), sign up at myzrok.io, then `zrok2 enable <your_account_token>`, `zrok2 status`.
 2. `zrok2 create name -n public wsync-demo`, then, with the receiver on port 8080, `zrok2 share public localhost:8080 -n public:wsync-demo`.
-3. In Dashboard test mode, add webhook `https://wsync-demo.share.zrok.io/webhooks/razorpay` (OTP `754081`). Record whether it saves or the exact error text.
+3. In Dashboard test mode, add webhook `https://wsync-demo.shares.zrok.io/webhooks/razorpay` (OTP `754081`). Record whether it saves or the exact error text.
 4. Pay one test Payment Link. In the Dashboard log, open the delivery's **Response**. If it's zrok's HTML page rather than our receiver's reply, the interstitial caught it. Note the request's `User-Agent` either way.
 5. If caught: either add a card at myzrok.io and repeat, or switch to `cloudflared tunnel --url http://localhost:8080`, edit the webhook URL to the printed `https://<random>.trycloudflare.com/webhooks/razorpay`, and repeat step 4.
 6. Optional: try saving a webhook at an `ngrok-free.app` URL and at a `ts.net` Funnel URL, and record whether each is accepted. That settles the unlisted hosts.

@@ -82,7 +82,8 @@ A row is created only once a payment reaches `processing`, `authorized`, `failed
 | Event id | The `x-razorpay-event-id` header. It isn't covered by the signature, so the receiver also dedupes on the signed body's hash ([Q86](grilling-log.md)). |
 | Mode | Not in the event, a header or an API response (G55). The config names the mode, and startup refuses to run unless the key prefix (`rzp_test_` or `rzp_live_`) matches it ([Q111](grilling-log.md)). A payment from the other mode can't be fetched (400 "The id provided does not exist"); its job ends dead as `not_found`, naming a possible mode mix-up. |
 | Payment key | `payload.payment.entity.id`; `payload.refund.entity.payment_id`; `payload.dispute.entity.payment_id` (disputes are stored, not handled, in version 1) |
-| Fingerprint | `event`, the entity id, `created_at` |
+| Fingerprint | `event`, the primary entity's id (by event-type prefix, read by name), the top-level `created_at` (empty when missing) and the mode ([Q117](grilling-log.md)) |
+| Account | The configured `[sources.razorpay] account`; a body's `account_id` must match it ([Q121](grilling-log.md)) |
 
 **Handled event types** ([Q109](grilling-log.md)): `payment.authorized`, `payment.captured`, `payment.failed`; `refund.created`, `refund.processed`, `refund.failed`, `refund.speed_changed`. **Stored and ignored with a reason:** `order.paid`, `payment_link.*`, and in version 1 `payment.dispute.created`, `.won`, `.lost`, `.closed`, `.under_review`, `.action_required` (handled once disputes are built; Razorpay test mode can't produce one, G52).
 

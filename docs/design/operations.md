@@ -99,15 +99,19 @@ Everything that isn't secret lives in `webhook-sync.toml`; secrets come from env
 
 ```toml
 [service]
-public_listen = "0.0.0.0:8000"      # webhooks and /health only
-admin_listen = "127.0.0.1:8001"     # secrets: ADMIN_TOKENS=label:token,...
+public_listen = "0.0.0.0:8080"      # webhooks and /health only
+admin_listen = "127.0.0.1:8081"     # secrets: ADMIN_TOKENS=label:token,...
+data_dir = "data"                   # the database and its lock file; relative to this file
 timezone = "Asia/Kolkata"
 retry_profile = "production"        # or "demo"
 
-[sources.stripe]
-mode = "test"                       # secrets: STRIPE_WEBHOOK_SECRETS (newest first), STRIPE_RESTRICTED_KEY
-account = "acct_…"
+[sources.razorpay]
+mode = "test"                       # secrets: RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET,
+                                    # RAZORPAY_WEBHOOK_SECRET (comma-separated, newest first)
+account = "acc_…"                   # or the bare Merchant ID from the Dashboard
 metadata_keys = ["order_id"]
+# [sources.stripe] is refused while Stripe is parked (Q103): mode, account, metadata_keys;
+# secrets STRIPE_WEBHOOK_SECRETS (newest first), STRIPE_RESTRICTED_KEY
 
 [sinks.sheets]
 spreadsheet_id = "1AbC…"            # secret: GOOGLE_SERVICE_ACCOUNT_JSON, or GOOGLE_OAUTH_REFRESH_TOKEN
@@ -130,6 +134,9 @@ payload_days = 30
 
 [alerts]
 url = ""                            # Slack or Discord incoming-webhook URL; empty = banner only
+
+[demo]
+spreadsheet_ids = []                # --demo-fail-first runs only against these sheets (Q120)
 ```
 
 ## Starting and stopping
