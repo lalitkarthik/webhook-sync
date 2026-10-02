@@ -23,6 +23,8 @@ flowchart LR
 | **Source against ledger** | nightly | every payment created in the window (default 30 days), listed with its current state, against its `payments` row | one Stripe read per 100 payments |
 | **Independent totals** | nightly | the source's balance transactions in the window, grouped by `reporting_category` (charge, refund, dispute, fee, partial capture reversal and the rest), in the settlement currency and windowed by each balance transaction's own time, against the ledger's figures built the same way ([Q99](grilling-log.md)) | a few reads |
 
+**For Razorpay**, the source-against-ledger check lists `GET /v1/payments` by creation time, one read per 100 payments. The independent totals wait: Razorpay's only totals source, the settlement report, is keyed by settlement day, and a test account has no settlements (G53), so version 1's nightly verify runs the first two checks.
+
 The hourly check needs no source calls, because Stripe has no totals endpoint and summing would mean listing every payment each hour against the read allowance (F18, [Q89](grilling-log.md)).
 
 The independent totals use a different Stripe object from the one the ledger is built from. That catches a mapping bug (which a row-by-row comparison through the same mapping can't see) and payments outside the PaymentIntent model (F38).
@@ -49,7 +51,7 @@ Repair never edits a row. It enqueues the ordinary jobs above, so a repair is ch
 
 ## What the proof covers, exactly
 
-"Every night, verify proves that the last 30 days of payments match Stripe, and that the sheet matches the database." It does not cover a refund or dispute on a payment older than the window (widen it with `--days`), or payments the source adapter ignores, whose count is shown on the verify line (F38).
+"Every night, verify proves that the last 30 days of payments match Razorpay, and that the sheet matches the database." It does not cover a refund or dispute on a payment older than the window (widen it with `--days`), or payments the source adapter ignores, whose count is shown on the verify line (F38).
 
 ## Schedule
 

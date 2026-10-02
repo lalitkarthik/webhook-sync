@@ -15,7 +15,9 @@ feature loop's (`.claude/skills/feature-loop/workflow.md`).
     `/mp-prototype`, `/mp-tdd`, `/mp-domain-modeling`, `/mp-diagnosing-bugs`.
   - `.claude/settings.json`: the context-guard hooks and the session-start script.
 - **`gh` and `git`** through GitHub's proxy, already signed in. Branch deletion and tag pushes
-  are blocked there; leave Phase C's branch clean-up to the owner.
+  are blocked there; leave Phase C's branch clean-up to the owner. GitHub's GraphQL API is
+  blocked, so every `gh issue`/`gh pr`/`gh label` command fails: use the `gh api` REST forms in
+  `docs/agents/issue-tracker.md` wherever the loop names one.
 - **Secrets as environment variables**, set by the owner in the cloud environment (names in
   `.env.example`). The session-start output says which are set. There is no `.env` file.
 - **No project MCP servers.** `.mcp.json` is not loaded in the cloud.
@@ -35,8 +37,9 @@ feature loop's (`.claude/skills/feature-loop/workflow.md`).
    every implementer is a background `Agent` call with `isolation: "worktree"`.
 3. **No inbound traffic.** Razorpay cannot deliver a webhook to this machine. Tests run on
    fakes and recordings. Outbound calls to Razorpay's test API and the Google Sheets API work
-   when the keys are set and the network setting allows those hosts. Anything that needs a real
-   delivery, a tunnel, a browser checkout or a screen recording is the owner's: label that
+   when the keys are set and the network setting allows those hosts. Test payments can be paid
+   here, headless through Checkout's mock bank page (`wsync demo`, Q105). Anything that needs a
+   real delivery, a tunnel or a screen recording is the owner's: label that
    ticket `ready-for-human` and say exactly what to run.
 4. **Secrets.** Read them from the environment. Never print a value, write one to a file in the
    repo, or put one in a commit, issue, PR or log. Test-mode keys only: if `RAZORPAY_KEY_ID`
@@ -66,12 +69,12 @@ Run once and report the result of each line:
 
 | Check | Command | If it fails |
 |---|---|---|
-| Skills loaded | `/feature-loop` and `/mp-research` appear in the skill list | The repo was not cloned at a commit that has `.claude/skills/` |
-| Hooks run | The session-start lines ("env … set") are in context | Hooks only run in single-repo sessions |
-| GitHub issues | `gh issue list --limit 1` | Ask the owner to install the Claude GitHub app on the repo |
+| Skills loaded | `/mp-research` appears in the skill list, and `.claude/skills/feature-loop/SKILL.md` exists (`/feature-loop` sets `disable-model-invocation`, so it is typed by the owner and never listed for the agent) | The repo was not cloned at a commit that has `.claude/skills/` |
+| Hooks run | The session-start lines ("env … set") are in context | Hooks only run in single-repo sessions, and on a fresh start may not reach the first turn: run `bash scripts/claude/cloud-session-start.sh` by hand |
+| GitHub issues | `gh api 'repos/{owner}/{repo}/issues?per_page=1' --jq length` | Ask the owner to install the Claude GitHub app on the repo. (`gh issue list` always fails here: GraphQL is blocked in cloud sessions; use the REST forms in `docs/agents/issue-tracker.md`) |
 | Sub-issue and dependency API | `gh api repos/lalitkarthik/webhook-sync/issues?per_page=1 --jq '.[0].number'` | Fall back to `## Parent` and `## Blocked by` text in ticket bodies, which the loop already writes |
 | Python | `uv python install 3.14 && uv run --python 3.14 python -V` | Tell the owner; do not lower the Python version silently |
-| Network | `curl -sI https://api.razorpay.com \| head -1` and `curl -sI https://sheets.googleapis.com \| head -1` | The owner sets network access to "Full" or adds the hosts |
+| Network | `curl -s -o /dev/null -w '%{http_code}\n' https://api.razorpay.com` and the same for `https://sheets.googleapis.com` (any HTTP code means reachable; `head -1` shows only the proxy's `Connection Established`) | The owner sets network access to "Full" or adds the hosts |
 | Worktrees | `git worktree add ../wt-smoke -b smoke/wt && git worktree remove ../wt-smoke && git branch -D smoke/wt` | Run implementers one at a time in the main checkout |
 
 ## What the owner sets up (once, in the cloud environment)

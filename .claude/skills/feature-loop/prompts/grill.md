@@ -55,7 +55,7 @@ This list goes into the spec unchanged (the **Spec** step).
 
 The design is the source of truth; this grill covers only what it leaves open for one slice.
 
-1. **Read the design**: `docs/design/overview.md`, `build-order.md`, `grilling-log.md`, the
+1. **Read the design**: `docs/design/00-overview.md` (or `overview.md`), `build-order.md`, `grilling-log.md`, the
    design's `decisions/`, and `research-gaps.md` if present.
 2. **Pick the slice.** Ask which build-order step or slice this feature is. Recommend the
    earliest step that has no spec in `docs/specs/` and no `feature` issue yet.

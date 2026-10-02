@@ -6,17 +6,18 @@
 
 ## Why the fakes replay recordings
 
-A **fake** built from the design's own beliefs agrees with the design's bugs. The audit found five bugs that fakes written that way would have passed: Stripe resending an event with different bytes (F02), listing events newest first (F03), a sort landing between our read and write (F05), Sheets naming tabs by title (F08), and fetches taking real time (F19). So before any code, a **recording spike** captures what the real services do, and the fakes replay it ([Q82](grilling-log.md)).
+A **fake** built from the design's own beliefs agrees with the design's bugs. The audit found five bugs that fakes written that way would have passed: Stripe resending an event with different bytes (F02), listing events newest first (F03), a sort landing between our read and write (F05), Sheets naming tabs by title (F08), and fetches taking real time (F19). So before any code, a **recording spike** captures what the real services do, and the fakes replay it ([Q82](grilling-log.md)). Razorpay is the first source; what its test mode can't produce is replayed from Razorpay's own documented samples, marked `unrecorded` ([Q113](grilling-log.md)).
 
-**The recording spike** (slice 0, 2-3 h), against Stripe test mode and a throwaway spreadsheet:
-- one payment delivered, `stripe events resend` twice, and the same event from `/v1/events`, to diff the bytes;
-- a two-page events listing, to see its order;
-- a partial refund and a failed refund (test card 4000000000005126), to see `amount_refunded`;
-- a card payment's `payment_intent.succeeded` and its later `charge.updated`, to time the fee's arrival ([Q97](grilling-log.md));
-- a charge in UGX and one in ISK, to see their minor units ([Q100](grilling-log.md));
-- a read with a key lacking Balance read, to see whether only the expanded balance transaction returns 403 (G1);
-- a dispute (Stripe's test cards create one), to see the dispute states;
+**The recording spike** (P0, 2-3 h), against Razorpay test mode and a throwaway spreadsheet, on the owner's laptop through the tunnel ([Q113](grilling-log.md); steps in [razorpay-first.md](../research/razorpay-first.md)):
+- one payment delivered while the receiver answers 500 to the first four attempts (`--demo-fail-first 4`): each attempt's arrival time, `x-razorpay-event-id`, signature and body SHA-256, to see the retry timing (G48) and whether retries resend the same bytes (G38);
+- the same delivery opened in the Dashboard's webhook log, to see whether its Request and headers can be copied byte for byte;
+- the tunnel's answer in that log, to rule out a warning page swallowing the POST (G49);
+- two refunds of a captured payment, one at normal speed and one `optimum`: the create response, time to `processed`, and the webhooks;
+- one payment with manual capture: `fee` and `tax` at `authorized`, then after `POST /v1/payments/{id}/capture` (G51);
+- the bodies of `payment.authorized`, `payment.captured`, `payment.failed` (the mock bank page's **Failure**) and `order.paid`;
 - Sheets answers after a tab rename, an unshare, a sort between two calls, a deleted tab, and a 429.
+
+Stripe's half (resends, list order, a failed refund, `charge.updated` timing, UGX and ISK, the dispute states) waits until a buyer gives Stripe access ([Q103](grilling-log.md)).
 
 Recordings go in `tests/recordings/`. Test mode holds no real customer data.
 
@@ -25,8 +26,8 @@ Recordings go in `tests/recordings/`. Test mode holds no real customer data.
 ```mermaid
 flowchart BT
   U["Unit<br/>signatures · fingerprints · mapping ·<br/>money · dates · backoff · error classes · encoding"]
-  I["Integration<br/>real SQLite · FakeStripe and FakeSheets replaying recordings ·<br/>invariants · crash points in a subprocess · load checks"]
-  E["Weekly, real services<br/>Stripe test mode (restricted key) · throwaway sheet ·<br/>the demo scenes, headless"]
+  I["Integration<br/>real SQLite · FakeRazorpay and FakeSheets replaying recordings ·<br/>invariants · crash points in a subprocess · load checks"]
+  E["Weekly, real services<br/>Razorpay test mode: orders paid headless ·<br/>sweep and verify against a throwaway sheet"]
   U --> I --> E
 ```
 
@@ -34,13 +35,14 @@ flowchart BT
 |---|---|---|
 | Unit | every push | nothing |
 | Integration | every push, Linux; weekly on Windows | nothing outside the process |
-| Real services | weekly, scheduled, and before each recording | a Stripe **test-mode restricted key** and a throwaway sheet's credentials as repository secrets ([Q82](grilling-log.md)) |
+| Real services | weekly, scheduled | Razorpay **test** keys and a throwaway sheet's credentials as repository secrets. It pays a few test orders headless through Checkout's mock bank page, then runs `sweep` and `verify`: no webhook can reach CI, so it proves the sweep path against the real Razorpay ([Q113](grilling-log.md)) |
 
 ## The fakes
 
 | Fake | Replays | Can also be told to |
 |---|---|---|
-| **FakeStripe** (through respx) | recorded bodies and headers, including different bytes for one event; list pages in Stripe's real order; recorded refund and dispute states | answer 429, 500, 404, time out; take real time per call; deliver out of order, many times, or never |
+| **FakeRazorpay** (through respx) | recorded bodies, headers and signatures; documented samples for what test mode can't make (`refund.failed`, `refund.speed_changed`, `payment.dispute.*`), re-signed by our fixture code and marked `unrecorded`; payment and refund lists newest first, with **items created in the same second in a shifting order**, a new payment arriving between page calls, and an empty disputes list without `items` | answer 429 (with a `BAD_REQUEST_ERROR` body), 500, 400 not found, a connection reset, time out; take real time per call; deliver out of order, many times, or never; move a payment `failed` → `authorized` (late authorisation) |
+| **FakeStripe** (parked with Stripe) | documented payloads signed with stripe-python's `generate_signature_header`, marked `unrecorded`, with a switch per open fact (G6, G7, G10, G27, G28) so the invariants run under both answers | as FakeRazorpay |
 | **FakeSheets** | recorded error shapes; tabs with ids; grid size; atomic `batchUpdate`; quotas; call counting | 429, 500, 403; apply a write and lose the reply; a person sorting, editing, deleting a row or a tab, or renaming a tab **between any two calls** |
 
 ## The invariants
@@ -74,7 +76,7 @@ In the pitch-ready cut: `after_event_commit`, `after_sheet_write_before_done` an
 
 ## Scenarios
 
-**In the cut:** five scripted scenarios, each run with the invariants: a duplicate storm, an outage and catch-up, a Sheets 429 then recovery, a partial and a failed refund, and a payment with a dispute.
+**In the cut:** five scripted scenarios, each run with the invariants: a duplicate storm, an outage and catch-up, a Sheets 429 then recovery, a late authorisation (`failed`, then `authorized` and captured, caught by the re-list), and a partial and a failed refund (the failure from Razorpay's sample). Disputes come with the disputes slice.
 
 **After pitching:** Hypothesis generates sequences of these actions (payments, refunds, disputes; deliveries repeated, reordered or missing; fake failures; sweeps mid-delivery; a person touching the sheet; crashes), thousands of times, and shrinks any failure to the shortest sequence that still fails ([Q52](grilling-log.md)).
 
@@ -82,12 +84,12 @@ In the pitch-ready cut: `after_event_commit`, `after_sheet_write_before_done` an
 
 | Check | Asserts |
 |---|---|
-| **Duplicate storm:** 1,000 concurrent deliveries of one event | every request answered 2xx with **zero** 503s and a p99 under 2 s on the development laptop; then one event, one row, one sheet row, 999 duplicates logged ([Q83](grilling-log.md)) |
+| **Duplicate storm:** 1,000 concurrent replays of one recorded, signed delivery, some under a different `x-razorpay-event-id` (caught by the signed-body hash) | every request answered 2xx with **zero** 503s and a p99 under 2 s on the development laptop; then one event, one row, one sheet row, 999 duplicates logged ([Q83](grilling-log.md)) |
 | **Burst:** 200 payments whose fetches take recorded real time | 200 rows; Sheets calls at most three per flush, and flushes no more than one per 3 s of work arriving. The count is printed for the README (F19) |
 
 ## What CI runs
 
-On every push, on Linux: `ruff check`, `ruff format --check`, unit tests, integration tests. Weekly, scheduled: integration tests on Windows, and the real-services run. There is no Postgres job in version 1 ([Q75](grilling-log.md)).
+On every push, on Linux: `ruff check`, `ruff format --check`, unit tests, integration tests. Weekly, scheduled: integration tests on Windows, and the Razorpay real-services run (it installs the `wsync[demo]` extra and Chromium). There is no Stripe or Postgres job in version 1 ([Q75](grilling-log.md), [Q103](grilling-log.md)).
 
 ## Where to go next
 

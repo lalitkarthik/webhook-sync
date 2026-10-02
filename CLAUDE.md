@@ -1,10 +1,10 @@
 # webhook-sync
 
-Receives payment events (Razorpay first, Stripe second), keeps one ledger row per payment, mirrors it
+Receives payment events (Razorpay first; Stripe designed but parked), keeps one ledger row per payment, mirrors it
 to a Google Sheet, and proves nothing was lost or written twice. Designed, not yet built.
 
-- **Start here:** `docs/design/00-overview.md`, then `docs/design/razorpay-first-brief.md`, which
-  overrides the other design pages on which source comes first until grilling round 11 folds it in.
+- **Start here:** `docs/design/00-overview.md`. Razorpay is the first source and Stripe is parked
+  (grilling round 11, Q103-Q114); `docs/design/razorpay-first-brief.md` is superseded.
 - **Words:** `CONTEXT.md`. Use its terms exactly.
 - **Cloud sessions:** when `CLAUDE_CODE_REMOTE` is `true`, read `docs/agents/cloud.md` first.
 - **Secrets:** environment variables named in `.env.example`; test-mode keys only; never in a

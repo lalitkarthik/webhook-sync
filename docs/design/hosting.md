@@ -10,7 +10,11 @@
 |---|---|---|
 | An always-on process | The flusher, sweeper, verify and backup run on timers | Scale-to-zero platforms; cold starts can exceed Razorpay's 5 s timeout |
 | A persistent disk | SQLite is a file | Ephemeral disks, which lose the ledger on redeploy; serverless containers |
-| HTTPS on a stable URL | Sources require HTTPS in live mode | A laptop tunnel for anything but the demo |
+| HTTPS on a stable URL | Sources require HTTPS in live mode; Razorpay accepts ports 80 and 443 only and refuses testing hosts such as `ngrok.io` and `loca.lt` (G49) | A laptop tunnel for anything but the demo |
+
+## The demo laptop's tunnel
+
+Razorpay must reach the receiver on the owner's laptop for the recording spike and the GIF ([Q112](grilling-log.md)). Razorpay suggests **zrok**: sign up at myzrok.io, `zrok2 enable <account token>`, reserve a name with `zrok2 create name -n public wsync-demo`, then `zrok2 share public localhost:8080 -n public:wsync-demo`; the webhook URL is `https://wsync-demo.share.zrok.io/webhooks/razorpay`. A free zrok account without a card shows a warning page that answers **200**: if it catches Razorpay's POST, Razorpay counts the event as delivered and never retries. So the first test opens the delivery's Response in Razorpay's webhook log, and `wsync doctor --url` fails on a 200 with an HTML page. Fallback: a Cloudflare quick tunnel, `cloudflared tunnel --url http://localhost:8080`, with no account and no warning page, but a new URL each run. A Tailscale Funnel gives a stable `*.ts.net` URL if zrok fails.
 
 ## Where it runs
 

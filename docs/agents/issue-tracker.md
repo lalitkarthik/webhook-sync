@@ -12,6 +12,31 @@ operation; it infers the repo from `git remote -v`, so run it inside a clone or 
 - **Labels**: `gh issue edit <number> --add-label "..."` / `--remove-label "..."`.
 - **Close**: `gh issue close <number> --comment "..."`.
 
+## In a cloud session: REST only
+
+Claude Code cloud sessions block GitHub's GraphQL API, and every `gh issue`, `gh pr`, `gh label`
+and `gh repo view` command uses it (HTTP 403 "GitHub GraphQL is not available"). `gh api` with
+REST paths works; `{owner}/{repo}` is filled in from the git remote. Use these instead, here and
+wherever a skill or prompt names the `gh` command on the left:
+
+| Instead of | Run |
+| --- | --- |
+| `gh repo view --json nameWithOwner --jq .nameWithOwner` | `gh api 'repos/{owner}/{repo}' --jq .full_name` |
+| `gh issue create --title "T" --body-file F` (with labels) | `gh api 'repos/{owner}/{repo}/issues' -f title="T" -F body=@F -f 'labels[]=feature' -f 'labels[]=ready-for-agent' --jq .number` |
+| `gh issue view N --comments` | `gh api 'repos/{owner}/{repo}/issues/N' --jq '.title, .body'` then `gh api 'repos/{owner}/{repo}/issues/N/comments' --jq '.[] \| "--- \(.user.login) (comment \(.id)):\n\(.body)"'` |
+| `gh issue list --state open --label ticket` | `gh api 'repos/{owner}/{repo}/issues?state=open&labels=ticket&per_page=100' --jq '.[] \| select(.pull_request \| not) \| "#\(.number) \(.title)"'` |
+| `gh issue comment N --body "B"` | `gh api 'repos/{owner}/{repo}/issues/N/comments' -f body="B" --jq .id` |
+| editing one comment (the orchestrator's state) | `gh api -X PATCH 'repos/{owner}/{repo}/issues/comments/<comment id>' -F body=@F` |
+| `gh issue edit N --add-label L` | `gh api 'repos/{owner}/{repo}/issues/N/labels' -f 'labels[]=L'` |
+| `gh issue edit N --remove-label L` | `gh api -X DELETE 'repos/{owner}/{repo}/issues/N/labels/L'` |
+| `gh issue close N --comment "B"` | the comment as above, then `gh api -X PATCH 'repos/{owner}/{repo}/issues/N' -f state=closed -f state_reason=completed` |
+| `gh pr create --base main --head H --title T --body-file F` | `gh api 'repos/{owner}/{repo}/pulls' -f base=main -f head=H -f title="T" -F body=@F --jq .html_url` |
+| `gh pr view N --json state --jq .state` | `gh api 'repos/{owner}/{repo}/pulls/N' --jq 'if .merged then "MERGED" else (.state \| ascii_upcase) end'` |
+| `gh label create L --color C --description D --force` | `gh api 'repos/{owner}/{repo}/labels' -f name=L -f color=C -f description="D"` (a 422 means it exists) |
+
+The sub-issue, blocking-edge and frontier commands below are already REST and work unchanged;
+set `OWNER_REPO=lalitkarthik/webhook-sync` instead of calling `gh repo view`.
+
 ## Two kinds of issue
 
 | Kind | Label | Created by | Body |
@@ -69,7 +94,3 @@ Create a GitHub issue as above. A feature spec is also written to `docs/specs/<s
 ## When a skill says "fetch the relevant ticket"
 
 Run `gh issue view <number> --comments`.
-
-## Pull requests as a triage surface
-
-**PRs as a request surface: no.** _(Set to `yes` if this repo treats external PRs as feature requests; `/triage` reads this flag.)_

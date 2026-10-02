@@ -87,7 +87,9 @@ It is all local and takes milliseconds. The event and its job commit together or
 | 429 | Slow down | The request-rate cap |
 | 503 | Try again later | Shutting down, or the database unavailable |
 
-A 500 is never sent on purpose; if one happens it is a bug and is logged with the request id.
+A 500 is never sent on purpose; if one happens it is a bug and is logged with the request id. The one exception is the demo below.
+
+**The demo fail-first switch** ([Q106](grilling-log.md)). `wsync serve --demo-fail-first N` stores each new event and its job exactly as above, then answers 500 to the first N attempts per event id, so Razorpay's own retries make the duplicate-storm scene: what a real "stored, but the answer was lost" looks like. Each attempt's arrival time, event id and signed-body SHA-256 are logged, which is also how the recording spike measures retries (G38, G48). Startup refuses the switch unless the source's key starts `rzp_test_` and the spreadsheet is on the demo allow-list.
 
 ## Rejections
 

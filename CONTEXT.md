@@ -1,6 +1,6 @@
 # Webhook sync
 
-Receives payment events from providers such as Stripe and Razorpay, keeps exactly one record of each, and keeps a database and a Google Sheet in step with them, proving nothing was lost or written twice.
+Receives payment events from providers such as Razorpay (first) and Stripe (parked), keeps exactly one record of each, and keeps a database and a Google Sheet in step with them, proving nothing was lost or written twice.
 
 ## Language
 
@@ -198,7 +198,19 @@ One window of source time (for example ten minutes) that a sweep reads completel
 _Avoid_: page (a page is one API response), batch
 
 **Horizon**:
-How far back a source lets us list events: 30 days for Stripe. Past it, only a full backfill by creation date can catch up.
+How far back a source lets us list events: 30 days for Stripe. Past it, only a full backfill by creation date can catch up. Razorpay has no events list, so it has no horizon: its sweeper lists payments by creation date.
+
+**Re-list**:
+The sweeper's hourly second read of a source with no events list (Razorpay): every payment created in the last 7 days and every refund created in the last 21, so a change to an older payment reaches its row.
+_Avoid_: re-fetch (one payment by id), poll (too vague)
+
+**Synthetic event**:
+An event the sweeper builds from a listed payment or refund when the source has no events list (Razorpay), with origin `sweep` and the id `sweep:<entity id>:<state hash>`. It triggers a fetch like any other event.
+_Avoid_: fake event (a **fake** is a test stand-in)
+
+**State hash**:
+A hash of the fields of a listed payment or refund that can change its row. A new value becomes a **synthetic event** `sweep:<entity id>:<state hash>`; the same value is already stored.
+_Avoid_: fingerprint (that identifies a delivered event)
 
 **Origin**:
 How an event reached us: `delivery`, `sweep`, `backfill` or `replay`. Recorded on every event.
@@ -224,7 +236,7 @@ _Avoid_: health check (that is the `/health` endpoint an outside monitor calls)
 ## Testing
 
 **Fake**:
-A stand-in we write for an outside service (FakeStripe, FakeSheets) that behaves like it, including its failures, so tests run offline.
+A stand-in we write for an outside service (FakeRazorpay, FakeSheets, later FakeStripe) that behaves like it, including its failures, so tests run offline.
 _Avoid_: mock (a mock checks calls; a fake behaves), stub
 
 **Invariant**:
@@ -237,6 +249,10 @@ _Avoid_: fault injection point, kill switch
 
 **Scene**:
 One scripted demonstration for the video, driven by `wsync demo <scene>`.
+
+**Demo fail-first switch**:
+`wsync serve --demo-fail-first N`: stores each new event as usual, then answers 500 to its first N attempts, so the source's own retries make the duplicate-storm scene. Test mode and the demo allow-list only.
+_Avoid_: chaos mode, fault injection (crash points are the tests' fault injection)
 
 ## People
 

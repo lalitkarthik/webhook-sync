@@ -10,11 +10,14 @@ Three **machine-owned** tabs: the service writes every cell, and buyers read, so
 
 **Payments**: one row per payment. Default columns, declared in config ([Q69](grilling-log.md)):
 
-| Payment ID | Source | Created (IST) | Status | Amount | Currency | Refunded | Settled | Fee | Net | Settled in | Method | Dispute | Customer email | Description | order_id | Via | Note | Updated (IST) |
+| Payment ID | Source | Created (IST) | Status | Amount | Currency | Refunded | Settled | Fee | GST on fee | Net | Settled in | Method | Customer email | Description | order_id | Via | Note | Updated (IST) |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| pi_3Nx… | stripe | 2026-09-30 14:05:12 | succeeded | 19.99 | USD | 0.00 | 1,672.04 | 72.60 | 1,599.44 | INR | card visa | | a***@gmail.com | Pro plan | A-1042 | delivery | | 2026-09-30 14:05:15 |
+| pay_Tj66x… | razorpay | 2026-10-02 21:28:59 | succeeded | 500.00 | INR | 0.00 | 500.00 | 12.98 | 1.98 | 487.02 | INR | netbanking | a***@gmail.com | Pro plan | A-1042 | delivery | | 2026-10-02 21:29:02 |
 
-- **Amount** and **Refunded** are in the currency the customer paid in. **Settled**, **Fee** and **Net** are in the currency the buyer is paid out in (**Settled in**), which is where fees are charged; for a buyer paid in the same currency the two match. They show `pending` until Stripe's balance transaction arrives, usually within an hour ([Q97](grilling-log.md)).
+- **Amount** and **Refunded** are in the currency the customer paid in. **Settled**, **Fee** and **Net** are in the currency the buyer is paid out in (**Settled in**), which is where fees are charged; for a buyer paid in the same currency the two match. They show `pending` until the source reports the fee: Razorpay at capture ([Q110](grilling-log.md)), Stripe when its balance transaction arrives, usually within an hour ([Q97](grilling-log.md)). Version 1 is Razorpay in INR, so the two currencies match.
+- **Status** carries the refund state: `succeeded`, `partially_refunded` or `refunded`, with **Refunded** the amount ([sources.md](sources.md)).
+- **GST on fee** is the tax Razorpay charges on its fee (`tax`); **Fee** already includes it, so **Net** = Amount − Fee. Empty for Stripe.
+- A **Dispute** column joins with disputes, after the cut ([Q104](grilling-log.md)).
 - **Payment ID** is first and frozen, with the header row. Stripe ids start `pi_` and Razorpay ids `pay_`, so one column holds both.
 - `order_id` stands for the configured metadata keys: one column each.
 - **Via** (`delivery` or `sweep`) is optional, on for the demo's outage scene. **Note** says "not found at source" or names unknown columns.

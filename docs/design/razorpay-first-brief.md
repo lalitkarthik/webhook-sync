@@ -1,8 +1,10 @@
 # Brief: Razorpay becomes the first source
 
+> **Superseded on 2026-10-02 by grilling round 11 ([Q103-Q114](grilling-log.md)).** Kept as the record of what was asked. Where it disagrees with the design pages, the design pages win. Research ([razorpay-first.md](../research/razorpay-first.md)) corrected three of its statements: test payments can be made and paid by a script, not only by hand (G45); paying them needs no laptop, only receiving webhooks does; and there were five open Stripe spikes, not eight. Stripe is parked, not "built second" (Q103).
+
 **What this page contains.** A decision the owner made on 1-2 October 2026 that the design pages do not yet reflect, what is known so far, the questions it opens, and the smallest product that is worth showing a buyer. It is the input to grilling round 11.
 
-**How to read it.** This page is temporary. Round 11 turns it into numbered decisions in [grilling-log.md](grilling-log.md) and edits to the design pages; after that this page is deleted or marked superseded. Until then, where this page and another design page disagree about which source comes first, this page wins.
+**How to read it.** Historical. Round 11 turned it into numbered decisions in [grilling-log.md](grilling-log.md) and edits to the design pages.
 
 ## The decision
 
