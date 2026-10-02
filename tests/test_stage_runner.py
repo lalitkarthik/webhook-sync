@@ -8,7 +8,7 @@ is driven one pass at a time, and its heartbeat's sleep is injected. Assertions 
 import asyncio
 import random
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from support import ReadRows
@@ -16,7 +16,16 @@ from time_machine import TimeMachineFixture
 
 from webhook_sync.clock import utc_now
 from webhook_sync.db.writer import Writer
-from webhook_sync.queue import ClaimedJob, Done, Pauses, StageRunner, Work, enqueue
+from webhook_sync.queue import (
+    ClaimedJob,
+    Done,
+    Failure,
+    Pauses,
+    StageFailed,
+    StageRunner,
+    Work,
+    enqueue,
+)
 
 NINE = datetime(2026, 10, 2, 9, 0, tzinfo=UTC)
 INSTANCE = "wsync-test@2026-10-02T08:59:00.000000Z"
@@ -117,3 +126,89 @@ async def test_new_work_during_the_run_sets_rerun_and_the_job_runs_exactly_once_
         {"number": 1, "outcome": "ok"},
         {"number": 1, "outcome": "ok"},
     ]
+
+
+def failing_with(failure: Failure) -> Work:
+    async def work(job: ClaimedJob) -> Done:
+        raise StageFailed(failure)
+
+    return work
+
+
+async def test_a_retry_error_puts_the_job_back_to_waiting_after_its_backoff(
+    writer: Writer, read_rows: ReadRows
+) -> None:
+    await enqueue_job(writer)
+
+    await runner_for(writer, failing_with(Failure("HTTP 503", "retry"))).run_once()
+
+    [job] = await read_rows("SELECT status, attempts, run_after, last_error_class FROM jobs")
+    assert (job["status"], job["attempts"], job["last_error_class"]) == ("waiting", 1, "retry")
+    # attempt 1's wait is 5 s times 0.5-1.5
+    assert "2026-10-02T09:00:02.500000Z" <= job["run_after"] <= "2026-10-02T09:00:07.500000Z"
+    assert await read_rows("SELECT number, outcome, error FROM attempts") == [
+        {"number": 1, "outcome": "retry", "error": "HTTP 503"}
+    ]
+
+
+async def test_a_retry_after_is_honoured_as_a_minimum(
+    writer: Writer, read_rows: ReadRows
+) -> None:
+    await enqueue_job(writer)
+    failure = Failure("HTTP 429", "retry", retry_after=timedelta(hours=1))
+
+    await runner_for(writer, failing_with(failure)).run_once()
+
+    assert await read_rows("SELECT status, run_after FROM jobs") == [
+        {"status": "waiting", "run_after": "2026-10-02T10:00:00.000000Z"}
+    ]
+
+
+async def test_a_dead_error_sends_the_job_straight_to_dead(
+    writer: Writer, read_rows: ReadRows
+) -> None:
+    await enqueue_job(writer)
+
+    await runner_for(writer, failing_with(Failure("mapped field missing", "dead"))).run_once()
+
+    assert await read_rows("SELECT status, attempts FROM jobs") == [
+        {"status": "dead", "attempts": 1}
+    ]
+    assert await read_rows("SELECT outcome FROM attempts") == [{"outcome": "dead"}]
+
+
+async def test_a_pause_error_pauses_the_sink_refunds_the_attempt_and_stops_claims(
+    writer: Writer, read_rows: ReadRows
+) -> None:
+    pauses = Pauses()
+    await enqueue_job(writer)
+    failure = Failure("spreadsheet not found", "pause", pause_target="sink")
+    runner = runner_for(writer, failing_with(failure), pauses=pauses)
+
+    await runner.run_once()
+    claimed_while_paused = await runner.run_once()
+
+    assert pauses.sinks == {"ledger"}
+    assert claimed_while_paused == 0
+    assert await read_rows("SELECT status, attempts FROM jobs") == [
+        {"status": "waiting", "attempts": 0}
+    ]
+    assert await read_rows("SELECT outcome FROM attempts") == [{"outcome": "pause"}]
+
+
+async def test_an_unexpected_exception_in_the_work_is_our_bug_and_sends_the_job_dead(
+    writer: Writer, read_rows: ReadRows
+) -> None:
+    await enqueue_job(writer)
+
+    async def work(job: ClaimedJob) -> Done:
+        raise KeyError("amount")
+
+    await runner_for(writer, work).run_once()
+
+    assert await read_rows("SELECT status, last_error_class FROM jobs") == [
+        {"status": "dead", "last_error_class": "dead"}
+    ]
+    [attempt] = await read_rows("SELECT outcome, error FROM attempts")
+    assert attempt["outcome"] == "dead"
+    assert "KeyError" in attempt["error"]

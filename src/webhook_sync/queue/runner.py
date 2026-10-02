@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from webhook_sync.clock import utc_now
 from webhook_sync.config import RetryProfile
 from webhook_sync.db.writer import Transaction, Writer
-from webhook_sync.queue.operations import ClaimedJob, claim, complete
+from webhook_sync.queue.operations import ClaimedJob, Failure, claim, complete, fail
 from webhook_sync.queue.pause import Pauses
 
 type Sleep = Callable[[float], Awaitable[None]]
@@ -27,8 +27,17 @@ class Done:
     writes: Callable[[Transaction], Awaitable[None]] | None = None
 
 
+class StageFailed(Exception):
+    """Raised by a stage's work: the attempt failed, and `failure` says how (its error class)."""
+
+    def __init__(self, failure: Failure) -> None:
+        super().__init__(failure.error)
+        self.failure = failure
+
+
 type Work = Callable[[ClaimedJob], Awaitable[Done]]
-"""A stage's work on one claimed job."""
+"""A stage's work on one claimed job: returns `Done` or raises `StageFailed`. Any other
+exception is our own bug, so the job goes to dead (queue.md's error classes)."""
 
 
 class StageRunner:
@@ -55,7 +64,7 @@ class StageRunner:
         self._work = work
         self._claimed_by = claimed_by
         self._pauses = pauses
-        self._retry_profile = retry_profile
+        self._retry_profile: RetryProfile = retry_profile
         self._rng = rng or random.Random()
         self._sleep = sleep
 
@@ -71,9 +80,30 @@ class StageRunner:
             now=utc_now(),
         )
         for job in claimed:
-            done = await self._work(job)
-            async with self._writer.transaction() as tx:
-                if done.writes is not None:
-                    await done.writes(tx)
-                await complete(tx, job, now=utc_now())
+            await self._run(job)
         return len(claimed)
+
+    async def _run(self, job: ClaimedJob) -> None:
+        try:
+            done = await self._work(job)
+        except StageFailed as failed:
+            await self._fail(job, failed.failure)
+            return
+        except Exception as error:  # our own bug: retrying can't help
+            await self._fail(job, Failure(f"{type(error).__name__}: {error}", "dead"))
+            return
+        async with self._writer.transaction() as tx:
+            if done.writes is not None:
+                await done.writes(tx)
+            await complete(tx, job, now=utc_now())
+
+    async def _fail(self, job: ClaimedJob, failure: Failure) -> None:
+        await fail(
+            self._writer,
+            job,
+            failure,
+            pauses=self._pauses,
+            retry_profile=self._retry_profile,
+            now=utc_now(),
+            rng=self._rng,
+        )
