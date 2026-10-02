@@ -84,3 +84,36 @@ async def test_a_body_of_exactly_1_mb_is_read_and_checked(client: httpx.AsyncCli
 
     assert response.status_code == 400
     assert response.json() == {"rejection": "malformed"}
+
+
+@pytest.mark.parametrize(
+    "content_type",
+    ["application/json", "application/json; charset=utf-8", "Application/JSON", "x/vnd.a+json"],
+)
+async def test_a_json_content_type_with_any_parameters_passes(
+    client: httpx.AsyncClient, content_type: str
+) -> None:
+    body, headers = sign_razorpay(razorpay_sample("payment.captured"))
+
+    response = await client.post(
+        "/webhooks/razorpay", content=body, headers={**headers, "content-type": content_type}
+    )
+
+    assert response.status_code == 202
+
+
+@pytest.mark.parametrize(
+    "content_type", [None, "", "text/plain", "application/jsonp", "json", "application/x-json+"]
+)
+async def test_any_other_content_type_is_415_not_json_even_with_a_bad_signature(
+    client: httpx.AsyncClient, content_type: str | None
+) -> None:
+    body, headers = sign_razorpay(razorpay_sample("payment.captured"), secret="not-our-secret")
+    del headers["content-type"]
+    if content_type is not None:
+        headers["content-type"] = content_type
+
+    response = await client.post("/webhooks/razorpay", content=body, headers=headers)
+
+    assert response.status_code == 415
+    assert response.json() == {"rejection": "not_json"}

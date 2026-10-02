@@ -19,7 +19,7 @@ from webhook_sync.clock import utc_now
 from webhook_sync.config import Config
 from webhook_sync.db.migrations import apply_pending
 from webhook_sync.db.writer import Writer
-from webhook_sync.receiver.checks import read_body
+from webhook_sync.receiver.checks import check_content_type, read_body
 from webhook_sync.receiver.rate_cap import RateCap
 from webhook_sync.receiver.store import store_delivery
 from webhook_sync.sources.base import Rejection, SourceAdapter
@@ -80,6 +80,8 @@ def create_app(config: Config, data_dir: Path) -> FastAPI:
         raw_body = await read_body(request)
         if isinstance(raw_body, Rejection):
             return _rejected(adapter.name, raw_body, request.headers.get(EVENT_ID_HEADER))
+        if rejection := check_content_type(request.headers.get("content-type")):
+            return _rejected(adapter.name, rejection, request.headers.get(EVENT_ID_HEADER))
 
         verified = adapter.verify(raw_body, request.headers)
         if isinstance(verified, Rejection):
