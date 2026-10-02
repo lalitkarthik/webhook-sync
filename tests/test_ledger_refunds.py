@@ -66,6 +66,7 @@ async def ledger(writer: Writer) -> AsyncIterator[StageRunner]:
         yield ledger_runner(
             writer,
             {"razorpay": adapter},
+            mirror_sinks=("sheets",),
             claimed_by="wsync-test",
             pauses=Pauses(),
             retry_profile="production",
@@ -111,7 +112,7 @@ async def test_a_partly_refunded_payment_is_partially_refunded_by_its_processed_
     row = await ledger_row_after_fetch(writer, ledger, razorpay, read_rows, state)
 
     assert row == {"status": "partially_refunded", "refunded_minor": 20000}
-    assert await read_rows("SELECT status FROM jobs") == [{"status": "done"}]
+    assert await read_rows("SELECT status FROM jobs WHERE stage = 'ledger'") == [{"status": "done"}]
 
 
 def with_refunds(state: dict[str, Any], *refunds: tuple[int, str]) -> dict[str, Any]:
@@ -237,7 +238,7 @@ async def test_a_dropped_connection_while_paging_refunds_retries_and_writes_noth
     await ledger.run_once()
 
     assert await read_rows("SELECT * FROM payments") == []
-    assert await read_rows("SELECT status, attempts FROM jobs") == [
+    assert await read_rows("SELECT status, attempts FROM jobs WHERE stage = 'ledger'") == [
         {"status": "waiting", "attempts": 1}
     ]
 
