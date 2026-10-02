@@ -9,6 +9,7 @@ Plain helpers (fixture secrets, Razorpay samples, signing) live in `support.py`.
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -16,11 +17,18 @@ from support import (
     TEST_ACCOUNT,
     TEST_KEY_ID,
     TEST_KEY_SECRET,
+    TEST_SPREADSHEET_ID,
     TEST_WEBHOOK_SECRET,
     ReadRows,
 )
 
-from webhook_sync.config import Config, RazorpayConfig, RazorpaySecrets, ServiceConfig
+from webhook_sync.config import (
+    Config,
+    RazorpayConfig,
+    RazorpaySecrets,
+    ServiceConfig,
+    SheetsConfig,
+)
 from webhook_sync.db.migrations import apply_pending
 from webhook_sync.db.reader import Reader
 from webhook_sync.db.writer import Writer
@@ -39,13 +47,16 @@ def data_dir(tmp_path: Path) -> Path:
 def config(data_dir: Path) -> Config:
     """A minimal test-mode config with fixture secrets; its data directory is `data_dir`."""
     return Config(
-        service=ServiceConfig(public_listen="127.0.0.1:8080", data_dir=data_dir),
+        service=ServiceConfig(
+            public_listen="127.0.0.1:8080", data_dir=data_dir, timezone=ZoneInfo("Asia/Kolkata")
+        ),
         razorpay=RazorpayConfig(mode="test", account=TEST_ACCOUNT),
         razorpay_secrets=RazorpaySecrets(
             key_id=TEST_KEY_ID,
             key_secret=TEST_KEY_SECRET,
             webhook_secrets=(TEST_WEBHOOK_SECRET,),
         ),
+        sheets=SheetsConfig(spreadsheet_id=TEST_SPREADSHEET_ID),
     )
 
 

@@ -51,3 +51,15 @@ def sign_razorpay(
         "x-razorpay-event-id": event_id,
     }
     return raw, headers
+
+
+TEST_SPREADSHEET_ID = "fixture-spreadsheet-id-0001"
+
+
+def fixture_secrets() -> dict[str, str]:
+    """The three Razorpay secret variables, set to the fixture secrets."""
+    return {
+        "RAZORPAY_KEY_ID": TEST_KEY_ID,
+        "RAZORPAY_KEY_SECRET": TEST_KEY_SECRET,
+        "RAZORPAY_WEBHOOK_SECRET": TEST_WEBHOOK_SECRET,
+    }
