@@ -48,7 +48,7 @@ Steps P1-P3 below without the tests, plus a **minimal sweeper**: one walk of `GE
 
 | Step | Contents | Hours |
 |---|---|---|
-| P0 | On the owner's laptop: a Razorpay test-mode webhook through the tunnel ([hosting.md](hosting.md)); the **recording spike** ([testing.md](testing.md)); a Google Cloud project with a service account; a throwaway sheet | 2-3 |
+| P0 | On the owner's laptop, step by step in issue #4: a Razorpay test-mode webhook through the tunnel ([hosting.md](hosting.md)); the **recording spike** ([testing.md](testing.md)). The Google service account and throwaway sheet already exist (G21 and G18 were checked against them) | 2-3 |
 | P1 | Config and fail-closed start (mode and key prefix); the lock file; the writer; migrations; the Razorpay receiver (raw-body signature, event id and signed-body hash, one transaction, the demo fail-first switch); the queue with one live job and rerun, lease, token, fenced complete, backoff, dead after N, the reaper | 5-6 |
 | P2 | Fetch `GET /v1/payments/{id}` and its refunds; the mapping (status, refund state, fee, GST, net, method, metadata keys); `created` makes no row; the ledger upsert with row hash | 2-3 |
 | P3 | The flusher: read by tab id, one `batchUpdate` by key, typed values and dates, append after the last row, keys only on append, the post-write check; Sync status; the Daily summary tab; stop and alert on a pause-class error, `wsync resume` | 4-5 |

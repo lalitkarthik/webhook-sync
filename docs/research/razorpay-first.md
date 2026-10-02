@@ -1,6 +1,6 @@
 # Research: Razorpay as the first source (round 11, Q1-Q10)
 
-Researched 2026-10-02 against primary sources and the real Razorpay test API, for the ten questions in [razorpay-first-brief.md](../design/razorpay-first-brief.md). New rows G45-G58 in [research-gaps.md](../design/research-gaps.md) point here.
+Researched 2026-10-02 against primary sources and the real Razorpay test API, for the ten questions in [razorpay-first-brief.md](../design/razorpay-first-brief.md). New rows G45-G58 in [research-gaps.md](../design/research-gaps.md) point here; G21 and G18's open point were settled in the same session (see the Sheets section).
 
 Primary means razorpay.com/docs (read as the Markdown copies Razorpay serves for each page), razorpay.com/pricing, the source of razorpay-python (commit 8960507), razorpay-cli (637de42) and razorpay-mcp-server, each tunnel's own docs and source (zrok at 0c9d346), stripe.com, docs.stripe.com, support.stripe.com and the source of stripe-cli (6a14b94), stripe-mock (98674a1), stripe/openapi and stripe-python (16.0.0). Calls were made to api.razorpay.com with the owner's **test** keys; the prefix was checked as `rzp_test_` before every run and no key value was printed or stored. A headless Chromium (Playwright 1.56.1) paid two test payments from a cloud session. Where only a secondary source exists, it is named and not counted. Four research passes ran in parallel; their API runs and test-mode writes are listed at the end.
 
@@ -504,6 +504,14 @@ URLs: https://support.stripe.com/questions/stripe-accounts-are-invite-only-in-in
 **Question.** Razorpay's 8-12 h moves in front of Stripe. Which of P0-P6 change?
 
 **Verdict: internal; no outside fact needed.** The facts above that bear on it: P0's accounts become Razorpay test keys, a Google service account and a throwaway sheet (no Stripe CLI, Q9); the recording spike splits into a Razorpay half that runs now and a Stripe half that waits for access (Q9); test payments are scripted, so `wsync demo` needs Playwright as a demo-only extra (Q1); the minimal sweeper becomes a creation-time poll plus an hourly re-list (Q3, Q7); real deliveries need a tunnel on the owner's laptop (Q4). Round 11 decides the order.
+
+## Sheets checks run in the same session: G21 and G18
+
+Run 2026-10-02 against the owner's throwaway spreadsheet with the service account, in a temporary tab that was deleted afterwards; the sheet's locale (`en_GB`) and time zone (`Asia/Calcutta`) were restored.
+
+**G21, date serials and locale: confirmed.** A `numberValue` serial with a `DATE_TIME` pattern `yyyy-mm-dd hh:mm:ss` was written, then the spreadsheet's locale and time zone were changed with `updateSpreadsheetProperties` to `en_US`/`America/New_York`, `de_DE`/`Europe/Berlin`, `ja_JP`/`Asia/Tokyo`, `hi_IN`/`Asia/Kolkata` and `fr_FR`/`Asia/Kolkata`. Each time `effectiveValue` stayed the same number and `formattedValue` the same text: neither the locale nor the spreadsheet time zone re-parses or shifts a stored serial, so the time zone belongs in the header, as [Q87](../design/grilling-log.md) and [Q95](../design/grilling-log.md) say. A second run wrote serials computed from whole Unix seconds (`(seconds + offset) / 86400 + 25569`): they display the exact second, and the same value plus half a second displays the next second, so Sheets rounds to the nearest second. The writer computes serials from whole seconds and adds nothing.
+
+**G18's open point: confirmed.** One `getByDataFilter` call with two `GridRange` filters on one `sheetId` (row 0, and column A) returned the grid size and **two** `data` blocks, one per filter, in request order. A filter naming a `sheetId` that doesn't exist fails the whole call with HTTP 400 `INVALID_ARGUMENT`, "No sheet with id: …", which the flusher reads as "tab deleted" (pause-class).
 
 ## API runs
 
