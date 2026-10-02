@@ -97,3 +97,74 @@ async def test_a_dispute_is_fingerprinted_by_the_dispute_not_the_payment(
     assert event["fingerprint"] == fingerprint(
         "payment.dispute.created", "disp_EsIAlDcoUr8CaQ", "1589907977", "test"
     )
+
+
+async def test_a_bad_signature_is_400_and_stores_nothing(
+    client: httpx.AsyncClient, read_rows: ReadRows
+) -> None:
+    body, headers = sign_razorpay(razorpay_sample("payment.captured"), secret="not-our-secret")
+
+    response = await client.post("/webhooks/razorpay", content=body, headers=headers)
+
+    assert response.status_code == 400
+    assert response.json() == {"rejection": "bad_signature"}
+    assert await read_rows("SELECT * FROM events") == []
+    assert await read_rows("SELECT * FROM deliveries") == []
+
+
+type GarbageCase = tuple[str, bytes, dict[str, str | bytes]]
+
+
+def _garbage() -> list[GarbageCase]:
+    """Bodies and headers that must each get a 4xx reason. Header values may be raw bytes."""
+
+    def signed(name: str, raw: bytes) -> GarbageCase:
+        body, headers = sign_razorpay(raw)
+        return name, body, {**headers}
+
+    valid_body, valid_headers = sign_razorpay(razorpay_sample("payment.captured"))
+    not_utf8 = b"\xff\xfe\x00garbage\x80"
+    return [
+        ("no signature header", valid_body, {"content-type": "application/json"}),
+        ("empty body", b"", {**valid_headers}),
+        ("not UTF-8, unsigned", not_utf8, {**valid_headers}),
+        signed("not UTF-8, signed", not_utf8),
+        ("non-hex signature", valid_body, {**valid_headers, "x-razorpay-signature": "zz"}),
+        (
+            "non-ASCII signature",
+            valid_body,
+            {**valid_headers, "x-razorpay-signature": "é".encode("latin-1")},
+        ),
+        signed("signed, not JSON", b"{not json"),
+        signed("signed JSON array", b"[1, 2, 3]"),
+        signed("signed object, no event", b'{"payload": {}}'),
+        signed("signed, event not a string", b'{"event": 7}'),
+        signed("signed handled type, no entity", b'{"event": "payment.captured"}'),
+        signed("signed, payload not an object", b'{"event": "refund.created", "payload": 1}'),
+        (
+            "signed, no event id header",
+            valid_body,
+            {k: v for k, v in valid_headers.items() if k != "x-razorpay-event-id"},
+        ),
+    ]
+
+
+@pytest.mark.parametrize(("case", "body", "headers"), _garbage(), ids=[g[0] for g in _garbage()])
+async def test_garbage_is_a_4xx_never_a_500_and_stores_nothing(
+    client: httpx.AsyncClient,
+    read_rows: ReadRows,
+    case: str,
+    body: bytes,
+    headers: dict[str, str | bytes],
+) -> None:
+    raw_headers = [
+        (k.encode(), v if isinstance(v, bytes) else v.encode()) for k, v in headers.items()
+    ]
+    response = await client.post(
+        "/webhooks/razorpay", content=body, headers=httpx.Headers(raw_headers)
+    )
+
+    assert 400 <= response.status_code < 500, case
+    assert response.json()["rejection"] in {"bad_signature", "malformed", "missing_id"}
+    assert await read_rows("SELECT * FROM events") == []
+    assert await read_rows("SELECT * FROM deliveries") == []
