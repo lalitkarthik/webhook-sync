@@ -1,12 +1,17 @@
 """Each handled event is stored with its ledger job, the outbox (seam 1: the HTTP app)."""
 
+import sqlite3
+from contextlib import closing
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
 from support import TEST_ACCOUNT, ReadRows, razorpay_sample, sign_razorpay
 from time_machine import TimeMachineFixture
+
+from webhook_sync.db.files import database_path
 
 pytestmark = pytest.mark.unrecorded
 
@@ -74,3 +79,34 @@ async def test_a_second_event_for_a_payment_whose_job_waits_folds_into_that_job(
         {"event_id": "evt_authorized01", "job_id": job["id"]},
         {"event_id": "evt_captured01", "job_id": job["id"]},
     ]
+
+
+def force_job_state(data_dir: Path, job_id: int, *, status: str, prefetched: str | None) -> None:
+    """Put a job in a state no P1 operation reaches through the app (claim comes with #12)."""
+    with closing(sqlite3.connect(database_path(data_dir))) as connection, connection:
+        connection.execute(
+            "UPDATE jobs SET status = ?, prefetched = ? WHERE id = ?", (status, prefetched, job_id)
+        )
+
+
+async def test_a_second_event_for_a_payment_whose_job_runs_sets_rerun_on_that_job(
+    client: httpx.AsyncClient, read_rows: ReadRows, data_dir: Path
+) -> None:
+    first, first_headers = sign_razorpay(payment_authorized(), event_id="evt_authorized01")
+    await client.post("/webhooks/razorpay", content=first, headers=first_headers)
+    [job_before] = await read_rows("SELECT * FROM jobs")
+    force_job_state(data_dir, job_before["id"], status="running", prefetched='{"listed": true}')
+
+    second, second_headers = sign_razorpay(
+        razorpay_sample("payment.captured"), event_id="evt_captured01"
+    )
+    response = await client.post("/webhooks/razorpay", content=second, headers=second_headers)
+
+    assert response.status_code == 202
+    [job] = await read_rows("SELECT * FROM jobs")
+    assert job["id"] == job_before["id"]
+    assert (job["status"], job["rerun"], job["prefetched"]) == ("running", 1, None)
+    assert job["run_after"] == job_before["run_after"]
+    assert job["caused_by_event_id"] == "evt_captured01"
+    [event] = await read_rows("SELECT job_id FROM events WHERE event_id = 'evt_captured01'")
+    assert event["job_id"] == job["id"]
