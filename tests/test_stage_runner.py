@@ -279,3 +279,38 @@ async def test_the_reaper_sends_a_job_dead_when_its_attempts_are_used_up(
     ]
     outcomes = await read_rows("SELECT DISTINCT outcome FROM attempts")
     assert outcomes == [{"outcome": "reaped"}]
+
+
+async def test_one_row_that_cannot_be_reaped_does_not_stop_the_reaper_reaping_the_others(
+    writer: Writer,
+    read_rows: ReadRows,
+    frozen_clock: TimeMachineFixture,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    first = await enqueue_job(writer, "pay_A")
+    bad = await enqueue_job(writer, "pay_B")
+    last = await enqueue_job(writer, "pay_C")
+    for _ in range(3):
+        await claim_one(writer)
+    async with writer.transaction() as tx:  # a row whose every update fails
+        await tx.execute(
+            "CREATE TRIGGER refuse_pay_b BEFORE UPDATE ON jobs WHEN OLD.payment_key = 'pay_B' "
+            "BEGIN SELECT RAISE(ABORT, 'row refuses updates'); END"
+        )
+    frozen_clock.move_to(NINE + timedelta(seconds=61), tick=False)
+
+    reaped = await reap_now(writer)
+
+    assert reaped == [first, last]
+    rows = await read_rows("SELECT id, status FROM jobs ORDER BY id")
+    assert rows == [
+        {"id": first, "status": "waiting"},
+        {"id": bad, "status": "running"},
+        {"id": last, "status": "waiting"},
+    ]
+    assert await read_rows("SELECT job_id FROM attempts ORDER BY id") == [
+        {"job_id": first},
+        {"job_id": last},
+    ]
+    [logged] = [r for r in caplog.records if r.getMessage() == "job not reaped"]
+    assert logged.__dict__["job_id"] == bad
