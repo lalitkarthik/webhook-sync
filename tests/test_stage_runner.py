@@ -24,7 +24,9 @@ from webhook_sync.queue import (
     StageFailed,
     StageRunner,
     Work,
+    claim,
     enqueue,
+    reap,
 )
 
 NINE = datetime(2026, 10, 2, 9, 0, tzinfo=UTC)
@@ -212,3 +214,68 @@ async def test_an_unexpected_exception_in_the_work_is_our_bug_and_sends_the_job_
     [attempt] = await read_rows("SELECT outcome, error FROM attempts")
     assert attempt["outcome"] == "dead"
     assert "KeyError" in attempt["error"]
+
+
+async def claim_one(writer: Writer) -> ClaimedJob:
+    [job] = await claim(
+        writer,
+        stage="ledger",
+        sink="ledger",
+        limit=1,
+        claimed_by=INSTANCE,
+        pauses=Pauses(),
+        now=utc_now(),
+    )
+    return job
+
+
+async def reap_now(writer: Writer) -> list[int]:
+    return await reap(writer, retry_profile="production", now=utc_now(), rng=random.Random(7))
+
+
+async def test_the_reaper_returns_an_expired_lease_to_waiting_with_backoff_and_a_reaped_row(
+    writer: Writer, read_rows: ReadRows, frozen_clock: TimeMachineFixture
+) -> None:
+    job_id = await enqueue_job(writer)
+    await claim_one(writer)
+    frozen_clock.move_to(NINE + timedelta(seconds=59), tick=False)
+    assert await reap_now(writer) == []  # the lease still holds
+    frozen_clock.move_to(NINE + timedelta(seconds=61), tick=False)
+
+    reaped = await reap_now(writer)
+
+    assert reaped == [job_id]
+    [job] = await read_rows("SELECT * FROM jobs")
+    assert (job["status"], job["attempts"], job["claim_token"], job["lease_until"]) == (
+        "waiting",
+        1,
+        None,
+        None,
+    )
+    # attempt 1's wait is 5 s times 0.5-1.5, counted from the reap at 09:01:01
+    assert "2026-10-02T09:01:03.500000Z" <= job["run_after"] <= "2026-10-02T09:01:08.500000Z"
+    assert await read_rows("SELECT job_id, number, finished_at, outcome FROM attempts") == [
+        {
+            "job_id": job_id,
+            "number": 1,
+            "finished_at": "2026-10-02T09:01:01.000000Z",
+            "outcome": "reaped",
+        }
+    ]
+
+
+async def test_the_reaper_sends_a_job_dead_when_its_attempts_are_used_up(
+    writer: Writer, read_rows: ReadRows, frozen_clock: TimeMachineFixture
+) -> None:
+    await enqueue_job(writer)
+    for day in range(10):
+        frozen_clock.move_to(NINE + timedelta(days=day), tick=False)
+        await claim_one(writer)
+        frozen_clock.move_to(NINE + timedelta(days=day, minutes=2), tick=False)
+        await reap_now(writer)
+
+    assert await read_rows("SELECT status, attempts FROM jobs") == [
+        {"status": "dead", "attempts": 10}
+    ]
+    outcomes = await read_rows("SELECT DISTINCT outcome FROM attempts")
+    assert outcomes == [{"outcome": "reaped"}]
