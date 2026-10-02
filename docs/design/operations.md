@@ -59,7 +59,7 @@ When a server is running, commands that change state ask it over the admin port;
 
 ## doctor
 
-What a handover runs to prove the setup works, and the first thing to run when something looks wrong.
+What a handover runs to prove the setup works, and the first thing to run when something looks wrong. The pitch-ready cut builds the core checks: config, secrets, the key and mode, the sheet, the database, and `--url` ([Q104](grilling-log.md)); the rest come with operations.
 
 | Check | Fails when |
 |---|---|
@@ -67,12 +67,13 @@ What a handover runs to prove the setup works, and the first thing to run when s
 | Every source has a non-empty secret | fail-open risk |
 | Stripe key is a **restricted** key with every needed read permission; each key's mode matches the config | `sk_live_` used, a permission missing (named), `rk_live_` with `mode = "test"` ([Q85](grilling-log.md)) |
 | Stripe's webhook endpoint for this URL is subscribed to every handled type; its API version matches the pinned one | a type not ticked (fail); a version differs (warning) (F29) |
+| Razorpay key prefix matches the configured mode; Razorpay's webhook for this URL, listed with `GET /v1/webhooks` | `rzp_live_` with `mode = "test"` (fail). Warning only: no active webhook with our URL, a handled event not ticked, no secret, or disabled. That endpoint is documented only for partners, so a 4xx from it reads "can't check" ([Q111](grilling-log.md), G55) |
 | Our clock within 30 s of the source's `Date` header | Stripe signatures fail beyond 5 minutes |
 | The spreadsheet is reachable and shared, the tabs and header match, the deployment id is ours; which Google auth is in use | unshared, wrong id, columns moved; the organisation blocks outside sharing or keys (explained in plain words, [Q90](grilling-log.md), [Q101](grilling-log.md)) |
 | Database writable, migrations current, schema not newer than the code, WAL and `synchronous=FULL` on, on a local disk | read-only, network drive or synced folder (OneDrive, Dropbox, Google Drive) |
 | Admin tokens long enough if the admin port is public | |
 | The heartbeat URL and the backup destination are set and reachable | [hosting.md](hosting.md) |
-| The public webhook URL answers (with `--url`) | tunnel or DNS down |
+| The public webhook URL answers (with `--url`): an empty POST must get our receiver's 400 | tunnel or DNS down; a **200 with an HTML page**, which is a tunnel's warning page that would swallow real deliveries ([Q112](grilling-log.md), G49) |
 
 ## Alerts
 

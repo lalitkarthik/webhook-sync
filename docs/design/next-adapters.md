@@ -2,7 +2,7 @@
 
 **What this page contains.** Outlines of the two adapters that come right after the pitch-ready cut: the forwarding sink for n8n and Zapier users ([Q77](grilling-log.md)), and the database sink with subscriptions, the first paid adapter ([Q78](grilling-log.md)). Outlines only: the full design of the database sink waits for the first matching job post, because it depends on the buyer's stack.
 
-**How to read it.** Both are sink adapters. The core (receive, store once, queue, sweep, verify) doesn't change for either.
+**How to read it.** Both are sink adapters. The core (receive, store once, queue, sweep, verify) doesn't change for either. The last section says how Stripe, the parked second source, could be reached.
 
 ## Where they sit
 
@@ -45,6 +45,15 @@ flowchart LR
 ## Other adapters that fit the same shape
 
 Refunds as their own rows (for period accounting), payouts and bank reconciliation (the bridge to demo 1), Checkout line items, Airtable or Notion sinks, Tally or QuickBooks exports. Each is listed with its effort in the audit's missing-features table; each is an adapter, not a change to the core.
+
+## Stripe access
+
+Stripe is the second source, designed in [sources.md](sources.md) and **parked**: it is invite-only in India, and its agreement ties the account country to where the business is, so an account is never opened under another country ([Q103](grilling-log.md), G58). It is built only if access appears, in this order of likelihood:
+1. A buyer invites the owner to one of their sandboxes as a Sandbox User. That needs a Stripe login, not a business account.
+2. A buyer creates the restricted key themselves ([Q85](grilling-log.md)).
+3. Optionally, a one-off try of `stripe sandbox create` (Stripe CLI 1.42 or later), which gives a 7-day sandbox without an account; untried from India (G57). The Stripe recording spike fits inside the 7 days.
+
+Until then, FakeStripe is built from Stripe's documented payloads only if the adapter is started, and the README says the Stripe adapter is designed, not built. Razorpay's partner OAuth, with a `read_only` scope, is the later route to a read-only Razorpay credential (G40).
 
 ## Where to go next
 

@@ -35,8 +35,9 @@ feature loop's (`.claude/skills/feature-loop/workflow.md`).
    every implementer is a background `Agent` call with `isolation: "worktree"`.
 3. **No inbound traffic.** Razorpay cannot deliver a webhook to this machine. Tests run on
    fakes and recordings. Outbound calls to Razorpay's test API and the Google Sheets API work
-   when the keys are set and the network setting allows those hosts. Anything that needs a real
-   delivery, a tunnel, a browser checkout or a screen recording is the owner's: label that
+   when the keys are set and the network setting allows those hosts. Test payments can be paid
+   here, headless through Checkout's mock bank page (`wsync demo`, Q105). Anything that needs a
+   real delivery, a tunnel or a screen recording is the owner's: label that
    ticket `ready-for-human` and say exactly what to run.
 4. **Secrets.** Read them from the environment. Never print a value, write one to a file in the
    repo, or put one in a commit, issue, PR or log. Test-mode keys only: if `RAZORPAY_KEY_ID`
