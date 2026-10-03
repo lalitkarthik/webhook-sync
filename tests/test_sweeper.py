@@ -562,3 +562,86 @@ async def test_a_payment_captured_after_it_was_swept_is_re_listed_and_its_row_su
         if int(q["from"]) == at(AN_HOUR_ON - timedelta(days=7))
     ]
     assert relists and {int(q["to"]) for q in relists} == {at(AN_HOUR_ON)}
+
+
+ALL_LEDGER_JOBS_DONE = "SELECT count(*) AS n FROM jobs WHERE stage = 'ledger' AND status != 'done'"
+
+
+def with_refunds(payment: dict[str, Any], status: str) -> dict[str, Any]:
+    """The payment's fetch with each of its refunds in `status`."""
+    items = [{**refund, "status": status} for refund in payment["refunds"]["items"]]
+    return {**payment, "refunds": {**payment["refunds"], "items": items}}
+
+
+@pytest.mark.usefixtures("frequent_sweeps")
+async def test_a_refund_going_from_pending_to_processed_updates_the_refunded_amount_on_the_re_list(
+    swept_config: Config,
+    data_dir: Path,
+    outside: Outside,
+    read_rows: ReadRows,
+    clock: TimeMachineFixture,
+) -> None:
+    fake = outside.razorpay
+    fetched = fake.fetches["pay_Tj9gmEfed6kRqO"]
+    fake.payments["pay_Tj9gmEfed6kRqO"] = recorded_listed_payments()["pay_Tj9gmEfed6kRqO"]
+    fake.refunds.extend(
+        recorded_api_answer(name)
+        for name in (
+            "20261003T011044-rfnd_Tj9tB2hm5WLvww-pending",
+            "20261003T011054-rfnd_Tj9tMhKlOulF3Q-pending",
+        )
+    )
+    fake.fetches["pay_Tj9gmEfed6kRqO"] = with_refunds(fetched, "pending")
+    row = "SELECT status, refunded_minor FROM payments WHERE payment_id = 'pay_Tj9gmEfed6kRqO'"
+
+    async with running(swept_config, data_dir):
+        await wait_for(read_rows, CAUGHT_UP, [{"n": 2}])
+        await wait_for(read_rows, row, [{"status": "succeeded", "refunded_minor": 0}])
+        await wait_for(read_rows, ALL_LEDGER_JOBS_DONE, [{"n": 0}])
+        fake.refunds[:] = [
+            recorded_api_answer(name)
+            for name in (
+                "20261003T011109-rfnd_Tj9tB2hm5WLvww-processed",
+                "20261003T011111-rfnd_Tj9tMhKlOulF3Q-processed",
+            )
+        ]
+        fake.fetches["pay_Tj9gmEfed6kRqO"] = fetched
+        await an_hour_later(clock, fake)
+        await wait_for(read_rows, row, [{"status": "partially_refunded", "refunded_minor": 20000}])
+
+    assert await read_rows(
+        "SELECT type, count(*) AS n FROM events WHERE type LIKE 'refund.%' GROUP BY type"
+        " ORDER BY type"
+    ) == [{"type": "refund.created", "n": 2}, {"type": "refund.processed", "n": 2}]
+    relists = [
+        q
+        for q in fake.calls_to("/v1/refunds")
+        if int(q["from"]) == at(AN_HOUR_ON - timedelta(days=21))
+    ]
+    assert relists
+
+
+@pytest.mark.usefixtures("frequent_sweeps")
+async def test_a_re_list_in_which_nothing_changed_stores_no_event_and_enqueues_no_job(
+    swept_config: Config,
+    data_dir: Path,
+    outside: Outside,
+    read_rows: ReadRows,
+    clock: TimeMachineFixture,
+) -> None:
+    fake = outside.razorpay
+    fake.payments.update(recorded_listed_payments())
+    fake.refunds.extend(recorded_listed_refunds())
+    relisted = "SELECT count(*) AS n FROM checkpoints WHERE last_relist_at > '2026-10-02T21:00'"
+
+    async with running(swept_config, data_dir):
+        await wait_for(read_rows, CAUGHT_UP, [{"n": 2}])
+        await wait_for(read_rows, ALL_LEDGER_JOBS_DONE, [{"n": 0}])
+        events = await read_rows("SELECT event_id FROM events ORDER BY event_id")
+        jobs = await read_rows("SELECT id FROM jobs ORDER BY id")
+        await an_hour_later(clock, fake)
+        await wait_for(read_rows, relisted, [{"n": 2}])
+
+    assert len(events) == 7
+    assert await read_rows("SELECT event_id FROM events ORDER BY event_id") == events
+    assert await read_rows("SELECT id FROM jobs ORDER BY id") == jobs
