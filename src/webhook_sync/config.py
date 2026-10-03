@@ -5,7 +5,8 @@ next to the config file, the real environment winning (A11). Paths in the TOML a
 config file (A10). Anything unsafe raises ConfigError with one line naming the key or variable,
 never a secret's value: an unknown key, a secret in the TOML, a missing or empty secret, a key
 whose prefix doesn't match the mode, a bad timezone, `[sources.stripe]` while Stripe is parked.
-The sections P2-P4 own are accepted and checked for type only (A29).
+`[sweeper]` and `[verify]` are modelled with their defaults; `[retention]` is accepted and checked
+for type only (A29).
 """
 
 import base64
@@ -17,6 +18,7 @@ import re
 import tomllib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from datetime import time
 from pathlib import Path
 from typing import Any, Literal, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -98,6 +100,24 @@ class AlertsConfig:
 
 
 @dataclass(frozen=True)
+class SweeperConfig:
+    initial_lookback_days: int = 30
+    """How far back the first sweep of a list starts; 0 starts empty (Q64, Q157)."""
+    heartbeat_url: str = ""
+    """Where a healthy sweep pass is POSTed (Q148); empty means no heartbeat."""
+
+
+@dataclass(frozen=True)
+class VerifyConfig:
+    days: int = 30
+    """How many days of payments the nightly verify checks against Razorpay."""
+    nightly_at: time = time(2, 0)
+    """The local time (`service.timezone`) the nightly full verify runs at (Q154)."""
+    auto_repair: bool = True
+    """Whether a full verify repairs what it finds through the ordinary jobs."""
+
+
+@dataclass(frozen=True)
 class DemoConfig:
     spreadsheet_ids: tuple[str, ...] = ()
 
@@ -129,6 +149,8 @@ class Config:
     """The configured sinks' names, one per `[sinks.*]` section present (today `sheets`). Each
     real ledger change makes one mirror job per sink (A19)."""
     alerts: AlertsConfig = AlertsConfig()
+    sweeper: SweeperConfig = SweeperConfig()
+    verify: VerifyConfig = VerifyConfig()
     demo: DemoConfig = DemoConfig()
 
 
@@ -235,6 +257,8 @@ def load_config(path: Path, environ: Mapping[str, str] | None = None) -> Config:
     razorpay = _section(_section(document, "sources"), "razorpay", "sources.", required=True)
     sheets = _section(_section(document, "sinks"), "sheets", "sinks.", required=True)
     alerts = _section(document, "alerts")
+    sweeper = _section(document, "sweeper")
+    verify = _section(document, "verify")
     demo = _section(document, "demo")
 
     mode: Mode = _choice(razorpay, "mode", "sources.razorpay", MODES)
@@ -281,6 +305,15 @@ def load_config(path: Path, environ: Mapping[str, str] | None = None) -> Config:
         ),
         sinks=tuple(_section(document, "sinks")),
         alerts=AlertsConfig(url=_alerts_url(alerts)),
+        sweeper=SweeperConfig(
+            initial_lookback_days=sweeper.get("initial_lookback_days", 30),
+            heartbeat_url=_heartbeat_url(sweeper),
+        ),
+        verify=VerifyConfig(
+            days=verify.get("days", 30),
+            nightly_at=_nightly_at(verify),
+            auto_repair=verify.get("auto_repair", True),
+        ),
         demo=DemoConfig(spreadsheet_ids=tuple(demo.get("spreadsheet_ids", []))),
     )
 
@@ -432,6 +465,21 @@ def _alerts_url(alerts: Mapping[str, Any]) -> str:
     if url and not re.fullmatch(r"https?://\S+", url):
         raise ConfigError('alerts.url must be empty or an "https://..." webhook URL')
     return url
+
+
+def _heartbeat_url(sweeper: Mapping[str, Any]) -> str:
+    url = sweeper.get("heartbeat_url", "")
+    if url and not re.fullmatch(r"https?://[^/\s]+\S*", url):
+        raise ConfigError('sweeper.heartbeat_url must be empty or an "https://..." URL')
+    return url
+
+
+def _nightly_at(verify: Mapping[str, Any]) -> time:
+    value = verify.get("nightly_at", "02:00")
+    match = re.fullmatch(r"([01][0-9]|2[0-3]):([0-5][0-9])", value)
+    if match is None:
+        raise ConfigError('verify.nightly_at must be a 24-hour time "HH:MM", e.g. "02:00"')
+    return time(int(match[1]), int(match[2]))
 
 
 _SERVICE_ACCOUNT_REFUSED = (
