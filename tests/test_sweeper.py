@@ -822,20 +822,25 @@ async def test_with_a_heartbeat_url_each_healthy_pass_is_followed_by_one_post(
     data_dir: Path,
     outside: Outside,
     read_rows: ReadRows,
+    sweeper_logs: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(sweeper_module, "SWEEP_EVERY", timedelta(milliseconds=200))
     outside.router.post(HEARTBEAT).mock(return_value=httpx.Response(200, text="OK"))
 
+    def healthy() -> int:
+        return sum(
+            r.getMessage() == "sweep pass ended" and getattr(r, "finished", False)
+            for r in sweeper_logs.records
+        )
+
     async with running(heartbeat_config, data_dir):
         await wait_for(read_rows, CAUGHT_UP, [{"n": 2}])
-        await until(lambda: len(heartbeats(outside.router)) >= 2, "two heartbeats")
-        passes = len(outside.razorpay.calls_to("/v1/refunds"))  # the walk's probe, at least
+        await until(lambda: healthy() >= 2, "two healthy passes")
 
     pings = heartbeats(outside.router)
-    assert len(pings) >= 2
     assert all(ping.method == "POST" for ping in pings)
-    assert len(pings) <= passes
+    assert len(pings) == healthy()
 
 
 async def test_no_heartbeat_follows_a_failed_pass(
