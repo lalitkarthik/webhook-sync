@@ -3,13 +3,14 @@
 The app's lifespan runs it nightly: once per local date in `service.timezone`, at the first valid
 `[verify] nightly_at` at or after that time (a daylight-saving change can skip it), and at start
 when today's time has passed with no full run stored for today, so a server down at 02:00 runs
-it on start the same day. That catch-up first waits (2 minutes at most) for the sweeper to have
-walked both lists up to the server's start, so payments made while it was down come in through
-the sweep, with Via = sweep, not as verify's repairs. "Once per local date" is read from
-`verify_runs`, so it survives restarts (A18). A run whose list fails, or that raises, is tried
-again every 10 minutes (longer when Razorpay's `Retry-After` asks) until a full run is stored or
-the date is over. While Razorpay is paused the source half is skipped: the sheet is checked as a
-quick run, and that night is done.
+it on start the same day. The first run after a start, caught up or due soon after, first waits
+(2 minutes at most) for the sweeper to have walked both lists up to the server's start, so
+payments made while it was down come in through the sweep, with Via = sweep, not as verify's
+repairs. "Once per local date" is read from `verify_runs`, so it survives restarts (A18). A run
+whose list fails, or that raises, is tried again every 10 minutes (longer when Razorpay's
+`Retry-After` asks) until a full run is stored or the date is over, when one warning names the
+date and its last failure. While Razorpay is paused the source half is skipped: the sheet is
+checked as a quick run, and that night is done.
 
 A full run is stored as one `verify_runs` row with the findings of both checks; with `[verify]
 auto_repair` (or a repair asked for) they are repaired in the same transaction. Its line, e.g.
@@ -85,10 +86,17 @@ class FullVerify:
         cancelled."""
         server_started = utc_now()
         done: date | None = None  # a night run with Razorpay paused stores no full run
+        failing: tuple[date, str] | None = None  # a night still to store, and why it failed
         at_start = True
         while True:
             now = utc_now()
             night = now.astimezone(self._zone).date()
+            if failing is not None and failing[0] < night:
+                log.warning(
+                    "nightly verify given up: its date is over",
+                    extra={"local_date": failing[0].isoformat(), "error": failing[1]},
+                )
+                failing = None
             if night == done or await self._ran_on(night):
                 night += timedelta(days=1)
             due = nightly_due(night, self._config.verify.nightly_at, self._zone)
@@ -98,29 +106,32 @@ class FullVerify:
                     extra={"local_date": night.isoformat(), "due_at": to_db_text(due)},
                 )
                 await self._sleep((due - now).total_seconds())
-            elif at_start:
+            if at_start:  # caught up at start, or due soon after it: the sweep goes first
                 await self._first_sweep(server_started)
             at_start = False
-            retry_in = await self._try(night)
-            if retry_in is None:
-                done = night
+            failed = await self._try(night)
+            if failed is None:
+                done, failing = night, None
             else:
+                retry_in, error = failed
+                failing = (night, error)
                 log.warning(
                     "nightly verify failed; trying again",
                     extra={"local_date": night.isoformat(), "retry_in_s": retry_in},
                 )
                 await self._sleep(retry_in)
 
-    async def _try(self, night: date) -> float | None:
+    async def _try(self, night: date) -> tuple[float, str] | None:
         """One nightly run; None when the night is done, else the seconds to wait before
-        trying again."""
+        trying again and what failed."""
         try:
             result = await self.run(local_date=night)
-        except Exception:
+        except Exception as error:
             log.exception("nightly verify raised")
-            return RETRY_EVERY.total_seconds()
+            return RETRY_EVERY.total_seconds(), f"{type(error).__name__}: {error}"
         if isinstance(result, Failure):
-            return max(RETRY_EVERY, result.retry_after or timedelta(0)).total_seconds()
+            wait = max(RETRY_EVERY, result.retry_after or timedelta(0))
+            return wait.total_seconds(), result.error
         return None
 
     async def _first_sweep(self, server_started: datetime) -> None:
