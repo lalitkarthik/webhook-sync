@@ -716,9 +716,12 @@ class FakeSheets:
     def _sort_range(self, spec: Json, tabs: list[Tab]) -> Json:
         grid: Json = spec["range"]
         tab = self._grid(tabs, grid.get("sheetId", 0))
-        rows = range(grid.get("startRowIndex", 0), min(grid.get("endRowIndex", 10**9), tab.row_count))
+        rows = range(
+            grid.get("startRowIndex", 0), min(grid.get("endRowIndex", 10**9), tab.row_count)
+        )
         columns = range(
-            grid.get("startColumnIndex", 0), min(grid.get("endColumnIndex", 10**9), tab.column_count)
+            grid.get("startColumnIndex", 0),
+            min(grid.get("endColumnIndex", 10**9), tab.column_count),
         )
         lines = [{c: tab.cells[(r, c)] for c in columns if (r, c) in tab.cells} for r in rows]
         for sort in reversed(spec.get("sortSpecs", [])):
@@ -786,4 +789,3 @@ def _trimmed(answer: Json) -> Json:
             if not rows:
                 data.pop("rowData", None)
     return answer
-
