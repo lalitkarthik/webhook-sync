@@ -305,7 +305,7 @@ async def test_fee_columns_say_pending_while_the_fee_is_unknown(sheets: Sheets) 
     assert shown(sheets.payments, 1)[7:10] == ["pending", "pending", "pending"]
 
 
-async def test_ten_payments_cost_one_read_and_one_write_appended_in_order_after_the_last(
+async def test_ten_payments_cost_two_reads_and_one_write_appended_in_order_after_the_last(
     sheets: Sheets, read_rows: ReadRows
 ) -> None:
     await put(sheets.writer, captured("pay_00"))
@@ -316,7 +316,7 @@ async def test_ten_payments_cost_one_read_and_one_write_appended_in_order_after_
 
     assert await sheets.flush() == 10
 
-    assert sheets.fake.calls == ["getByDataFilter", "batchUpdate"]
+    assert sheets.fake.calls == ["getByDataFilter", "batchUpdate", "getByDataFilter"]
     keys = [row[0] for row in sheets.payments.values()[1:]]
     assert keys == [f"pay_{n:02d}" for n in range(11)]
     assert set(await statuses(read_rows)) == {"done"}
@@ -667,7 +667,7 @@ async def test_a_late_payment_for_an_older_day_updates_that_row_in_place(
         ["2026-09-30", "INR", "INR", "2", "1000.00", "0.00", "23.60", "976.40", "0"],
         ["2026-10-02", "INR", "INR", "1", "500.00", "0.00", "11.80", "488.20", "0"],
     ]
-    assert sheets.fake.calls == ["getByDataFilter", "batchUpdate"]
+    assert sheets.fake.calls == ["getByDataFilter", "batchUpdate", "getByDataFilter"]
     tab_id = sheets.fake.tab(DAILY_SUMMARY).sheet_id
     summary_writes = [
         r["updateCells"]["start"]
