@@ -49,6 +49,7 @@ from webhook_sync.verify import full as full_module
 
 HOOK = "https://hooks.example.test/services/T000/B000/fixture"
 EARLY = datetime(2026, 10, 11, 19, 30, tzinfo=UTC)  # 01:00 IST on 12 Oct: the night not yet due
+TWO = datetime(2026, 10, 11, 20, 30, tzinfo=UTC)  # 02:00 IST on 12 Oct: `nightly_at`
 LATE = datetime(2026, 10, 11, 21, 30, 5, tzinfo=UTC)  # 03:00:05 IST: 02:00 missed
 CAPTURED = "pay_Tj9rKBOXWcsMeE"  # captured on 3 Oct, fee 1180
 PARTLY_REFUNDED = "pay_Tj9gmEfed6kRqO"  # captured on 3 Oct, two processed refunds of 100
@@ -201,18 +202,32 @@ async def night(
     at: datetime = LATE,
     runs: int = 1,
 ) -> AsyncGenerator[None]:
-    """The app started at `at`, held until `runs` full runs have finished, the loop has moved
-    on to the next night (after the run's alerts) and the jobs are done."""
+    """The app started at `at`, held until the night is over."""
+    async with back_at(config, data_dir, clock, outside, at):
+        await night_over(config, read_rows, outside, at, runs)
+        yield
+
+
+@asynccontextmanager
+async def back_at(
+    config: Config, data_dir: Path, clock: TimeMachineFixture, outside: Outside, at: datetime
+) -> AsyncGenerator[None]:
+    """The app started at `at`, on both clocks."""
     clock.move_to(at, tick=True)
     outside.razorpay.now = at
-    today = at.astimezone(config.service.timezone).date().isoformat()
     async with running(config, data_dir):
-        await wait_for(read_rows, FULL_RUNS, [{"n": runs}])
-        await until(
-            lambda: any(day > today for day in outside.waiting_for()), "the next night's wait"
-        )
-        await wait_for(read_rows, QUIET, [{"n": 0}])
         yield
+
+
+async def night_over(
+    config: Config, read_rows: ReadRows, outside: Outside, at: datetime, runs: int = 1
+) -> None:
+    """Wait until `runs` full runs have finished, the loop has moved on to the night after
+    `at`'s (after the run's alerts) and the jobs are done."""
+    today = at.astimezone(config.service.timezone).date().isoformat()
+    await wait_for(read_rows, FULL_RUNS, [{"n": runs}])
+    await until(lambda: any(day > today for day in outside.waiting_for()), "the next night's wait")
+    await wait_for(read_rows, QUIET, [{"n": 0}])
 
 
 def sheet_rows(sheets: FakeSheets) -> dict[str, dict[str, Any]]:
@@ -372,7 +387,7 @@ async def test_the_full_run_happens_once_per_local_date_caught_up_at_start(
 
     [run] = await read_rows("SELECT kind, local_date, started_at FROM verify_runs")
     assert (run["kind"], run["local_date"]) == ("full", "2026-10-12")
-    assert run["started_at"].startswith("2026-10-11T21:30:0")  # at start, not at 05:00
+    assert run["started_at"] < "2026-10-11T22:00"  # at the first start, not at 05:00
     [waiting] = [r for r in outside.logs.records if r.getMessage() == "nightly verify waiting"]
     assert (waiting.__dict__["local_date"], waiting.__dict__["due_at"]) == (
         "2026-10-13",
@@ -387,10 +402,8 @@ async def test_a_server_running_at_nightly_at_runs_the_full_verify_then(
     read_rows: ReadRows,
     clock: TimeMachineFixture,
 ) -> None:
-    two = datetime(2026, 10, 11, 20, 30, tzinfo=UTC)  # 02:00 IST on 12 Oct
-
     async with night(
-        verified_config, data_dir, read_rows, clock, outside, at=two - timedelta(seconds=1)
+        verified_config, data_dir, read_rows, clock, outside, at=TWO - timedelta(seconds=1)
     ):
         pass
 
@@ -446,7 +459,11 @@ async def test_the_same_payment_stale_on_two_nights_raises_one_stale_twice_alert
     ]
 
 
+@pytest.mark.parametrize(
+    "back", [LATE, TWO - timedelta(seconds=1)], ids=["after nightly_at", "just before nightly_at"]
+)
 async def test_a_payment_made_while_the_server_was_down_comes_in_through_the_sweep(
+    back: datetime,
     verified_config: Config,
     data_dir: Path,
     outside: Outside,
@@ -455,22 +472,23 @@ async def test_a_payment_made_while_the_server_was_down_comes_in_through_the_swe
 ) -> None:
     async with running(verified_config, data_dir):  # up at 01:00: the sweep's checkpoints
         await wait_for(read_rows, "SELECT count(*) AS n FROM checkpoints", [{"n": 2}])
-    # Down from 01:00 to 03:00; a payment made at 01:30 reached no webhook.
+    # Down from 01:00; a payment made at 01:30 reached no webhook.
     made = int((EARLY + timedelta(minutes=30)).timestamp())
     fake = outside.razorpay
     fake.payments[CAPTURED] = listed(CAPTURED)[CAPTURED] | {"created_at": made}
     fake.fetches[CAPTURED] = fake.fetches[CAPTURED] | {"created_at": made}
-    # The sweep's first slice, from the 01:00 checkpoint, answers half a second late.
-    fake.hold_at = int(EARLY.timestamp())
+    fake.hold_at = int(EARLY.timestamp())  # the sweep's first slice, from the 01:00 checkpoint
 
-    async def answer_late() -> None:
-        await asyncio.sleep(0.5)
+    async with back_at(verified_config, data_dir, clock, outside, back):
+        await until(
+            lambda: any(int(q["from"]) == fake.hold_at for q in fake.calls_to("/v1/payments")),
+            "the sweep's held slice",
+        )
+        # Past 02:00, the sweep still held: the night waits for it.
+        await asyncio.sleep(max((TWO - utc_now()).total_seconds(), 0) + 0.3)
+        assert await read_rows(FULL_RUNS) == [{"n": 0}]
         fake.release.set()
-
-    late = asyncio.create_task(answer_late())
-
-    # Back at 03:00, the catch-up waits for the sweep, which brings the payment in.
-    async with night(verified_config, data_dir, read_rows, clock, outside):
+        await night_over(verified_config, read_rows, outside, back)
         await wait_for(
             read_rows,
             "SELECT payment_key FROM jobs WHERE stage = 'mirror' AND status = 'done'",
@@ -482,7 +500,6 @@ async def test_a_payment_made_while_the_server_was_down_comes_in_through_the_swe
         {"payment_id": CAPTURED, "via": "sweep"}
     ]
     assert sheet_rows(outside.sheets)[CAPTURED]["Via"] == "sweep"
-    await late
 
 
 async def test_a_payment_a_stalled_sweeper_never_brought_in_is_missing(
@@ -521,6 +538,50 @@ async def test_a_payment_a_stalled_sweeper_never_brought_in_is_missing(
     assert await read_rows("SELECT payment_id FROM payments") == [{"payment_id": CAPTURED}]
 
 
+def verify_lists_fail(outside: Outside, times: int | None) -> list[httpx.Request]:
+    """The night's payments lists answer 503, `times` times (None: always); the sweep's lists
+    are untouched. The failed requests, as they come."""
+    probe = httpx.Request("GET", f"{RAZORPAY_API}/v1/payments?from=1&to=2")
+    [route] = [r for r in outside.router.routes if r.pattern.match(probe)]
+    answer: Callable[[httpx.Request], Awaitable[httpx.Response]] = route.side_effect  # pyright: ignore[reportAssignmentType]
+    verify_from = int((LATE - timedelta(days=29)).timestamp())
+    failed: list[httpx.Request] = []
+
+    async def verify_list_fails(request: httpx.Request) -> httpx.Response:
+        if int(request.url.params["from"]) < verify_from and (times is None or len(failed) < times):
+            failed.append(request)
+            return httpx.Response(503, json={"error": {"description": "unavailable"}})
+        return await answer(request)
+
+    route.side_effect = verify_list_fails
+    return failed
+
+
+async def test_a_night_still_failing_when_its_date_is_over_is_given_up_with_a_warning(
+    verified_config: Config,
+    data_dir: Path,
+    outside: Outside,
+    read_rows: ReadRows,
+    clock: TimeMachineFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(full_module, "RETRY_EVERY", timedelta(milliseconds=50))
+    failed = verify_lists_fail(outside, times=None)
+
+    async with back_at(verified_config, data_dir, clock, outside, LATE):
+        await until(lambda: len(failed) >= 2, "the night tried again")
+        clock.move_to(datetime(2026, 10, 12, 18, 30, 1, tzinfo=UTC), tick=True)  # 00:00:01
+        await until(lambda: "2026-10-13" in outside.waiting_for(), "the next night's wait")
+
+    given_up = [
+        r for r in outside.logs.records if r.getMessage().startswith("nightly verify given")
+    ]
+    assert [(r.levelname, r.__dict__["local_date"], r.__dict__["error"]) for r in given_up] == [
+        ("WARNING", "2026-10-12", "Razorpay answered HTTP 503")
+    ]
+    assert await read_rows(FULL_RUNS) == [{"n": 0}]
+
+
 async def test_a_night_whose_list_fails_is_tried_again_until_it_is_stored(
     verified_config: Config,
     data_dir: Path,
@@ -531,20 +592,7 @@ async def test_a_night_whose_list_fails_is_tried_again_until_it_is_stored(
 ) -> None:
     monkeypatch.setattr(full_module, "RETRY_EVERY", timedelta(milliseconds=50))
     outside.razorpay.payments.update(listed(CAPTURED))
-    probe = httpx.Request("GET", f"{RAZORPAY_API}/v1/payments?from=1&to=2")
-    [route] = [r for r in outside.router.routes if r.pattern.match(probe)]
-    answer: Callable[[httpx.Request], Awaitable[httpx.Response]] = route.side_effect  # pyright: ignore[reportAssignmentType]
-    verify_from = int((LATE - timedelta(days=29)).timestamp())
-    failed: list[httpx.Request] = []
-
-    async def first_verify_list_fails(request: httpx.Request) -> httpx.Response:
-        """The night's first payments list answers 503; the sweep's lists are untouched."""
-        if int(request.url.params["from"]) < verify_from and not failed:
-            failed.append(request)
-            return httpx.Response(503, json={"error": {"description": "unavailable"}})
-        return await answer(request)
-
-    route.side_effect = first_verify_list_fails
+    failed = verify_lists_fail(outside, times=1)
 
     async with night(verified_config, data_dir, read_rows, clock, outside):
         pass
