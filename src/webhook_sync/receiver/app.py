@@ -16,6 +16,7 @@ from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 
+import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
@@ -25,12 +26,23 @@ from webhook_sync.config import Config
 from webhook_sync.db.migrations import apply_pending
 from webhook_sync.db.writer import Writer
 from webhook_sync.ledger import ledger_runner
-from webhook_sync.queue import PauseTarget, Runners, load_pauses, register, run_reaper
+from webhook_sync.queue import (
+    PauseTarget,
+    Runners,
+    StageRunner,
+    load_pauses,
+    register,
+    run_reaper,
+)
+from webhook_sync.queue.runner import BatchStageRunner
 from webhook_sync.receiver.checks import check_content_type, check_security_headers, read_body
 from webhook_sync.receiver.demo import FailFirst
 from webhook_sync.receiver.rate_cap import RateCap
 from webhook_sync.receiver.rejections import RejectionCounters
 from webhook_sync.receiver.store import store_delivery
+from webhook_sync.sinks.sheets import SINK as SHEETS_SINK
+from webhook_sync.sinks.sheets import sheets_runner
+from webhook_sync.sinks.sheets_client import ServiceAccountTokens, SheetsClient
 from webhook_sync.sources.base import EventDescription, Rejection, SourceAdapter, VerifiedDelivery
 from webhook_sync.sources.razorpay import EVENT_ID_HEADER, RazorpayAdapter, api_client
 
@@ -66,6 +78,7 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
             config.razorpay_secrets.key_secret,
         )
         alerter = Alerter(writer, config.alerts.url, redact=alert_redactions(config))
+        sheets_http = httpx.AsyncClient()
         try:
             # Under `wsync serve`, start() has already migrated under the lock and this is a
             # no-op; it migrates an app built in process (tests).
@@ -102,7 +115,17 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
                 pauses=pauses,
                 retry_profile=config.service.retry_profile,
             )
-            runners = Runners(writer, [ledger])
+            stages: list[StageRunner | BatchStageRunner] = [ledger]
+            if SHEETS_SINK in config.sinks:
+                sheets = SheetsClient(
+                    sheets_http,
+                    config.sheets.spreadsheet_id,
+                    ServiceAccountTokens(config.google_secrets.service_account),
+                )
+                stages.append(
+                    sheets_runner(writer, sheets, config, claimed_by=claimed_by, pauses=pauses)
+                )
+            runners = Runners(writer, stages)
             app.state.runners = runners
             runners.start()
             minutely = asyncio.create_task(_write_rejection_counts_every_minute(receiver))
@@ -126,6 +149,7 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
         finally:
             app.state.writer = None  # the admin listener answers 503 from here on
             await razorpay_api.aclose()
+            await sheets_http.aclose()
             await alerter.aclose()
             await writer.close()
 

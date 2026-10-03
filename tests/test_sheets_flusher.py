@@ -26,6 +26,7 @@ from webhook_sync.db.schema import payments
 from webhook_sync.db.writer import Writer
 from webhook_sync.queue import Pauses, enqueue
 from webhook_sync.queue.runner import HEARTBEAT_EVERY, IDLE_WAIT, BatchStageRunner
+from webhook_sync.receiver.app import create_app
 from webhook_sync.sinks.sheets import (
     DAILY_SUMMARY,
     FLUSH_EVERY,
@@ -411,3 +412,20 @@ async def test_the_flusher_flushes_every_3_s_while_jobs_wait_and_at_once_when_20
     # One wait, then 200 at once; then 3 s of waits before the one left waiting is flushed.
     assert rows_seen == [1, 201, 201, 201, 202, 202]
     assert FLUSH_EVERY == 3 * IDLE_WAIT
+
+
+async def test_the_server_runs_the_flusher_in_its_lifespan(
+    writer: Writer, sheet_config: Config, read_rows: ReadRows
+) -> None:
+    fake = FakeSheets(TEST_SPREADSHEET_ID)
+    await put(writer, captured())
+    with respx.mock(assert_all_called=False) as router:
+        fake.mount(router)
+        app = create_app(sheet_config, sheet_config.service.data_dir)
+        async with app.router.lifespan_context(app):
+            for _ in range(500):
+                if await statuses(read_rows) == ["done"]:
+                    break
+                await asyncio.sleep(0.01)
+    assert await statuses(read_rows) == ["done"]
+    assert fake.tab(PAYMENTS).values()[1][0] == "pay_A"
