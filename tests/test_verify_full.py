@@ -12,6 +12,7 @@ clock is moved with time-machine and keeps ticking.
 
 import asyncio
 import json
+import logging
 import time
 from collections.abc import AsyncGenerator, Callable, Iterator
 from contextlib import asynccontextmanager
@@ -25,17 +26,23 @@ import respx
 from fakes.sheets import FakeSheets
 from respx import Route
 from support import RECORDED_ACCOUNT, TEST_SPREADSHEET_ID, ReadRows
-from test_sweeper import RAZORPAY_API, FakeRazorpay, recorded_listed_payments
+from test_sweeper import (
+    RAZORPAY_API,
+    FakeRazorpay,
+    recorded_listed_payments,
+    recorded_listed_refunds,
+)
 from time_machine import TimeMachineFixture
 
 from webhook_sync.clock import utc_now
-from webhook_sync.config import AlertsConfig, Config, SweeperConfig
+from webhook_sync.config import AlertsConfig, Config, SweeperConfig, VerifyConfig
 from webhook_sync.db.writer import Writer
 from webhook_sync.queue import enqueue
 from webhook_sync.queue import runner as runner_module
 from webhook_sync.receiver.app import create_app
 from webhook_sync.sinks import sheets as sheets_module
 from webhook_sync.sinks.sheets import PAYMENTS
+from webhook_sync.sweeper import sweep as sweeper_module
 
 HOOK = "https://hooks.example.test/services/T000/B000/fixture"
 EARLY = datetime(2026, 10, 11, 19, 30, tzinfo=UTC)  # 01:00 IST on 12 Oct: the night not yet due
@@ -226,3 +233,229 @@ async def test_a_payment_only_at_razorpay_is_missing_and_repaired_into_the_ledge
     ]
     assert list(sheet_rows(outside.sheets)) == [CAPTURED]
     assert outside.alerts() == []
+
+
+async def test_a_ledger_row_whose_fee_differs_from_razorpays_is_stale_and_repaired(
+    verified_config: Config,
+    data_dir: Path,
+    writer: Writer,
+    outside: Outside,
+    read_rows: ReadRows,
+    clock: TimeMachineFixture,
+) -> None:
+    fake = outside.razorpay
+    fake.payments.update(listed(CAPTURED))
+    await ledgered(verified_config, data_dir, writer, read_rows, CAPTURED)
+    # Razorpay's fee changed after the ledger fetched the payment, and no event announced it.
+    fake.payments[CAPTURED] = fake.payments[CAPTURED] | {"fee": 1416, "tax": 216}
+    fake.fetches[CAPTURED] = fake.fetches[CAPTURED] | {"fee": 1416, "tax": 216}
+
+    async with night(verified_config, data_dir, read_rows, clock, outside):
+        await wait_for(
+            read_rows,
+            "SELECT count(*) AS n FROM jobs WHERE stage = 'mirror' AND status = 'done'",
+            [{"n": 2}],
+        )
+
+    assert await read_rows(FINDINGS) == [
+        {
+            "kind": "stale",
+            "payment_id": CAPTURED,
+            "detail": "fee_minor, fee_tax_minor, net_minor",
+            "repaired": 1,
+        }
+    ]
+    assert await read_rows("SELECT fee_minor, fee_tax_minor, net_minor FROM payments") == [
+        {"fee_minor": 1416, "fee_tax_minor": 216, "net_minor": 48584}
+    ]
+    assert sheet_rows(outside.sheets)[CAPTURED]["Fee"] == 14.16
+    assert outside.alerts() == []
+
+
+async def test_a_ledger_payment_razorpay_doesnt_list_is_orphaned_and_not_changed(
+    verified_config: Config,
+    data_dir: Path,
+    writer: Writer,
+    outside: Outside,
+    read_rows: ReadRows,
+    clock: TimeMachineFixture,
+) -> None:
+    fake = outside.razorpay
+    fake.payments.update(listed(CAPTURED))
+    await ledgered(verified_config, data_dir, writer, read_rows, CAPTURED)
+    before = await read_rows("SELECT * FROM payments")
+    del fake.payments[CAPTURED]  # deleted test data, or another account's payment
+
+    async with night(verified_config, data_dir, read_rows, clock, outside):
+        await until(lambda: bool(outside.alerts()), "the verify_differences alert")
+
+    assert await read_rows(FINDINGS) == [
+        {"kind": "orphaned", "payment_id": CAPTURED, "detail": None, "repaired": 0}
+    ]
+    assert await read_rows("SELECT * FROM payments") == before
+    assert await read_rows("SELECT count(*) AS n FROM jobs WHERE stage = 'ledger'") == [{"n": 1}]
+    assert outside.alerts() == [
+        "webhook-sync verify_differences: 1 difference(s) verify left unrepaired (orphaned 1)"
+    ]
+
+
+async def test_a_partly_refunded_payment_is_not_flagged(
+    verified_config: Config,
+    data_dir: Path,
+    writer: Writer,
+    outside: Outside,
+    read_rows: ReadRows,
+    clock: TimeMachineFixture,
+) -> None:
+    fake = outside.razorpay
+    fake.payments.update(listed(PARTLY_REFUNDED))
+    # Listed, its refunds come back empty: they are read from the refunds list.
+    fake.refunds.extend(recorded_listed_refunds())
+    await ledgered(verified_config, data_dir, writer, read_rows, PARTLY_REFUNDED)
+
+    async with night(verified_config, data_dir, read_rows, clock, outside):
+        pass
+
+    assert await read_rows("SELECT status, refunded_minor FROM payments") == [
+        {"status": "partially_refunded", "refunded_minor": 20000}
+    ]
+    assert await read_rows(FINDINGS) == []
+    assert await read_rows(RUNS) == [
+        {
+            "kind": "full",
+            "local_date": "2026-10-12",
+            "payments_checked": 1,
+            "findings_count": 0,
+            "repaired_count": 0,
+            "status_line": "Verified 12 Oct 03:00 IST: last 30 days, 1 payment, 0 differences",
+        }
+    ]
+
+
+def logged(caplog: pytest.LogCaptureFixture, message: str) -> int:
+    return sum(r.getMessage() == message for r in caplog.records)
+
+
+async def test_the_full_run_happens_once_per_local_date_caught_up_at_start(
+    verified_config: Config,
+    data_dir: Path,
+    outside: Outside,
+    read_rows: ReadRows,
+    clock: TimeMachineFixture,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="webhook_sync.verify")
+
+    # Started at 03:00, the server missed 02:00: today's run happens at start.
+    async with night(verified_config, data_dir, read_rows, clock, outside):
+        pass
+    # Restarted at 05:00 the same day: nothing to run until tomorrow's 02:00.
+    clock.move_to(LATE + timedelta(hours=2), tick=True)
+    async with running(verified_config, data_dir):
+        await until(lambda: logged(caplog, "nightly verify waiting") >= 1, "the next night")
+
+    [run] = await read_rows("SELECT kind, local_date, started_at FROM verify_runs")
+    assert (run["kind"], run["local_date"]) == ("full", "2026-10-12")
+    assert run["started_at"].startswith("2026-10-11T21:30:0")  # at start, not at 05:00
+    [waiting] = [r for r in caplog.records if r.getMessage() == "nightly verify waiting"]
+    assert (waiting.__dict__["local_date"], waiting.__dict__["due_at"]) == (
+        "2026-10-13",
+        "2026-10-12T20:30:00.000000Z",
+    )
+
+
+async def test_a_server_running_at_nightly_at_runs_the_full_verify_then(
+    verified_config: Config,
+    data_dir: Path,
+    outside: Outside,
+    read_rows: ReadRows,
+    clock: TimeMachineFixture,
+) -> None:
+    two = datetime(2026, 10, 11, 20, 30, tzinfo=UTC)  # 02:00 IST on 12 Oct
+
+    async with night(
+        verified_config, data_dir, read_rows, clock, outside, at=two - timedelta(seconds=1)
+    ):
+        pass
+
+    [run] = await read_rows("SELECT local_date, started_at FROM verify_runs")
+    assert run["local_date"] == "2026-10-12"
+    assert run["started_at"] >= "2026-10-11T20:30:00"
+
+
+async def test_the_same_payment_stale_on_two_nights_raises_one_stale_twice_alert(
+    verified_config: Config,
+    data_dir: Path,
+    writer: Writer,
+    outside: Outside,
+    read_rows: ReadRows,
+    clock: TimeMachineFixture,
+) -> None:
+    config = replace(verified_config, verify=VerifyConfig(auto_repair=False))
+    fake = outside.razorpay
+    fake.payments.update(listed(CAPTURED, PARTLY_REFUNDED))
+    fake.refunds.extend(recorded_listed_refunds())
+    await ledgered(config, data_dir, writer, read_rows, CAPTURED, PARTLY_REFUNDED)
+    fake.payments[CAPTURED] = fake.payments[CAPTURED] | {"fee": 1416, "tax": 216}
+
+    async with night(config, data_dir, read_rows, clock, outside):
+        await until(lambda: len(outside.alerts()) == 1, "the first night's alert")
+    async with night(
+        config, data_dir, read_rows, clock, outside, at=LATE + timedelta(days=1), runs=2
+    ):
+        await until(lambda: len(outside.alerts()) == 3, "the second night's alerts")
+
+    assert (
+        await read_rows(FINDINGS)
+        == [
+            {
+                "kind": "stale",
+                "payment_id": CAPTURED,
+                "detail": "fee_minor, fee_tax_minor, net_minor",
+                "repaired": 0,
+            }
+        ]
+        * 2
+    )
+    unrepaired = "webhook-sync verify_differences: 1 difference(s) verify left unrepaired (stale 1)"
+    assert outside.alerts() == [
+        unrepaired,
+        unrepaired,
+        "webhook-sync stale_twice: 1 payment(s) stale on two full verify runs in a row:"
+        f" {CAPTURED}",
+    ]
+    assert await read_rows("SELECT local_date FROM verify_runs ORDER BY id") == [
+        {"local_date": "2026-10-12"},
+        {"local_date": "2026-10-13"},
+    ]
+
+
+async def test_a_payment_made_while_the_server_was_down_is_left_to_the_sweep(
+    verified_config: Config,
+    data_dir: Path,
+    outside: Outside,
+    read_rows: ReadRows,
+    clock: TimeMachineFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sweeper_module, "START_DELAY", timedelta(0))
+    async with running(verified_config, data_dir):  # up at 01:00: the sweep's checkpoints
+        await wait_for(read_rows, "SELECT count(*) AS n FROM checkpoints", [{"n": 2}])
+    # Down from 01:00 to 03:00; a payment made at 01:30 reached no webhook.
+    made = int((EARLY + timedelta(minutes=30)).timestamp())
+    outside.razorpay.payments[CAPTURED] = listed(CAPTURED)[CAPTURED] | {"created_at": made}
+    # Back at 03:00, the full run goes first: the sweep waits (a year at most, so in practice
+    # past the test), so the payment is still the sweep's to bring in, with Via = sweep.
+    monkeypatch.setattr(sweeper_module, "START_DELAY", timedelta(days=365))
+
+    async with night(verified_config, data_dir, read_rows, clock, outside):
+        pass
+
+    assert await read_rows(FINDINGS) == []
+    assert await read_rows("SELECT payments_checked, status_line FROM verify_runs") == [
+        {
+            "payments_checked": 0,
+            "status_line": "Verified 12 Oct 03:00 IST: last 30 days, 0 payments, 0 differences",
+        }
+    ]
+    assert await read_rows("SELECT count(*) AS n FROM jobs WHERE stage = 'ledger'") == [{"n": 0}]
