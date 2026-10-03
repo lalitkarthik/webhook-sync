@@ -3,7 +3,7 @@
 
 [service]
 public_listen = "0.0.0.0:8080"      # webhooks and /health only
-admin_listen = "127.0.0.1:8081"     # secrets: ADMIN_TOKENS=label:token,...
+admin_listen = "127.0.0.1:8081"     # loopback only (Q133): wsync resume and wsync status use it
 data_dir = "data"                   # the database and its lock file; relative to this file
 timezone = "Asia/Kolkata"
 retry_profile = "production"        # or "demo"
@@ -18,11 +18,11 @@ metadata_keys = ["order_id"]
 # secrets STRIPE_WEBHOOK_SECRETS (newest first), STRIPE_RESTRICTED_KEY
 
 [sinks.sheets]
-spreadsheet_id = "your-spreadsheet-id"  # secret: GOOGLE_SERVICE_ACCOUNT_JSON, or GOOGLE_OAUTH_REFRESH_TOKEN
+spreadsheet_id = "your-spreadsheet-id"  # secret: GOOGLE_SERVICE_ACCOUNT_B64 (Q135)
 columns = ["payment_id", "source", "created", "status", "amount", "currency", "refunded",
-           "settled", "fee", "net", "settled_in", "method", "dispute", "customer_email",
-           "description", "metadata", "via", "note", "updated"]
-mask_email = true
+           "fee", "gst_on_fee", "net", "fee_currency", "method", "customer_email",
+           "description", "metadata", "via", "note", "updated"]   # Q136; metadata = one per key
+mask_email = true                   # customer emails as a***@gmail.com
 
 [sweeper]
 initial_lookback_days = 30
@@ -37,7 +37,7 @@ auto_repair = true
 payload_days = 30
 
 [alerts]
-url = ""                            # Slack or Discord incoming-webhook URL; empty = banner only
+url = ""                            # Slack or Discord incoming-webhook URL; empty = a warning log (Q139)
 
 [demo]
 spreadsheet_ids = []                # --demo-fail-first runs only against these sheets (Q120)

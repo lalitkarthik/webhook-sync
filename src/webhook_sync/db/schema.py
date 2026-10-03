@@ -123,3 +123,38 @@ payments = sa.Table(
     sa.Column("row_version", sa.Integer, nullable=False),
     sa.Column("updated_at", sa.Text, nullable=False),
 )
+
+
+sinks = sa.Table(
+    "sinks",
+    metadata,
+    sa.Column("name", sa.Text, primary_key=True),
+    sa.Column("kind", sa.Text, nullable=False),
+    sa.Column("state", sa.Text, nullable=False),
+    sa.Column("reason", sa.Text),
+    sa.Column("since", sa.Text),
+    sa.Column("moved_in_a_row", sa.Integer, nullable=False),
+)
+
+
+sheet_state = sa.Table(
+    "sheet_state",
+    metadata,
+    sa.Column("spreadsheet_id", sa.Text, primary_key=True),
+    sa.Column("payments_tab_id", sa.Integer),
+    sa.Column("daily_summary_tab_id", sa.Integer),
+    sa.Column("sync_status_tab_id", sa.Integer),
+    sa.Column("deployment_id", sa.Text),
+    sa.Column("last_flush_at", sa.Text),
+    sa.Column("rows_written_last", sa.Integer, nullable=False),
+    sa.Column("rows_written_total", sa.Integer, nullable=False),
+)
+
+
+alerts = sa.Table(
+    "alerts",
+    metadata,
+    sa.Column("kind", sa.Text, primary_key=True),
+    sa.Column("last_sent_at", sa.Text),
+    sa.Column("suppressed_count", sa.Integer, nullable=False),
+)

@@ -35,3 +35,21 @@ def hold_lock(data_dir: Path) -> Generator[None]:
         yield
     finally:
         lock.release()
+
+
+@contextmanager
+def lock_if_free(data_dir: Path) -> Generator[bool]:
+    """Hold the lock if no server does, yielding True; yield False at once if one does.
+
+    A command that acts on the database itself holds the lock while it does, so no server can
+    start under it (ADR 0007)."""
+    lock = FileLock(lock_path(data_dir), timeout=0, fallback_to_soft=False)
+    try:
+        lock.acquire()
+    except Timeout:
+        yield False
+        return
+    try:
+        yield True
+    finally:
+        lock.release()

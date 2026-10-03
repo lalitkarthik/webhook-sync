@@ -4,7 +4,7 @@ import argparse
 from collections.abc import Callable, Sequence
 from importlib.metadata import version
 
-from webhook_sync.cli import serve
+from webhook_sync.cli import admin, serve
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -15,6 +15,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"wsync {version('webhook-sync')}")
     subparsers = parser.add_subparsers(dest="command", metavar="<command>")
     serve.add_parser(subparsers)
+    admin.add_parsers(subparsers)
     return parser
 
 

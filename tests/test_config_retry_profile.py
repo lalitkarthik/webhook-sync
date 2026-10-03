@@ -9,6 +9,7 @@ from support import (
     TEST_KEY_SECRET,
     TEST_SPREADSHEET_ID,
     TEST_WEBHOOK_SECRET,
+    fixture_service_account_b64,
 )
 
 from webhook_sync.config import ConfigError, load_config
@@ -17,6 +18,7 @@ SECRETS = {
     "RAZORPAY_KEY_ID": TEST_KEY_ID,
     "RAZORPAY_KEY_SECRET": TEST_KEY_SECRET,
     "RAZORPAY_WEBHOOK_SECRET": TEST_WEBHOOK_SECRET,
+    "GOOGLE_SERVICE_ACCOUNT_B64": fixture_service_account_b64(),
 }
 
 

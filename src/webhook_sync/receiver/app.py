@@ -24,7 +24,7 @@ from webhook_sync.config import Config
 from webhook_sync.db.migrations import apply_pending
 from webhook_sync.db.writer import Writer
 from webhook_sync.ledger import ledger_runner
-from webhook_sync.queue import Pauses, Runners, run_reaper
+from webhook_sync.queue import PauseTarget, Runners, load_pauses, register, run_reaper
 from webhook_sync.receiver.checks import check_content_type, check_security_headers, read_body
 from webhook_sync.receiver.demo import FailFirst
 from webhook_sync.receiver.rate_cap import RateCap
@@ -87,7 +87,10 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
             app.state.receiver = receiver
             # One instance id and one pause set, shared by every stage runner (A15).
             claimed_by = instance_id()
-            pauses = Pauses()
+            await register(writer, configured_names(config))
+            pauses = await load_pauses(writer)  # pauses survive a restart (A3, A13)
+            app.state.pauses = pauses
+            app.state.writer = writer
             ledger = ledger_runner(
                 writer,
                 {receiver.razorpay.name: receiver.razorpay},
@@ -116,6 +119,7 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
                     await minutely
                 await write_all_rejection_counts(receiver)
         finally:
+            app.state.writer = None  # the admin listener answers 503 from here on
             await razorpay_api.aclose()
             await writer.close()
 
@@ -208,6 +212,14 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
         return JSONResponse({"result": stored.result}, status_code=stored.status_code)
 
     return app
+
+
+def configured_names(config: Config) -> dict[str, PauseTarget]:
+    """Every configured source and sink, as `sinks` names them."""
+    names: dict[str, PauseTarget] = {RazorpayAdapter.name: "source"}
+    for sink in config.sinks:
+        names[sink] = "sink"
+    return names
 
 
 def instance_id() -> str:
