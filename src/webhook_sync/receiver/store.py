@@ -25,6 +25,9 @@ from webhook_sync.sources.base import EventDescription, VerifiedDelivery
 
 type DeliveryResult = Literal["new", "duplicate", "conflict"]
 
+type Origin = Literal["delivery", "sweep", "backfill", "replay"]
+"""How an event reached us (CONTEXT.md, Origin)."""
+
 
 @dataclass(frozen=True)
 class StoredDelivery:
@@ -59,44 +62,20 @@ async def store_delivery(
     answered, and recorded in `deliveries`, with the switch's status.
     """
     async with writer.transaction() as tx:
-        inserted = await tx.execute(
-            sqlite.insert(events)
-            .values(
-                source=source,
-                event_id=delivery.event_id,
-                account=account,
-                type=description.type,
-                mode=mode,
-                fingerprint=description.fingerprint,
-                body_sha256=delivery.body_sha256,
-                payment_key=description.payment_key,
-                origin="delivery",
-                outcome="queued" if description.handled else "ignored",
-                ignore_reason=description.ignore_reason,
-                payload=json.dumps(description.payload, ensure_ascii=False),
-                source_created_at=(
-                    to_db_text(description.source_created_at)
-                    if description.source_created_at
-                    else None
-                ),
-                received_at=to_db_text(received_at),
-            )
-            .on_conflict_do_nothing()
-            .returning(events.c.event_id)
+        new = await store_event(
+            tx,
+            source=source,
+            account=account,
+            mode=mode,
+            retry_profile=retry_profile,
+            event_id=delivery.event_id,
+            description=description,
+            origin="delivery",
+            body_sha256=delivery.body_sha256,
+            received_at=received_at,
         )
-        if inserted:
-            job_id = None
-            if description.handled:
-                job_id = await _enqueue_ledger_job(
-                    tx,
-                    source=source,
-                    account=account,
-                    event_id=delivery.event_id,
-                    payment_key=description.payment_key,
-                    retry_profile=retry_profile,
-                    now=received_at,
-                )
-            stored = StoredDelivery("new", 202, delivery.event_id, job_id=job_id)
+        if new is not None:
+            stored = StoredDelivery("new", 202, delivery.event_id, job_id=new.job_id)
         else:
             stored = await _repeat(tx, source, delivery, description.fingerprint)
         if fail_first is not None:
@@ -117,6 +96,71 @@ async def store_delivery(
     if fail_first is not None:  # committed: a rolled-back attempt is not counted
         fail_first.record(source, stored.event_id)
     return stored
+
+
+@dataclass(frozen=True)
+class NewEvent:
+    """An event `store_event` stored: with its ledger job when its type is handled."""
+
+    job_id: int | None
+
+
+async def store_event(
+    tx: Transaction,
+    *,
+    source: str,
+    account: str,
+    mode: Mode,
+    retry_profile: RetryProfile,
+    event_id: str,
+    description: EventDescription,
+    origin: Origin,
+    body_sha256: str | None,
+    received_at: datetime,
+) -> NewEvent | None:
+    """Insert the event if absent; a new handled event gets its ledger job (the outbox). None
+    when the event id is already stored: nothing is written.
+
+    The receiver stores deliveries through it and the sweeper its synthetic events, so both
+    fill `events` the same way (A15). A synthetic event has no `body_sha256` and no delivery row.
+    """
+    inserted = await tx.execute(
+        sqlite.insert(events)
+        .values(
+            source=source,
+            event_id=event_id,
+            account=account,
+            type=description.type,
+            mode=mode,
+            fingerprint=description.fingerprint,
+            body_sha256=body_sha256,
+            payment_key=description.payment_key,
+            origin=origin,
+            outcome="queued" if description.handled else "ignored",
+            ignore_reason=description.ignore_reason,
+            payload=json.dumps(description.payload, ensure_ascii=False),
+            source_created_at=(
+                to_db_text(description.source_created_at) if description.source_created_at else None
+            ),
+            received_at=to_db_text(received_at),
+        )
+        .on_conflict_do_nothing()
+        .returning(events.c.event_id)
+    )
+    if not inserted:
+        return None
+    if not description.handled:
+        return NewEvent(job_id=None)
+    job_id = await _enqueue_ledger_job(
+        tx,
+        source=source,
+        account=account,
+        event_id=event_id,
+        payment_key=description.payment_key,
+        retry_profile=retry_profile,
+        now=received_at,
+    )
+    return NewEvent(job_id=job_id)
 
 
 async def _enqueue_ledger_job(

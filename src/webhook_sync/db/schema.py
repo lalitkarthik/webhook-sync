@@ -158,3 +158,16 @@ alerts = sa.Table(
     sa.Column("last_sent_at", sa.Text),
     sa.Column("suppressed_count", sa.Integer, nullable=False),
 )
+
+
+checkpoints = sa.Table(
+    "checkpoints",
+    metadata,
+    sa.Column("source", sa.Text, primary_key=True),
+    sa.Column("account", sa.Text, primary_key=True),
+    sa.Column("list", sa.Text, primary_key=True),
+    sa.Column("checkpoint_at", sa.Text, nullable=False),
+    sa.Column("last_sweep_at", sa.Text),
+    sa.Column("last_sweep_stored", sa.Integer, nullable=False),
+    sa.Column("last_relist_at", sa.Text),
+)

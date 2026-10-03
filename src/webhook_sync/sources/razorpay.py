@@ -22,7 +22,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import httpx
 from razorpay import Utility  # pyright: ignore[reportMissingTypeStubs]
@@ -477,6 +477,79 @@ class RazorpayAdapter:
             ignore_reason=ignore_reason,
             payload=_allow_listed(body),
         )
+
+    def describe_listed(
+        self, entity: ListedEntity, item: Mapping[str, Any], *, origin: SweptOrigin
+    ) -> tuple[str, EventDescription] | None:
+        """A listed payment or refund as its synthetic event: its id
+        `<origin>:<entity id>:<state hash>` and what is stored about it (Q146). None when its
+        state makes no event: a `created` payment, or a status with no synthetic type.
+
+        The item is described as a delivery of its synthetic type would be, so the type, the
+        fingerprint (Q117, with the entity's `created_at`), the payment key, `source_created_at`
+        and the allow-listed payload (Q119) are the receiver's own."""
+        event_type = SYNTHETIC_TYPES[entity].get(item.get("status"))
+        if event_type is None:
+            return None
+        body = {
+            "entity": "event",
+            "account_id": self._account,
+            "event": event_type,
+            "contains": [entity],
+            "payload": {entity: {"entity": dict(item)}},
+            "created_at": item.get("created_at"),
+        }
+        description = self._describe(body)
+        if isinstance(description, Rejection):
+            return None  # no id: nothing to key an event by
+        return f"{origin}:{item['id']}:{self.state_hash(entity, item)}", description
+
+    def state_hash(self, entity: ListedEntity, item: Mapping[str, Any]) -> str:
+        """SHA-256 of the canonical JSON of the fields that can change the row (sources.md):
+        a payment's `notes` only for the configured metadata keys; never `acquirer_data`."""
+        state = {name: item.get(name) for name in _STATE_FIELDS[entity]}
+        if entity == "payment" and self._metadata_keys:
+            notes = _object(item.get("notes"))
+            state["notes"] = {key: notes[key] for key in self._metadata_keys if key in notes}
+        canonical = json.dumps(state, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+type ListedEntity = Literal["payment", "refund"]
+"""What a Razorpay list holds: the payments list's items, or the refunds list's."""
+
+type SweptOrigin = Literal["sweep", "backfill"]
+"""The origin of a synthetic event, and its id's prefix."""
+
+SYNTHETIC_TYPES: dict[ListedEntity, dict[object, str]] = {
+    "payment": {
+        "authorized": "payment.authorized",
+        "captured": "payment.captured",
+        "refunded": "payment.captured",
+        "failed": "payment.failed",
+    },
+    "refund": {
+        "pending": "refund.created",
+        "processed": "refund.processed",
+        "failed": "refund.failed",
+    },
+}
+"""A listed state's synthetic event type (sources.md); a `created` payment has none."""
+
+_STATE_FIELDS: dict[ListedEntity, tuple[str, ...]] = {
+    "payment": (
+        "status",
+        "captured",
+        "amount",
+        "amount_refunded",
+        "refund_status",
+        "fee",
+        "tax",
+        "error_code",
+        "error_reason",
+    ),
+    "refund": ("status", "amount", "speed_processed"),
+}
 
 
 def _allow_listed(body: Mapping[str, Any]) -> dict[str, Any]:
