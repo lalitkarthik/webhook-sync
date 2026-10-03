@@ -137,9 +137,7 @@ auto_repair = false
 
 
 @pytest.mark.parametrize("nightly_at", ["24:00", "02:60", "2:00", "2am", "02:00:00", ""])
-def test_a_bad_nightly_at_refuses_to_start_naming_the_key(
-    tmp_path: Path, nightly_at: str
-) -> None:
+def test_a_bad_nightly_at_refuses_to_start_naming_the_key(tmp_path: Path, nightly_at: str) -> None:
     path = with_sections(tmp_path, f'[verify]\nnightly_at = "{nightly_at}"\n')
 
     with pytest.raises(ConfigError, match=r"verify\.nightly_at"):
