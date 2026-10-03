@@ -10,6 +10,7 @@ import json
 import logging
 from collections.abc import AsyncIterator, Iterator
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import cast
 
 import httpx
@@ -22,11 +23,14 @@ from support import (
     TEST_SPREADSHEET_ID,
     TEST_WEBHOOK_SECRET,
     ReadRows,
+    execute_aside,
 )
 from time_machine import TimeMachineFixture
 
 from webhook_sync.alerts import Alerter
+from webhook_sync.clock import to_db_text, utc_now
 from webhook_sync.db.writer import Writer
+from webhook_sync.queue import enqueue
 
 HOOK = "https://hooks.example.test/services/T000/B000/fixture"
 NINE = datetime(2026, 10, 2, 20, 30, tzinfo=UTC)
@@ -145,3 +149,74 @@ async def test_a_failed_post_is_logged_and_not_retried_before_the_next_due_time(
     assert (first, second) == ("failed", "suppressed")
     assert route.call_count == 1
     assert any("alert not sent" in r.getMessage() for r in caplog.records)
+
+
+async def dead_job(writer: Writer, data_dir: Path, stage: str, payment_key: str) -> None:
+    """A job of `stage` that went dead now."""
+    async with writer.transaction() as tx:
+        await enqueue(
+            tx,
+            stage=stage,
+            sink="ledger" if stage == "ledger" else "sheets",
+            source="razorpay",
+            account="acc_fixture",
+            payment_key=payment_key,
+            event_id=None,
+            retry_profile="production",
+            now=utc_now(),
+        )
+    await execute_aside(
+        data_dir,
+        f"UPDATE jobs SET status = 'dead', updated_at = '{to_db_text(utc_now())}'"
+        f" WHERE payment_key = '{payment_key}' AND stage = '{stage}'",
+    )
+
+
+async def test_new_dead_jobs_produce_one_alert_with_counts_by_stage(
+    alerter: Alerter, writer: Writer, data_dir: Path, hook: Route
+) -> None:
+    await dead_job(writer, data_dir, "ledger", "pay_A")
+    await dead_job(writer, data_dir, "ledger", "pay_B")
+    await dead_job(writer, data_dir, "mirror", "pay_A")
+
+    first = await alerter.check_dead_jobs()
+    again = await alerter.check_dead_jobs()
+
+    [body] = bodies(hook)
+    assert (first, again) == ("sent", None)
+    assert body["text"] == "webhook-sync dead_jobs: 3 new dead jobs (ledger 2, mirror 1)"
+
+
+async def test_no_dead_jobs_alert_when_nothing_new_died(
+    alerter: Alerter, writer: Writer, data_dir: Path, hook: Route, time_machine: TimeMachineFixture
+) -> None:
+    nothing_dead = await alerter.check_dead_jobs()
+    await dead_job(writer, data_dir, "ledger", "pay_A")
+    await alerter.check_dead_jobs()
+    time_machine.shift(2 * 60 * 60)
+    nothing_new = await alerter.check_dead_jobs()
+    time_machine.shift(1)
+    await dead_job(writer, data_dir, "mirror", "pay_B")
+    one_new = await alerter.check_dead_jobs()
+
+    texts = [body["text"] for body in bodies(hook)]
+    assert (nothing_dead, nothing_new, one_new) == (None, None, "sent")
+    assert texts == [
+        "webhook-sync dead_jobs: 1 new dead job (ledger 1)",
+        "webhook-sync dead_jobs: 1 new dead job (mirror 1)",
+    ]
+
+
+async def test_jobs_dying_within_the_hour_wait_for_the_next_due_check(
+    alerter: Alerter, writer: Writer, data_dir: Path, hook: Route, time_machine: TimeMachineFixture
+) -> None:
+    await dead_job(writer, data_dir, "ledger", "pay_A")
+    await alerter.check_dead_jobs()
+    time_machine.shift(10 * 60)
+    await dead_job(writer, data_dir, "ledger", "pay_B")
+    within_the_hour = await alerter.check_dead_jobs()
+    time_machine.shift(50 * 60)
+    due = await alerter.check_dead_jobs()
+
+    assert (within_the_hour, due) == (None, "sent")
+    assert bodies(hook)[1]["text"] == "webhook-sync dead_jobs: 1 new dead job (ledger 1)"
