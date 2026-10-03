@@ -127,6 +127,9 @@ class SheetVerify:
         if tabs is None:
             log.info("verify skipped: nothing written to the sheet yet")
             return None
+        # Live before the read and after it: a job that finishes in between wrote a row the read
+        # may not have seen.
+        live = await self._live()
         answer = await self._client.get_by_data_filter(
             [
                 _rows(tabs[0], len(self._columns)),
@@ -141,7 +144,8 @@ class SheetVerify:
             )
             return None
         read = _by_tab(answer)
-        ledger, live = await self._ledger()
+        ledger = await self._ledger()
+        live |= await self._live()
         skipped = {
             key for key, row in ledger.items() if key in live or self._in_progress(row, started)
         }
@@ -269,21 +273,21 @@ class SheetVerify:
             return None
         return found[0]["payments_tab_id"], found[0]["daily_summary_tab_id"]
 
-    async def _ledger(
-        self,
-    ) -> tuple[dict[PaymentKey, Mapping[str, Any]], set[PaymentKey]]:
-        """Every payment, and the keys of those with a live job of any stage."""
+    async def _ledger(self) -> dict[PaymentKey, Mapping[str, Any]]:
+        """Every payment, by its key."""
         async with self._writer.transaction() as tx:
             rows = await tx.execute(sa.select(payments))
+        return {(r["source"], r["account"], r["payment_id"]): dict(r) for r in rows}
+
+    async def _live(self) -> set[PaymentKey]:
+        """The keys of the payments with a live job of any stage."""
+        async with self._writer.transaction() as tx:
             live = await tx.execute(
                 sa.select(jobs.c.source, jobs.c.account, jobs.c.payment_key)
                 .where(jobs.c.status.in_(LIVE_STATUSES))
                 .distinct()
             )
-        ledger: dict[PaymentKey, Mapping[str, Any]] = {
-            (r["source"], r["account"], r["payment_id"]): dict(r) for r in rows
-        }
-        return ledger, {(r["source"], r["account"], r["payment_key"]) for r in live}
+        return {(r["source"], r["account"], r["payment_key"]) for r in live}
 
     async def _record(
         self, started: datetime, checked: int, findings: Sequence[Finding]

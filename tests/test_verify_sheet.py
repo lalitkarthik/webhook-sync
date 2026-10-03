@@ -509,3 +509,61 @@ async def test_an_edited_daily_summary_total_is_reported_and_recomputed(
         }
     ]
     assert outside.sheets.tab(DAILY_SUMMARY).values()[1][gross] == 1000.0
+
+
+async def test_a_payment_whose_mirror_job_finishes_during_the_read_is_still_skipped(
+    checked_config: Config,
+    data_dir: Path,
+    writer: Writer,
+    outside: Outside,
+    read_rows: ReadRows,
+    clock: TimeMachineFixture,
+) -> None:
+    await flushed(checked_config, data_dir, writer, read_rows, captured("pay_A"), captured("pay_B"))
+    # pay_A changed before the run; its mirror job is due just after the run starts.
+    async with writer.transaction() as tx:
+        await tx.execute(
+            payments.update()
+            .where(payments.c.payment_id == "pay_A")
+            .values(amount_minor=60000, updated_at=to_db_text(FLUSHED_AT))
+        )
+        job_id = await enqueue(
+            tx,
+            stage="mirror",
+            sink="sheets",
+            source="razorpay",
+            account=TEST_ACCOUNT,
+            payment_key="pay_A",
+            event_id=None,
+            retry_profile="production",
+            now=utc_now(),
+        )
+        await tx.execute(
+            jobs.update()
+            .where(jobs.c.id == job_id)
+            .values(run_after=to_db_text(CHECKED_AT + timedelta(milliseconds=300)))
+        )
+
+    async def mirror_job_done() -> None:
+        await wait_for(
+            read_rows, f"SELECT status FROM jobs WHERE id = {job_id}", [{"status": "done"}]
+        )
+
+    # Verify's read sees pay_A's old row; its answer arrives once the flusher has written the
+    # new one and finished the job, before verify reads the ledger.
+    outside.sheets.hold_read(
+        lambda request: "userEnteredValue" in request.url.params.get("fields", ""),
+        mirror_job_done,
+    )
+
+    async with checked(checked_config, data_dir, read_rows, clock):
+        pass
+
+    assert await read_rows(FINDINGS) == []
+    assert await read_rows("SELECT payments_checked, findings_count FROM verify_runs") == [
+        {"payments_checked": 1, "findings_count": 0}
+    ]
+    assert {row["Payment ID"]: row["Amount"] for row in sheet_rows(outside.payments)} == {
+        "pay_A": 600.0,
+        "pay_B": 500.0,
+    }
