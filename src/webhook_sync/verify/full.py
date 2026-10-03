@@ -3,9 +3,13 @@
 The app's lifespan runs it nightly: once per local date in `service.timezone`, at the first valid
 `[verify] nightly_at` at or after that time (a daylight-saving change can skip it), and at start
 when today's time has passed with no full run stored for today, so a server down at 02:00 runs
-it on start the same day. "Once per local date" is read from `verify_runs`, so it survives
-restarts (A18). While Razorpay is paused the source half is skipped: the sheet is checked as a
-quick run.
+it on start the same day. That catch-up first waits (2 minutes at most) for the sweeper to have
+walked both lists up to the server's start, so payments made while it was down come in through
+the sweep, with Via = sweep, not as verify's repairs. "Once per local date" is read from
+`verify_runs`, so it survives restarts (A18). A run whose list fails, or that raises, is tried
+again every 10 minutes (longer when Razorpay's `Retry-After` asks) until a full run is stored or
+the date is over. While Razorpay is paused the source half is skipped: the sheet is checked as a
+quick run, and that night is done.
 
 A full run is stored as one `verify_runs` row with the findings of both checks; with `[verify]
 auto_repair` (or a repair asked for) they are repaired in the same transaction. Its line, e.g.
@@ -29,7 +33,7 @@ import sqlalchemy as sa
 from webhook_sync.alerts import Alerter
 from webhook_sync.clock import to_db_text, utc_now
 from webhook_sync.config import Config
-from webhook_sync.db.schema import verify_findings, verify_runs
+from webhook_sync.db.schema import checkpoints, verify_findings, verify_runs
 from webhook_sync.db.writer import Writer
 from webhook_sync.queue import Failure, Pauses
 from webhook_sync.sources.razorpay import RazorpayAdapter
@@ -40,6 +44,16 @@ from webhook_sync.verify.source import RazorpayVerify
 log = logging.getLogger("webhook_sync.verify")
 
 type Sleep = Callable[[float], Awaitable[None]]
+
+RETRY_EVERY = timedelta(minutes=10)
+"""The wait before a failed nightly run is tried again, unless Razorpay asks for longer."""
+FIRST_SWEEP_WAIT = timedelta(minutes=2)
+"""How long the catch-up at start waits for the sweeper's first pass."""
+FIRST_SWEEP_LAG = timedelta(minutes=2)
+"""How far behind the server's start a checkpoint may be and still count as caught up: a pass
+ends a minute behind Razorpay's now, whose clock can differ a little from ours."""
+POLL_EVERY = timedelta(seconds=1)
+"""How often the catch-up looks at the checkpoints while it waits."""
 
 
 class FullVerify:
@@ -68,12 +82,14 @@ class FullVerify:
 
     async def run_nightly(self) -> None:
         """A full run once per local date at `nightly_at`, caught up at start, until
-        cancelled. A run that fails or raises is not tried again that date."""
-        tried: date | None = None
+        cancelled."""
+        server_started = utc_now()
+        done: date | None = None  # a night run with Razorpay paused stores no full run
+        at_start = True
         while True:
             now = utc_now()
             night = now.astimezone(self._zone).date()
-            if night == tried or await self._ran_on(night):
+            if night == done or await self._ran_on(night):
                 night += timedelta(days=1)
             due = nightly_due(night, self._config.verify.nightly_at, self._zone)
             if due > now:
@@ -82,16 +98,55 @@ class FullVerify:
                     extra={"local_date": night.isoformat(), "due_at": to_db_text(due)},
                 )
                 await self._sleep((due - now).total_seconds())
-            try:
-                await self.run(local_date=night)
-            except Exception:
-                log.exception("nightly verify failed; the next one runs tomorrow")
-            tried = night
+            elif at_start:
+                await self._first_sweep(server_started)
+            at_start = False
+            retry_in = await self._try(night)
+            if retry_in is None:
+                done = night
+            else:
+                log.warning(
+                    "nightly verify failed; trying again",
+                    extra={"local_date": night.isoformat(), "retry_in_s": retry_in},
+                )
+                await self._sleep(retry_in)
+
+    async def _try(self, night: date) -> float | None:
+        """One nightly run; None when the night is done, else the seconds to wait before
+        trying again."""
+        try:
+            result = await self.run(local_date=night)
+        except Exception:
+            log.exception("nightly verify raised")
+            return RETRY_EVERY.total_seconds()
+        if isinstance(result, Failure):
+            return max(RETRY_EVERY, result.retry_after or timedelta(0)).total_seconds()
+        return None
+
+    async def _first_sweep(self, server_started: datetime) -> None:
+        """Wait, `FIRST_SWEEP_WAIT` at most, until both lists' checkpoints have reached the
+        server's start; not while Razorpay is paused, when there is no sweep to wait for."""
+        give_up = utc_now() + FIRST_SWEEP_WAIT
+        caught_up = to_db_text(server_started - FIRST_SWEEP_LAG)
+        source, account = self._razorpay.name, self._config.razorpay.account
+        while self._razorpay.name not in self._pauses.sources and utc_now() < give_up:
+            async with self._writer.transaction() as tx:
+                rows = await tx.execute(
+                    sa.select(checkpoints.c.list).where(
+                        checkpoints.c.source == source,
+                        checkpoints.c.account == account,
+                        checkpoints.c.checkpoint_at >= caught_up,
+                    )
+                )
+            if len(rows) == 2:
+                return
+            await self._sleep(POLL_EVERY.total_seconds())
 
     async def run(
         self, *, repair: bool | None = None, local_date: date | None = None
-    ) -> int | None:
-        """One full run; its `verify_runs` id, or None when a list failed. `repair` defaults
+    ) -> int | Failure | None:
+        """One full run: its `verify_runs` id, or the failure of a list. While Razorpay is
+        paused, a quick run instead (None when there is no sheet to check). `repair` defaults
         to `[verify] auto_repair`; `local_date` (the night it is for) to today's."""
         started = utc_now()
         clock = time.perf_counter()
@@ -104,7 +159,7 @@ class FullVerify:
                 "full verify stopped: a list failed",
                 extra={"error": source.error, "error_class": source.error_class},
             )
-            return None
+            return source
         sheet = await self._sheet.check(started) if self._sheet is not None else None
         findings = source.findings + (sheet.findings if sheet is not None else [])
         days = self._config.verify.days
