@@ -64,6 +64,7 @@ class Sheets:
     writer: Writer
     router: respx.MockRouter
     hook: respx.Route
+    pauses: Pauses
 
     def alerts(self) -> list[str]:
         """The texts of the alerts posted."""
@@ -104,6 +105,7 @@ async def flusher_on(writer: Writer, config: Config) -> AsyncGenerator[Sheets]:
         fake.mount(router)
         hook = router.post(HOOK).respond(200, text="ok")
         alerter = Alerter(writer, HOOK)
+        pauses = Pauses(on_pause=alerter.paused)
         async with httpx.AsyncClient() as http:
             client = SheetsClient(
                 http, TEST_SPREADSHEET_ID, ServiceAccountTokens(fixture_service_account())
@@ -113,12 +115,12 @@ async def flusher_on(writer: Writer, config: Config) -> AsyncGenerator[Sheets]:
                 client,
                 config,
                 claimed_by="wsync-test",
-                pauses=Pauses(),
+                pauses=pauses,
                 sleep=never_wakes,
                 alerter=alerter,
             )
             try:
-                yield Sheets(fake, flusher, writer, router, hook)
+                yield Sheets(fake, flusher, writer, router, hook, pauses)
             finally:
                 await alerter.aclose()
 
