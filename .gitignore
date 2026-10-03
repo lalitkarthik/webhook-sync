@@ -32,4 +32,3 @@ out/
 .verify/
 verification/
 .playwright-cli/
-mutants/
