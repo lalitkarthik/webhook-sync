@@ -13,15 +13,17 @@ import logging
 from collections.abc import AsyncGenerator, Iterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from email.utils import format_datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
 import respx
 from fakes.sheets import FakeSheets
+from fastapi import FastAPI
 from support import (
     RAZORPAY_RECORDINGS,
     RECORDED_ACCOUNT,
@@ -561,7 +563,8 @@ async def test_a_payment_captured_after_it_was_swept_is_re_listed_and_its_row_su
         for q in fake.calls_to("/v1/payments")
         if int(q["from"]) == at(AN_HOUR_ON - timedelta(days=7))
     ]
-    assert relists and {int(q["to"]) for q in relists} == {at(AN_HOUR_ON)}
+    assert relists
+    assert {int(q["to"]) for q in relists} == {at(AN_HOUR_ON)}
 
 
 ALL_LEDGER_JOBS_DONE = "SELECT count(*) AS n FROM jobs WHERE stage = 'ledger' AND status != 'done'"
@@ -645,3 +648,52 @@ async def test_a_re_list_in_which_nothing_changed_stores_no_event_and_enqueues_n
     assert len(events) == 7
     assert await read_rows("SELECT event_id FROM events ORDER BY event_id") == events
     assert await read_rows("SELECT id FROM jobs ORDER BY id") == jobs
+
+
+# Backfill (#40): older payments on demand, never touching a checkpoint.
+
+IST = ZoneInfo("Asia/Kolkata")
+
+
+@asynccontextmanager
+async def started(config: Config, data_dir: Path) -> AsyncGenerator[FastAPI]:
+    """The app, started (its lifespan run), for what its state holds."""
+    app = create_app(config, data_dir)
+    async with app.router.lifespan_context(app):
+        yield app
+
+
+async def test_a_backfill_of_past_local_dates_stores_backfill_events_and_moves_no_checkpoint(
+    swept_config: Config, data_dir: Path, outside: Outside, read_rows: ReadRows
+) -> None:
+    fake = outside.razorpay
+    listed = recorded_listed_payments()
+    created = {
+        "pay_Tj64grZUMO3PEj": datetime(2026, 8, 31, 23, 59, 59, tzinfo=IST),  # the day before
+        "pay_Tj66x2JuEXjIdB": datetime(2026, 9, 1, 0, 0, tzinfo=IST),  # the first second
+        "pay_Tj9rKBOXWcsMeE": datetime(2026, 9, 10, 23, 59, 59, tzinfo=IST),  # the last second
+        "pay_Tj9sm13R8h2378": datetime(2026, 9, 11, 0, 0, tzinfo=IST),  # the day after
+    }
+    for payment_id, moment in created.items():
+        fake.payments[payment_id] = {**listed[payment_id], "created_at": at(moment)}
+    swept = "SELECT list, checkpoint_at, last_sweep_at, last_relist_at FROM checkpoints"
+
+    async with started(swept_config, data_dir) as app:
+        await wait_for(read_rows, CAUGHT_UP, [{"n": 2}])
+        before = await read_rows(swept)
+        stored = await app.state.sweeper.backfill(date(2026, 9, 1), date(2026, 9, 10))
+        # Via is `sweep` for any swept origin (data-model.md): backfill is a sweep on demand.
+        await wait_for(read_rows, ALL_ROWS, settled(("pay_Tj66x2JuEXjIdB", "pay_Tj9rKBOXWcsMeE")))
+
+    assert stored == 2
+    events = await read_rows("SELECT event_id, origin FROM events ORDER BY payment_key")
+    assert [(e["event_id"].split(":")[:2], e["origin"]) for e in events] == [
+        (["backfill", "pay_Tj66x2JuEXjIdB"], "backfill"),
+        (["backfill", "pay_Tj9rKBOXWcsMeE"], "backfill"),
+    ]
+    assert await read_rows(swept) == before
+    backfills = [q for q in fake.calls_to("/v1/payments") if q["from"] != q["to"]]
+    assert (backfills[-1]["from"], backfills[-1]["to"]) == (
+        str(at(datetime(2026, 9, 1, tzinfo=IST))),
+        str(at(datetime(2026, 9, 11, tzinfo=IST)) - 1),
+    )

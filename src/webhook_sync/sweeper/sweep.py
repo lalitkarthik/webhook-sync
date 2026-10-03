@@ -22,7 +22,7 @@ import asyncio
 import logging
 import random
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, Literal
 
 import sqlalchemy as sa
@@ -110,6 +110,30 @@ class Sweeper:
             elif await self._relist_due(list_name):
                 finished = await self._relist(list_name, entity, source_now) and finished
         return finished
+
+    async def backfill(self, first: date, last: date) -> int | Failure:
+        """Store every payment created on the local dates `first` to `last` (`service.timezone`,
+        A20) as a `backfill:` synthetic event with its fetching ledger job; the count of new
+        events. No checkpoint moves (Q156). Nothing is listed while Razorpay is paused."""
+        if self._razorpay.name in self._pauses.sources:
+            return Failure("Razorpay is paused", "pause")
+        zone = self._config.service.timezone
+        start = _seconds_of(datetime.combine(first, time(), zone))
+        end = _seconds_of(datetime.combine(last + timedelta(days=1), time(), zone)) - 1
+        listed = await self._list("payments", start, end)
+        if isinstance(listed, Failure):
+            return listed
+        new = await self._store("payment", listed.items, origin="backfill")
+        log.info(
+            "backfill",
+            extra={
+                "from": first.isoformat(),
+                "to": last.isoformat(),
+                "listed": len(listed.items),
+                "stored": new,
+            },
+        )
+        return new
 
     async def _walk(self, list_name: ListName, entity: ListedEntity) -> int | None:
         """Walk one list's slices from its checkpoint up to Razorpay's now - 60 s.

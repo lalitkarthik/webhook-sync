@@ -139,9 +139,9 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
             app.state.runners = runners
             runners.start()
             # The sweeper shares the fetch's adapter, so lists and fetches share one bucket.
-            app.state.sweeper = asyncio.create_task(
-                Sweeper(writer, razorpay, config, pauses=pauses).run()
-            )
+            sweeper = Sweeper(writer, razorpay, config, pauses=pauses)
+            app.state.sweeper = sweeper  # backfill and sweep on demand
+            app.state.sweep_loop = asyncio.create_task(sweeper.run())
             minutely = asyncio.create_task(_write_rejection_counts_every_minute(receiver))
             dead_jobs_check = asyncio.create_task(alerter.run_dead_jobs_check())  # A17
             reaper = asyncio.create_task(
@@ -289,10 +289,10 @@ async def shut_down(app: FastAPI) -> None:
     stops listening and releases the lock."""
     receiver: Receiver = app.state.receiver
     receiver.shutting_down = True
-    sweeper: asyncio.Task[None] = app.state.sweeper
-    sweeper.cancel()  # a slice cut short is re-read by the next start's sweep
+    sweep_loop: asyncio.Task[None] = app.state.sweep_loop
+    sweep_loop.cancel()  # a slice cut short is re-read by the next start's sweep
     with suppress(asyncio.CancelledError):
-        await sweeper
+        await sweep_loop
     runners: Runners = app.state.runners
     await runners.stop()
     await write_all_rejection_counts(receiver)
