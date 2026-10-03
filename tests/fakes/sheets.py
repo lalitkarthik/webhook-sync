@@ -3,7 +3,8 @@
 It implements exactly the calls the flusher makes, `spreadsheets.get`, `getByDataFilter` and
 `batchUpdate`, with the request kinds it uses (`addSheet`, `updateCells` with values, formats
 and notes, `appendDimension`, `updateSheetProperties` for titles and frozen rows), plus the
-ones a person's edits need (`deleteSheet`, `sortRange`, `appendCells`). Errors are answered
+ones a person's edits need (`deleteSheet`, `deleteDimension` of rows, `sortRange`,
+`appendCells`). Errors are answered
 with the bodies recorded live in `tests/recordings/sheets/`, and `test_fake_sheets_contract.py`
 replays those recordings against it so it can't drift from Google.
 
@@ -593,6 +594,7 @@ class FakeSheets:
             "appendDimension": self._append_dimension,
             "updateSheetProperties": self._update_sheet_properties,
             "deleteSheet": self._delete_sheet,
+            "deleteDimension": self._delete_dimension,
             "sortRange": self._sort_range,
         }.get(kind)
         if handler is None:
@@ -649,6 +651,24 @@ class FakeSheets:
         tabs.remove(self._grid(tabs, spec.get("sheetId", 0)))
         for index, tab in enumerate(tabs):
             tab.properties["index"] = index
+        return {}
+
+    def _delete_dimension(self, spec: Json, tabs: list[Tab]) -> Json:
+        """Rows deleted: those below move up, and the grid shrinks by as many."""
+        span: Json = spec["range"]
+        if span.get("dimension") != "ROWS":
+            raise NotImplementedError("FakeSheets deletes rows only")
+        tab = self._grid(tabs, span.get("sheetId", 0))
+        start, end = span["startIndex"], min(span["endIndex"], tab.row_count)
+        removed = end - start
+        moved: dict[tuple[int, int], Json] = {}
+        for (row, column), cell in tab.cells.items():
+            if row < start:
+                moved[(row, column)] = cell
+            elif row >= end:
+                moved[(row - removed, column)] = cell
+        tab.cells = moved
+        tab.properties["gridProperties"]["rowCount"] -= removed
         return {}
 
     def _update_sheet_properties(self, spec: Json, tabs: list[Tab]) -> Json:

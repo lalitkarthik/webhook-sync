@@ -237,3 +237,106 @@ async def test_a_clean_sheet_gives_0_differences_with_exactly_one_read(
     # Shown on Sync status by a flush of its own: no mirror job was made for it.
     assert last_verify(outside.sheets) == line
     assert await read_rows("SELECT count(*) AS n FROM jobs WHERE stage = 'mirror'") == [{"n": 2}]
+
+
+def sheet_rows(tab: Tab) -> list[dict[str, Any]]:
+    """The tab's rows below the header, each as header -> value."""
+    header, *rows = tab.values()
+    return [dict(zip(header, row, strict=False)) for row in rows]
+
+
+def keys(tab: Tab) -> list[str]:
+    return [row["Payment ID"] for row in sheet_rows(tab)]
+
+
+def at_row(tab: Tab, payment_id: str) -> int:
+    """The row index of the payment's first row on the tab."""
+    return 1 + keys(tab).index(payment_id)
+
+
+async def test_a_deleted_payment_row_is_reported_missing_and_back_after_the_next_flush(
+    checked_config: Config,
+    data_dir: Path,
+    writer: Writer,
+    outside: Outside,
+    read_rows: ReadRows,
+    clock: TimeMachineFixture,
+) -> None:
+    paid = [captured("pay_A"), captured("pay_B"), captured("pay_C")]
+    await flushed(checked_config, data_dir, writer, read_rows, *paid)
+    tab = outside.payments
+    row = at_row(tab, "pay_B")
+    outside.sheets.apply(
+        [
+            {
+                "deleteDimension": {
+                    "range": {
+                        "sheetId": tab.sheet_id,
+                        "dimension": "ROWS",
+                        "startIndex": row,
+                        "endIndex": row + 1,
+                    }
+                }
+            }
+        ]
+    )
+    assert sorted(keys(outside.payments)) == ["pay_A", "pay_C"]
+
+    async with checked(checked_config, data_dir, read_rows, clock):
+        await wait_for(read_rows, MIRRORED, [{"n": 4}])
+
+    assert await read_rows(FINDINGS) == [
+        {"kind": "sheet_missing", "payment_id": "pay_B", "repaired": 1}
+    ]
+    assert await read_rows(RUN) == [
+        {
+            "kind": "quick",
+            "payments_checked": 3,
+            "findings_count": 1,
+            "repaired_count": 1,
+            "status_line": "Sheet checked 02 Oct 21:00 IST: 3 payments, 1 difference",
+        }
+    ]
+    assert sorted(keys(outside.payments)) == ["pay_A", "pay_B", "pay_C"]
+    assert sheet_rows(outside.payments)[-1]["Amount"] == 500.0
+
+
+async def test_an_edited_amount_is_reported_differs_and_rewritten(
+    checked_config: Config,
+    data_dir: Path,
+    writer: Writer,
+    outside: Outside,
+    read_rows: ReadRows,
+    clock: TimeMachineFixture,
+) -> None:
+    await flushed(checked_config, data_dir, writer, read_rows, captured("pay_A"), captured("pay_B"))
+    tab = outside.payments
+    amount = list(tab.values()[0]).index("Amount")
+    outside.sheets.apply(
+        [
+            {
+                "updateCells": {
+                    "start": {
+                        "sheetId": tab.sheet_id,
+                        "rowIndex": at_row(tab, "pay_A"),
+                        "columnIndex": amount,
+                    },
+                    "rows": [{"values": [{"userEnteredValue": {"numberValue": 5000}}]}],
+                    "fields": "userEnteredValue",
+                }
+            }
+        ]
+    )
+
+    async with checked(checked_config, data_dir, read_rows, clock):
+        await wait_for(read_rows, MIRRORED, [{"n": 3}])
+
+    assert await read_rows(
+        "SELECT kind, payment_id, detail, repair_job_id IS NOT NULL AS repaired"
+        " FROM verify_findings"
+    ) == [{"kind": "sheet_differs", "payment_id": "pay_A", "detail": "Amount", "repaired": 1}]
+    rows = {row["Payment ID"]: row for row in sheet_rows(outside.payments)}
+    assert rows["pay_A"]["Amount"] == 500.0
+    assert outside.payments.cell(at_row(outside.payments, "pay_A"), amount)[
+        "userEnteredFormat"
+    ] == {"numberFormat": {"type": "NUMBER", "pattern": "0.00"}}
