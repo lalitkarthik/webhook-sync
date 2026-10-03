@@ -1,0 +1,53 @@
+{
+  "what": "Check 6: Drive v3 files.get fields=version,modifiedTime,headRevisionId with a token that has only the spreadsheets scope.",
+  "ran_at": "2026-10-03T04:48:59+00:00",
+  "elapsed_ms": 313,
+  "request": {
+    "method": "GET",
+    "url": "https://www.googleapis.com/drive/v3/files/SHEET_ID",
+    "params": {
+      "fields": "version,modifiedTime,headRevisionId"
+    },
+    "body": null
+  },
+  "response": {
+    "status": 403,
+    "headers": {
+      "www-authenticate": "Bearer realm=\"https://accounts.google.com/\", error=\"insufficient_scope\", scope=\"https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/drive.appfolder https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.resource https://www.googleapis.com/auth/drive.meet.readonly https://www.googleapis.com/auth/drive.metadata https://www.googleapis.com/auth/drive.metadata.readonly https://www.googleapis.com/auth/drive.readonly.metadata https://www.googleapis.com/auth/drive.photos.readonly https://www.googleapis.com/auth/drive.readonly\"",
+      "content-type": "application/json; charset=UTF-8",
+      "content-encoding": "gzip",
+      "date": "Sat, 03 Oct 2026 04:49:00 GMT",
+      "server": "ESF",
+      "x-xss-protection": "0",
+      "x-frame-options": "SAMEORIGIN",
+      "x-content-type-options": "nosniff",
+      "transfer-encoding": "chunked"
+    },
+    "body_bytes": 620,
+    "body": {
+      "error": {
+        "code": 403,
+        "message": "Request had insufficient authentication scopes.",
+        "errors": [
+          {
+            "message": "Insufficient Permission",
+            "domain": "global",
+            "reason": "insufficientPermissions"
+          }
+        ],
+        "status": "PERMISSION_DENIED",
+        "details": [
+          {
+            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            "reason": "ACCESS_TOKEN_SCOPE_INSUFFICIENT",
+            "domain": "googleapis.com",
+            "metadata": {
+              "method": "google.apps.drive.v3.DriveFiles.Get",
+              "service": "drive.googleapis.com"
+            }
+          }
+        ]
+      }
+    }
+  }
+}

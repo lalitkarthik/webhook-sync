@@ -1,0 +1,127 @@
+{
+  "what": "Check 9: read back D2:D6 by sheetId: effectiveValue, formattedValue and effectiveFormat.numberFormat in the en_GB / Asia/Calcutta spreadsheet.",
+  "ran_at": "2026-10-03T04:51:34+00:00",
+  "elapsed_ms": 196,
+  "request": {
+    "method": "POST",
+    "url": "https://sheets.googleapis.com/v4/spreadsheets/SHEET_ID:getByDataFilter",
+    "params": {
+      "fields": "sheets(data(startRow,startColumn,rowData(values(effectiveValue,formattedValue,effectiveFormat.numberFormat))))"
+    },
+    "body": {
+      "dataFilters": [
+        {
+          "gridRange": {
+            "sheetId": 1903783590,
+            "startRowIndex": 1,
+            "endRowIndex": 6,
+            "startColumnIndex": 3,
+            "endColumnIndex": 4
+          }
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=UTF-8",
+      "vary": "Origin, X-Origin, Referer",
+      "content-encoding": "gzip",
+      "date": "Sat, 03 Oct 2026 04:51:34 GMT",
+      "server": "ESF",
+      "x-xss-protection": "0",
+      "x-frame-options": "SAMEORIGIN",
+      "x-content-type-options": "nosniff",
+      "x-l2-request-path": "l2-managed-6",
+      "transfer-encoding": "chunked"
+    },
+    "body_bytes": 2287,
+    "body": {
+      "sheets": [
+        {
+          "data": [
+            {
+              "startRow": 1,
+              "startColumn": 3,
+              "rowData": [
+                {
+                  "values": [
+                    {
+                      "effectiveValue": {
+                        "numberValue": 46297.89512731481
+                      },
+                      "formattedValue": "46297.89513"
+                    }
+                  ]
+                },
+                {
+                  "values": [
+                    {
+                      "effectiveValue": {
+                        "numberValue": 46297.89512731481
+                      },
+                      "formattedValue": "02/10/2026 21:28:59",
+                      "effectiveFormat": {
+                        "numberFormat": {
+                          "type": "DATE_TIME"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "values": [
+                    {
+                      "effectiveValue": {
+                        "numberValue": 46297.89512731481
+                      },
+                      "formattedValue": "02/10/2026",
+                      "effectiveFormat": {
+                        "numberFormat": {
+                          "type": "DATE"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "values": [
+                    {
+                      "effectiveValue": {
+                        "numberValue": 46297.89512731481
+                      },
+                      "formattedValue": "2026-10-02 21:28:59",
+                      "effectiveFormat": {
+                        "numberFormat": {
+                          "type": "DATE_TIME",
+                          "pattern": "yyyy-mm-dd hh:mm:ss"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "values": [
+                    {
+                      "effectiveValue": {
+                        "numberValue": 46297.89512731481
+                      },
+                      "formattedValue": "02/10/2026 21:28",
+                      "effectiveFormat": {
+                        "numberFormat": {
+                          "type": "DATE_TIME",
+                          "pattern": "dd/mm/yyyy hh:mm"
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

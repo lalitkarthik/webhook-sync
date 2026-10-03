@@ -8,13 +8,16 @@ the one clock (A14); the sleeps are injected, so tests drive the runner without 
 import asyncio
 import logging
 import random
-from collections.abc import Awaitable, Callable, Coroutine, Sequence
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
 
-from webhook_sync.clock import utc_now
+import sqlalchemy as sa
+
+from webhook_sync.clock import to_db_text, utc_now
 from webhook_sync.config import RetryProfile
+from webhook_sync.db.schema import jobs
 from webhook_sync.db.writer import Transaction, Writer
 from webhook_sync.queue.operations import (
     ClaimedJob,
@@ -37,9 +40,13 @@ type Sleep = Callable[[float], Awaitable[None]]
 @dataclass(frozen=True)
 class Done:
     """The work succeeded. `writes`, if given, runs in the same transaction as `complete`, so a
-    stale worker's writes roll back with its fenced completion."""
+    stale worker's writes roll back with its fenced completion.
+
+    `failed` (batch stages only) names jobs of the batch that failed on their own, by job id:
+    those fail with their class after the rest complete."""
 
     writes: Callable[[Transaction], Awaitable[None]] | None = None
+    failed: Mapping[int, Failure] = field(default_factory=dict[int, Failure])
 
 
 class StageFailed(Exception):
@@ -53,6 +60,12 @@ class StageFailed(Exception):
 type Work = Callable[[ClaimedJob], Coroutine[Any, Any, Done]]
 """A stage's work on one claimed job: returns `Done` or raises `StageFailed`. Any other
 exception is our own bug, so the job goes to dead (queue.md's error classes)."""
+
+
+type BatchWork = Callable[[list[ClaimedJob]], Coroutine[Any, Any, Done]]
+"""A batch stage's work on every claimed job at once (A12): returns `Done`, whose writes commit
+with every job's `complete` but those in its `failed`, or raises `StageFailed`, which fails
+every job with its class."""
 
 
 class StageRunner:
@@ -157,6 +170,145 @@ class StageRunner:
         )
 
 
+class BatchStageRunner:
+    """Runs one batch stage for one sink (A12): claim up to `limit` due jobs, one work call for
+    all of them, then complete them all in one transaction or fail them all.
+
+    It claims again at once after a full batch; otherwise it waits `every` before the next
+    claim, checking each second and claiming at once when `limit` jobs are due."""
+
+    def __init__(
+        self,
+        writer: Writer,
+        *,
+        stage: str,
+        sink: str,
+        limit: int,
+        every: timedelta,
+        work: BatchWork,
+        claimed_by: str,
+        pauses: Pauses,
+        retry_profile: RetryProfile,
+        rng: random.Random | None = None,
+        sleep: Sleep = asyncio.sleep,
+    ) -> None:
+        self._writer = writer
+        self._stage = stage
+        self._sink = sink
+        self._limit = limit
+        self._every = every
+        self._work = work
+        self._claimed_by = claimed_by
+        self._pauses = pauses
+        self._retry_profile: RetryProfile = retry_profile
+        self._rng = rng or random.Random()
+        self._sleep = sleep
+        self._stopping = False
+
+    async def run(self) -> None:
+        """Run batches until `stop`. A pass that raises is logged and the next one tried; jobs
+        it left running are reaped."""
+        while not self._stopping:
+            try:
+                claimed = await self.run_once()
+            except Exception:
+                log.exception("batch stage pass failed; trying again shortly")
+                claimed = 0
+            if claimed < self._limit:
+                await self._wait()
+
+    def stop(self) -> None:
+        """Stop claiming: `run` returns once the batch it holds is finished."""
+        self._stopping = True
+
+    async def _wait(self) -> None:
+        """Wait `every`, a second at a time, ending early when a full batch is due."""
+        waited = timedelta(0)
+        while waited < self._every and not self._stopping:
+            await self._sleep(IDLE_WAIT.total_seconds())
+            waited += IDLE_WAIT
+            try:
+                if await self._due() >= self._limit:
+                    return
+            except Exception:
+                log.exception("counting due jobs failed; waiting on")
+
+    async def _due(self) -> int:
+        """How many jobs `claim` would hand out now, uncapped."""
+        if self._sink in self._pauses.sinks:
+            return 0
+        statement = sa.select(sa.func.count()).where(
+            jobs.c.stage == self._stage,
+            jobs.c.sink == self._sink,
+            jobs.c.source.not_in(self._pauses.sources),
+            jobs.c.status == "waiting",
+            jobs.c.run_after <= to_db_text(utc_now()),
+        )
+        async with self._writer.transaction() as tx:
+            [row] = await tx.execute(statement)
+        return int(row[0])
+
+    async def run_once(self) -> int:
+        """Claim up to `limit` due jobs and run the batch; returns how many were claimed."""
+        claimed = await claim(
+            self._writer,
+            stage=self._stage,
+            sink=self._sink,
+            limit=self._limit,
+            claimed_by=self._claimed_by,
+            pauses=self._pauses,
+            now=utc_now(),
+        )
+        if not claimed:
+            return 0
+        leases = _Leases(self._writer, claimed, self._sleep)
+        beating = asyncio.create_task(leases.keep_alive())
+        try:
+            await self._attempt(claimed)
+        finally:
+            beating.cancel()
+        return len(claimed)
+
+    async def _attempt(self, claimed: list[ClaimedJob]) -> None:
+        try:
+            done = await self._work(claimed)
+        except StageFailed as failed:
+            await self._fail_all(claimed, failed.failure)
+            return
+        except Exception as error:  # our own bug: retrying can't help
+            await self._fail_all(claimed, Failure(f"{type(error).__name__}: {error}", "dead"))
+            return
+        async with self._writer.transaction() as tx:
+            if done.writes is not None:
+                await done.writes(tx)
+            for job in claimed:
+                if job.id in done.failed:
+                    continue
+                try:
+                    await complete(tx, job, now=utc_now())
+                except LeaseLost:
+                    # The reaper has it back: it runs again, and writing by key is idempotent.
+                    log.warning("lease lost: result discarded", extra={"job_id": job.id})
+        for job in claimed:
+            if job.id in done.failed:
+                await self._fail_all([job], done.failed[job.id])
+
+    async def _fail_all(self, claimed: list[ClaimedJob], failure: Failure) -> None:
+        for job in claimed:
+            try:
+                await fail(
+                    self._writer,
+                    job,
+                    failure,
+                    pauses=self._pauses,
+                    retry_profile=self._retry_profile,
+                    now=utc_now(),
+                    rng=self._rng,
+                )
+            except LeaseLost:
+                log.warning("lease lost: result discarded", extra={"job_id": job.id})
+
+
 SHUTDOWN_GRACE = timedelta(seconds=20)
 """How long running jobs get to finish at shutdown before their leases are released."""
 
@@ -165,7 +317,11 @@ class Runners:
     """The server's stage runners: started together, and stopped together at shutdown."""
 
     def __init__(
-        self, writer: Writer, runners: Sequence[StageRunner], *, sleep: Sleep = asyncio.sleep
+        self,
+        writer: Writer,
+        runners: Sequence[StageRunner | BatchStageRunner],
+        *,
+        sleep: Sleep = asyncio.sleep,
     ) -> None:
         self._writer = writer
         self._runners = list(runners)

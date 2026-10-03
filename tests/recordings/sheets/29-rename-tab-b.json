@@ -1,0 +1,46 @@
+{
+  "what": "Check 6: rename wsync-spike-b to wsync-spike-b-renamed (does its developer metadata survive?).",
+  "ran_at": "2026-10-03T04:48:59+00:00",
+  "elapsed_ms": 228,
+  "request": {
+    "method": "POST",
+    "url": "https://sheets.googleapis.com/v4/spreadsheets/SHEET_ID:batchUpdate",
+    "params": null,
+    "body": {
+      "requests": [
+        {
+          "updateSheetProperties": {
+            "properties": {
+              "sheetId": 1903783590,
+              "title": "wsync-spike-b-renamed"
+            },
+            "fields": "title"
+          }
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=UTF-8",
+      "vary": "Origin, X-Origin, Referer",
+      "content-encoding": "gzip",
+      "date": "Sat, 03 Oct 2026 04:48:59 GMT",
+      "server": "ESF",
+      "x-xss-protection": "0",
+      "x-frame-options": "SAMEORIGIN",
+      "x-content-type-options": "nosniff",
+      "x-l2-request-path": "l2-managed-6",
+      "transfer-encoding": "chunked"
+    },
+    "body_bytes": 145,
+    "body": {
+      "spreadsheetId": "SHEET_ID",
+      "replies": [
+        {}
+      ],
+      "commentUpdateState": "NO_UPDATES_REQUESTED"
+    }
+  }
+}

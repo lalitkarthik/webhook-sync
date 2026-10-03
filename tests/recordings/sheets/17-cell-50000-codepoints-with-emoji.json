@@ -1,0 +1,59 @@
+{
+  "what": "Check 4: 49,999 'x' plus one emoji (U+1F600): 50,000 code points but 50,001 UTF-16 code units. Which does the 50,000 limit count?",
+  "ran_at": "2026-10-03T04:47:54+00:00",
+  "elapsed_ms": 638,
+  "request": {
+    "method": "POST",
+    "url": "https://sheets.googleapis.com/v4/spreadsheets/SHEET_ID:batchUpdate",
+    "params": null,
+    "body": {
+      "requests": [
+        {
+          "updateCells": {
+            "start": {
+              "sheetId": 1600034012,
+              "rowIndex": 3,
+              "columnIndex": 9
+            },
+            "rows": [
+              {
+                "values": [
+                  {
+                    "userEnteredValue": {
+                      "stringValue": "<'x' * 49999 + U+1F600>"
+                    }
+                  }
+                ]
+              }
+            ],
+            "fields": "userEnteredValue"
+          }
+        }
+      ]
+    },
+    "body_note": "stringValue shortened in this recording; the real request sent the full string."
+  },
+  "response": {
+    "status": 400,
+    "headers": {
+      "vary": "Origin, X-Origin, Referer",
+      "content-type": "application/json; charset=UTF-8",
+      "content-encoding": "gzip",
+      "date": "Sat, 03 Oct 2026 04:47:54 GMT",
+      "server": "ESF",
+      "x-xss-protection": "0",
+      "x-frame-options": "SAMEORIGIN",
+      "x-content-type-options": "nosniff",
+      "x-l2-request-path": "l2-managed-6",
+      "transfer-encoding": "chunked"
+    },
+    "body_bytes": 202,
+    "body": {
+      "error": {
+        "code": 400,
+        "message": "Invalid requests[0].updateCells: Your input contains more than the maximum of 50000 characters in a single cell.",
+        "status": "INVALID_ARGUMENT"
+      }
+    }
+  }
+}

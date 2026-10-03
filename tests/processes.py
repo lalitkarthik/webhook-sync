@@ -31,12 +31,13 @@ def free_port() -> int:
 
 def fixture_environment() -> dict[str, str]:
     """This process's environment with the fixture secrets in place of any real ones."""
-    environ = {k: v for k, v in os.environ.items() if not k.startswith("RAZORPAY_")}
+    environ = {k: v for k, v in os.environ.items() if not k.startswith(("RAZORPAY_", "GOOGLE_"))}
     return environ | fixture_secrets()
 
 
-def write_serve_config(config_dir: Path, port: int) -> Path:
-    """A valid test-mode `webhook-sync.toml` in `config_dir`, listening on `port`.
+def write_serve_config(config_dir: Path, port: int, admin_port: int | None = None) -> Path:
+    """A valid test-mode `webhook-sync.toml` in `config_dir`, listening on `port`, its admin
+    listener on `admin_port` (a free port if not given).
 
     Its Razorpay API address is unreachable: the ledger worker's fetches fail to connect and
     retry, and never reach Razorpay."""
@@ -44,6 +45,7 @@ def write_serve_config(config_dir: Path, port: int) -> Path:
     path = config_dir / "webhook-sync.toml"
     path.write_text(
         f'[service]\npublic_listen = "127.0.0.1:{port}"\ndata_dir = "data"\n'
+        f'admin_listen = "127.0.0.1:{admin_port or free_port()}"\n'
         f'timezone = "Asia/Kolkata"\n\n'
         f'[sources.razorpay]\nmode = "test"\naccount = "{TEST_ACCOUNT}"\n'
         f'api_url = "{UNREACHABLE_API}"\n\n'

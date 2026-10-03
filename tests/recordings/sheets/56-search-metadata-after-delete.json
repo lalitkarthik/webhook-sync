@@ -1,0 +1,41 @@
+{
+  "what": "Check 6 and cleanup: developerMetadata.search for both keys after the tab was deleted: its metadata went with it.",
+  "ran_at": "2026-10-03T04:51:45+00:00",
+  "elapsed_ms": 119,
+  "request": {
+    "method": "POST",
+    "url": "https://sheets.googleapis.com/v4/spreadsheets/SHEET_ID/developerMetadata:search",
+    "params": null,
+    "body": {
+      "dataFilters": [
+        {
+          "developerMetadataLookup": {
+            "metadataKey": "wsync.deployment"
+          }
+        },
+        {
+          "developerMetadataLookup": {
+            "metadataKey": "wsync.payment"
+          }
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=UTF-8",
+      "vary": "Origin, X-Origin, Referer",
+      "content-encoding": "gzip",
+      "date": "Sat, 03 Oct 2026 04:51:46 GMT",
+      "server": "ESF",
+      "x-xss-protection": "0",
+      "x-frame-options": "SAMEORIGIN",
+      "x-content-type-options": "nosniff",
+      "x-l2-request-path": "l2-managed-6",
+      "transfer-encoding": "chunked"
+    },
+    "body_bytes": 3,
+    "body": {}
+  }
+}

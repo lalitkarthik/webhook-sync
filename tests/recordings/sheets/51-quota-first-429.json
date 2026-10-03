@@ -1,0 +1,62 @@
+{
+  "what": "Check 8: a 429 from a burst of quick spreadsheets.get reads (fields=spreadsheetId). The first 429 came on read 67 (unrecorded, see 52); this is read 68, recorded in full. No Retry-After header.",
+  "ran_at": "2026-10-03T04:50:52+00:00",
+  "elapsed_ms": 74,
+  "request": {
+    "method": "GET",
+    "url": "https://sheets.googleapis.com/v4/spreadsheets/SHEET_ID",
+    "params": {
+      "fields": "spreadsheetId"
+    },
+    "body": null
+  },
+  "response": {
+    "status": 429,
+    "headers": {
+      "vary": "Origin, X-Origin, Referer",
+      "content-type": "application/json; charset=UTF-8",
+      "content-encoding": "gzip",
+      "date": "Sat, 03 Oct 2026 04:50:52 GMT",
+      "server": "ESF",
+      "x-xss-protection": "0",
+      "x-frame-options": "SAMEORIGIN",
+      "x-content-type-options": "nosniff",
+      "x-l2-request-path": "l2-managed-6",
+      "transfer-encoding": "chunked"
+    },
+    "body_bytes": 1124,
+    "body": {
+      "error": {
+        "code": 429,
+        "message": "Quota exceeded for quota metric 'Read requests' and limit 'Read requests per minute per user' of service 'sheets.googleapis.com' for consumer 'project_number:PROJECT_NUMBER'.",
+        "status": "RESOURCE_EXHAUSTED",
+        "details": [
+          {
+            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            "reason": "RATE_LIMIT_EXCEEDED",
+            "domain": "googleapis.com",
+            "metadata": {
+              "consumer": "projects/PROJECT_NUMBER",
+              "quota_metric": "sheets.googleapis.com/read_requests",
+              "quota_unit": "1/min/{project}/{user}",
+              "service": "sheets.googleapis.com",
+              "quota_limit": "ReadRequestsPerMinutePerUser",
+              "quota_limit_value": "60",
+              "window_start_time": "1791002993",
+              "quota_location": "global"
+            }
+          },
+          {
+            "@type": "type.googleapis.com/google.rpc.Help",
+            "links": [
+              {
+                "description": "Request a higher quota limit.",
+                "url": "https://cloud.google.com/docs/quotas/help/request_increase"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

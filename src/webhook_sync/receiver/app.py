@@ -16,20 +16,33 @@ from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 
+import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from webhook_sync.alerts import Alerter
 from webhook_sync.clock import to_db_text, utc_now
 from webhook_sync.config import Config
 from webhook_sync.db.migrations import apply_pending
 from webhook_sync.db.writer import Writer
 from webhook_sync.ledger import ledger_runner
-from webhook_sync.queue import Pauses, Runners, run_reaper
+from webhook_sync.queue import (
+    PauseTarget,
+    Runners,
+    StageRunner,
+    load_pauses,
+    register,
+    run_reaper,
+)
+from webhook_sync.queue.runner import BatchStageRunner
 from webhook_sync.receiver.checks import check_content_type, check_security_headers, read_body
 from webhook_sync.receiver.demo import FailFirst
 from webhook_sync.receiver.rate_cap import RateCap
 from webhook_sync.receiver.rejections import RejectionCounters
 from webhook_sync.receiver.store import store_delivery
+from webhook_sync.sinks.sheets import SINK as SHEETS_SINK
+from webhook_sync.sinks.sheets import sheets_runner
+from webhook_sync.sinks.sheets_client import ServiceAccountTokens, SheetsClient
 from webhook_sync.sources.base import EventDescription, Rejection, SourceAdapter, VerifiedDelivery
 from webhook_sync.sources.razorpay import EVENT_ID_HEADER, RazorpayAdapter, api_client
 
@@ -64,6 +77,8 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
             config.razorpay_secrets.key_id,
             config.razorpay_secrets.key_secret,
         )
+        alerter = Alerter(writer, config.alerts.url, redact=alert_redactions(config))
+        sheets_http = httpx.AsyncClient()
         try:
             # Under `wsync serve`, start() has already migrated under the lock and this is a
             # no-op; it migrates an app built in process (tests).
@@ -87,7 +102,11 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
             app.state.receiver = receiver
             # One instance id and one pause set, shared by every stage runner (A15).
             claimed_by = instance_id()
-            pauses = Pauses()
+            await register(writer, configured_names(config))
+            pauses = await load_pauses(writer)  # pauses survive a restart (A3, A13)
+            pauses.on_pause = alerter.paused  # every new pause sends a `paused` alert (A8)
+            app.state.pauses = pauses
+            app.state.writer = writer
             ledger = ledger_runner(
                 writer,
                 {receiver.razorpay.name: receiver.razorpay},
@@ -96,10 +115,28 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
                 pauses=pauses,
                 retry_profile=config.service.retry_profile,
             )
-            runners = Runners(writer, [ledger])
+            stages: list[StageRunner | BatchStageRunner] = [ledger]
+            if SHEETS_SINK in config.sinks:
+                sheets = SheetsClient(
+                    sheets_http,
+                    config.sheets.spreadsheet_id,
+                    ServiceAccountTokens(config.google_secrets.service_account),
+                )
+                stages.append(
+                    sheets_runner(
+                        writer,
+                        sheets,
+                        config,
+                        claimed_by=claimed_by,
+                        pauses=pauses,
+                        alerter=alerter,
+                    )
+                )
+            runners = Runners(writer, stages)
             app.state.runners = runners
             runners.start()
             minutely = asyncio.create_task(_write_rejection_counts_every_minute(receiver))
+            dead_jobs_check = asyncio.create_task(alerter.run_dead_jobs_check())  # A17
             reaper = asyncio.create_task(
                 run_reaper(writer, retry_profile=config.service.retry_profile)
             )
@@ -108,15 +145,19 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
             finally:
                 if not receiver.shutting_down:  # stopped some other way than `shut_down`
                     await shut_down(app)
-                reaper.cancel()
-                with suppress(asyncio.CancelledError):
-                    await reaper
+                for loop in (reaper, dead_jobs_check):
+                    loop.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await loop
                 minutely.cancel()
                 with suppress(asyncio.CancelledError):
                     await minutely
                 await write_all_rejection_counts(receiver)
         finally:
+            app.state.writer = None  # the admin listener answers 503 from here on
             await razorpay_api.aclose()
+            await sheets_http.aclose()
+            await alerter.aclose()
             await writer.close()
 
     app = FastAPI(lifespan=lifespan, openapi_url=None, docs_url=None, redoc_url=None)
@@ -208,6 +249,25 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
         return JSONResponse({"result": stored.result}, status_code=stored.status_code)
 
     return app
+
+
+def configured_names(config: Config) -> dict[str, PauseTarget]:
+    """Every configured source and sink, as `sinks` names them."""
+    names: dict[str, PauseTarget] = {RazorpayAdapter.name: "source"}
+    for sink in config.sinks:
+        names[sink] = "sink"
+    return names
+
+
+def alert_redactions(config: Config) -> tuple[str, ...]:
+    """What no alert body may carry: the spreadsheet id and every key and secret."""
+    secrets = config.razorpay_secrets
+    return (
+        config.sheets.spreadsheet_id,
+        secrets.key_id,
+        secrets.key_secret,
+        *secrets.webhook_secrets,
+    )
 
 
 def instance_id() -> str:

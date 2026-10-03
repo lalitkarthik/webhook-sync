@@ -1,0 +1,138 @@
+{
+  "what": "Checks 6, 7: header plus pay_A..pay_E with amounts 50, 10, 40, 20, 30, by sheetId.",
+  "ran_at": "2026-10-03T04:48:44+00:00",
+  "elapsed_ms": 232,
+  "request": {
+    "method": "POST",
+    "url": "https://sheets.googleapis.com/v4/spreadsheets/SHEET_ID:batchUpdate",
+    "params": null,
+    "body": {
+      "requests": [
+        {
+          "updateCells": {
+            "start": {
+              "sheetId": 1903783590,
+              "rowIndex": 0,
+              "columnIndex": 0
+            },
+            "rows": [
+              {
+                "values": [
+                  {
+                    "userEnteredValue": {
+                      "stringValue": "Payment ID"
+                    }
+                  },
+                  {
+                    "userEnteredValue": {
+                      "stringValue": "Amount"
+                    }
+                  },
+                  {
+                    "userEnteredValue": {
+                      "stringValue": "Note"
+                    }
+                  }
+                ]
+              },
+              {
+                "values": [
+                  {
+                    "userEnteredValue": {
+                      "stringValue": "pay_A"
+                    }
+                  },
+                  {
+                    "userEnteredValue": {
+                      "numberValue": 50
+                    }
+                  }
+                ]
+              },
+              {
+                "values": [
+                  {
+                    "userEnteredValue": {
+                      "stringValue": "pay_B"
+                    }
+                  },
+                  {
+                    "userEnteredValue": {
+                      "numberValue": 10
+                    }
+                  }
+                ]
+              },
+              {
+                "values": [
+                  {
+                    "userEnteredValue": {
+                      "stringValue": "pay_C"
+                    }
+                  },
+                  {
+                    "userEnteredValue": {
+                      "numberValue": 40
+                    }
+                  }
+                ]
+              },
+              {
+                "values": [
+                  {
+                    "userEnteredValue": {
+                      "stringValue": "pay_D"
+                    }
+                  },
+                  {
+                    "userEnteredValue": {
+                      "numberValue": 20
+                    }
+                  }
+                ]
+              },
+              {
+                "values": [
+                  {
+                    "userEnteredValue": {
+                      "stringValue": "pay_E"
+                    }
+                  },
+                  {
+                    "userEnteredValue": {
+                      "numberValue": 30
+                    }
+                  }
+                ]
+              }
+            ],
+            "fields": "userEnteredValue"
+          }
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=UTF-8",
+      "vary": "Origin, X-Origin, Referer",
+      "content-encoding": "gzip",
+      "date": "Sat, 03 Oct 2026 04:48:44 GMT",
+      "server": "ESF",
+      "x-xss-protection": "0",
+      "x-frame-options": "SAMEORIGIN",
+      "x-content-type-options": "nosniff",
+      "x-l2-request-path": "l2-managed-6",
+      "transfer-encoding": "chunked"
+    },
+    "body_bytes": 145,
+    "body": {
+      "spreadsheetId": "SHEET_ID",
+      "replies": [
+        {}
+      ],
+      "commentUpdateState": "NO_UPDATES_REQUESTED"
+    }
+  }
+}

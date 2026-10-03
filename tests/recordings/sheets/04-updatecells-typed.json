@@ -1,0 +1,170 @@
+{
+  "what": "Check 2: one batchUpdate with updateCells addressed by sheetId writes a header and a row of typed values: stringValue, numberValue with a 0.00 pattern, boolValue, a date serial with a DATE_TIME pattern, and formula-looking strings as stringValue.",
+  "ran_at": "2026-10-03T04:47:19+00:00",
+  "elapsed_ms": 332,
+  "request": {
+    "method": "POST",
+    "url": "https://sheets.googleapis.com/v4/spreadsheets/SHEET_ID:batchUpdate",
+    "params": null,
+    "body": {
+      "requests": [
+        {
+          "updateCells": {
+            "start": {
+              "sheetId": 1600034012,
+              "rowIndex": 0,
+              "columnIndex": 0
+            },
+            "rows": [
+              {
+                "values": [
+                  {
+                    "userEnteredValue": {
+                      "stringValue": "Payment ID"
+                    }
+                  },
+                  {
+                    "userEnteredValue": {
+                      "stringValue": "Kind"
+                    }
+                  },
+                  {
+                    "userEnteredValue": {
+                      "stringValue": "Amount"
+                    }
+                  },
+                  {
+                    "userEnteredValue": {
+                      "stringValue": "Bool"
+                    }
+                  },
+                  {
+                    "userEnteredValue": {
+                      "stringValue": "Created (IST)"
+                    }
+                  },
+                  {
+                    "userEnteredValue": {
+                      "stringValue": "Formula-looking"
+                    }
+                  },
+                  {
+                    "userEnteredValue": {
+                      "stringValue": "Phone"
+                    }
+                  },
+                  {
+                    "userEnteredValue": {
+                      "stringValue": "Zeros"
+                    }
+                  },
+                  {
+                    "userEnteredValue": {
+                      "stringValue": "Big"
+                    }
+                  },
+                  {
+                    "userEnteredValue": {
+                      "stringValue": "Hyperlink-looking"
+                    }
+                  }
+                ]
+              },
+              {
+                "values": [
+                  {
+                    "userEnteredValue": {
+                      "stringValue": "pay_A"
+                    }
+                  },
+                  {
+                    "userEnteredValue": {
+                      "stringValue": "string"
+                    }
+                  },
+                  {
+                    "userEnteredValue": {
+                      "numberValue": 500.5
+                    },
+                    "userEnteredFormat": {
+                      "numberFormat": {
+                        "type": "NUMBER",
+                        "pattern": "0.00"
+                      }
+                    }
+                  },
+                  {
+                    "userEnteredValue": {
+                      "boolValue": true
+                    }
+                  },
+                  {
+                    "userEnteredValue": {
+                      "numberValue": 46297.89512731481
+                    },
+                    "userEnteredFormat": {
+                      "numberFormat": {
+                        "type": "DATE_TIME",
+                        "pattern": "yyyy-mm-dd hh:mm:ss"
+                      }
+                    }
+                  },
+                  {
+                    "userEnteredValue": {
+                      "stringValue": "=1+1"
+                    }
+                  },
+                  {
+                    "userEnteredValue": {
+                      "stringValue": "+919876543210"
+                    }
+                  },
+                  {
+                    "userEnteredValue": {
+                      "stringValue": "007"
+                    }
+                  },
+                  {
+                    "userEnteredValue": {
+                      "numberValue": 1234567890123456789
+                    }
+                  },
+                  {
+                    "userEnteredValue": {
+                      "stringValue": "=HYPERLINK(\"https://example.com\",\"x\")"
+                    }
+                  }
+                ]
+              }
+            ],
+            "fields": "userEnteredValue,userEnteredFormat.numberFormat"
+          }
+        }
+      ],
+      "includeSpreadsheetInResponse": false
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=UTF-8",
+      "vary": "Origin, X-Origin, Referer",
+      "content-encoding": "gzip",
+      "date": "Sat, 03 Oct 2026 04:47:19 GMT",
+      "server": "ESF",
+      "x-xss-protection": "0",
+      "x-frame-options": "SAMEORIGIN",
+      "x-content-type-options": "nosniff",
+      "x-l2-request-path": "l2-managed-6",
+      "transfer-encoding": "chunked"
+    },
+    "body_bytes": 145,
+    "body": {
+      "spreadsheetId": "SHEET_ID",
+      "replies": [
+        {}
+      ],
+      "commentUpdateState": "NO_UPDATES_REQUESTED"
+    }
+  }
+}

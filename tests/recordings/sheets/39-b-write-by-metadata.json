@@ -1,0 +1,81 @@
+{
+  "what": "Check 6: values.batchUpdateByDataFilter addressed by the row's developer metadata (wsync.payment = pay_B), valueInputOption RAW: does the write follow the row after the sort?",
+  "ran_at": "2026-10-03T04:49:37+00:00",
+  "elapsed_ms": 577,
+  "request": {
+    "method": "POST",
+    "url": "https://sheets.googleapis.com/v4/spreadsheets/SHEET_ID/values:batchUpdateByDataFilter",
+    "params": null,
+    "body": {
+      "valueInputOption": "RAW",
+      "includeValuesInResponse": true,
+      "responseValueRenderOption": "UNFORMATTED_VALUE",
+      "data": [
+        {
+          "dataFilter": {
+            "developerMetadataLookup": {
+              "metadataKey": "wsync.payment",
+              "metadataValue": "pay_B"
+            }
+          },
+          "majorDimension": "ROWS",
+          "values": [
+            [
+              "pay_B",
+              12,
+              "=1+1 via metadata"
+            ]
+          ]
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=UTF-8",
+      "vary": "Origin, X-Origin, Referer",
+      "content-encoding": "gzip",
+      "date": "Sat, 03 Oct 2026 04:49:38 GMT",
+      "server": "ESF",
+      "x-xss-protection": "0",
+      "x-frame-options": "SAMEORIGIN",
+      "x-content-type-options": "nosniff",
+      "x-l2-request-path": "l2-managed-6",
+      "transfer-encoding": "chunked"
+    },
+    "body_bytes": 734,
+    "body": {
+      "spreadsheetId": "SHEET_ID",
+      "totalUpdatedRows": 1,
+      "totalUpdatedColumns": 3,
+      "totalUpdatedCells": 3,
+      "totalUpdatedSheets": 1,
+      "responses": [
+        {
+          "updatedRange": "'wsync-spike-b-renamed'!A6:C6",
+          "updatedRows": 1,
+          "updatedColumns": 3,
+          "updatedCells": 3,
+          "dataFilter": {
+            "developerMetadataLookup": {
+              "metadataKey": "wsync.payment",
+              "metadataValue": "pay_B"
+            }
+          },
+          "updatedData": {
+            "range": "'wsync-spike-b-renamed'!A6:C6",
+            "majorDimension": "ROWS",
+            "values": [
+              [
+                "pay_B",
+                12,
+                "=1+1 via metadata"
+              ]
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

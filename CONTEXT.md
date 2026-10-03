@@ -142,6 +142,9 @@ A running worker pushing its lease forward while it is still working.
 The loop that runs one stage's jobs: it claims, heartbeats, completes or fails each job, reaps expired leases and releases unfinished ones at shutdown. A stage (the ledger worker, the flusher) plugs in only the work itself.
 _Avoid_: worker pool, consumer
 
+**Batch stage**:
+A stage whose stage runner claims up to 200 jobs and makes one work call for them all, completing or failing them together; the flusher is one. It flushes every 3 s while jobs wait, or at once when 200 are due.
+
 **Reaper**:
 The loop that returns jobs whose lease has expired to waiting.
 
@@ -176,8 +179,12 @@ A tab only the service writes: the Payments and Daily summary tabs. Buyers read,
 _Avoid_: locked tab, protected tab
 
 **Daily summary**:
-The tab with one row per day, per currency paid in and per currency paid out: count, gross and refunds in the first; settled, fees and net in the second; from payments that succeeded.
+The tab with one row per local day (by `source_created_at` in `service.timezone`), currency and fee currency: Payments, Gross, Refunds, Fees, Net (before refunds) and Fee pending, from payments that succeeded; a fee-pending payment counts only in Payments, Gross and Fee pending. A flush recomputes the days it touched.
 _Avoid_: report, dashboard
+
+**Sync status**:
+The tab of `Label | Value` rows the flusher rewrites whole on every flush: last flush, rows written, jobs waiting, dead jobs, the sheet's and Razorpay's state, and Last verify.
+_Avoid_: health page, status sheet
 
 **Forwarding sink**:
 A sink that sends each business-row change, once and signed, to the buyer's own automation (n8n, Zapier, Make).
@@ -231,7 +238,14 @@ _Avoid_: audit, reconcile (reconcile is demo 1's word for balance checks)
 Fixing what verify found by enqueuing ordinary jobs, never by editing rows directly.
 
 **Admin action**:
-Anything a person does from the admin port or the CLI (replay, backfill, rebuild, retry, resolve, resume), logged with which token and when.
+Anything a person does from the admin listener or the CLI (replay, backfill, rebuild, retry, resolve, resume), logged with who asked (`cli` or `admin`) and when.
+
+**Admin listener**:
+The second, loopback-only listener the server runs beside the public one; it serves `POST /admin/resume/{name}` and `GET /admin/status` for `wsync resume` and `wsync status`.
+_Avoid_: admin port, admin page
+
+**Alert**:
+A short message posted to the `[alerts] url` Slack or Discord webhook when a source or sink pauses, jobs go dead, the sheet changed during a write or a currency is unknown; at most one per kind an hour, the suppressed repeats counted in the next, ids and counts only.
 
 **Heartbeat URL**:
 An outside service the sweeper pings after every sweep; when the pings stop, it tells a person the service is down. Also called a dead-man's switch.

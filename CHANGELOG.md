@@ -1,5 +1,12 @@
 # Changelog
 
+## P3: mirror the ledger to the Google Sheet — 2026-10-03
+
+- `wsync serve` now runs the flusher: every 3 s (or at once at 200 jobs) it writes waiting payments to the Google Sheet in two reads and one write: a Payments tab with one row per payment, a Daily summary per local day and currency, and a Sync status tab saying whether all is healthy.
+- Values are written exactly (currency decimals, real dates, text kept as text, emails masked, `pending` fees); a fresh sheet gets its tabs set up, renamed tabs keep working, and a sort during a write is caught and repaired.
+- An unshared, deleted or full sheet, a missing tab or a changed header pauses the sheet with its reason; pauses survive restarts and are cleared by `wsync resume`, and `wsync status` shows every source and sink through a loopback-only admin listener.
+- Optional alerts to a Slack or Discord webhook on pauses, dead jobs, a sheet changed during a write and an unknown currency, at most once an hour per kind, ids and counts only.
+
 ## P2: fetch each payment from Razorpay and keep its ledger row — 2026-10-02
 
 - `wsync serve` now runs the ledger worker: each stored Razorpay event leads to one fetch of the payment's current state and one row per payment in the new `payments` table, however many events arrive and in whatever order.

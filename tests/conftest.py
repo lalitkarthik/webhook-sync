@@ -21,10 +21,12 @@ from support import (
     TEST_WEBHOOK_SECRET,
     UNREACHABLE_API,
     ReadRows,
+    fixture_service_account,
 )
 
 from webhook_sync.config import (
     Config,
+    GoogleSecrets,
     RazorpayConfig,
     RazorpaySecrets,
     ServiceConfig,
@@ -60,6 +62,7 @@ def config(data_dir: Path) -> Config:
             key_secret=TEST_KEY_SECRET,
             webhook_secrets=(TEST_WEBHOOK_SECRET,),
         ),
+        google_secrets=GoogleSecrets(service_account=fixture_service_account()),
         sheets=SheetsConfig(spreadsheet_id=TEST_SPREADSHEET_ID),
         sinks=("sheets",),
     )

@@ -1,0 +1,63 @@
+{
+  "what": "Check 7 (F05) step 3: the flusher writes pay_B's update by the row number it read (row index 2), without the key cell: Amount := 11, Note := 'update for pay_B'.",
+  "ran_at": "2026-10-03T04:49:25+00:00",
+  "elapsed_ms": 202,
+  "request": {
+    "method": "POST",
+    "url": "https://sheets.googleapis.com/v4/spreadsheets/SHEET_ID:batchUpdate",
+    "params": null,
+    "body": {
+      "requests": [
+        {
+          "updateCells": {
+            "start": {
+              "sheetId": 1903783590,
+              "rowIndex": 2,
+              "columnIndex": 1
+            },
+            "rows": [
+              {
+                "values": [
+                  {
+                    "userEnteredValue": {
+                      "numberValue": 11
+                    }
+                  },
+                  {
+                    "userEnteredValue": {
+                      "stringValue": "update for pay_B"
+                    }
+                  }
+                ]
+              }
+            ],
+            "fields": "userEnteredValue"
+          }
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=UTF-8",
+      "vary": "Origin, X-Origin, Referer",
+      "content-encoding": "gzip",
+      "date": "Sat, 03 Oct 2026 04:49:25 GMT",
+      "server": "ESF",
+      "x-xss-protection": "0",
+      "x-frame-options": "SAMEORIGIN",
+      "x-content-type-options": "nosniff",
+      "x-l2-request-path": "l2-managed-6",
+      "transfer-encoding": "chunked"
+    },
+    "body_bytes": 145,
+    "body": {
+      "spreadsheetId": "SHEET_ID",
+      "replies": [
+        {}
+      ],
+      "commentUpdateState": "NO_UPDATES_REQUESTED"
+    }
+  }
+}

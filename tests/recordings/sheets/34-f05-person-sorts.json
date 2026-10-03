@@ -1,0 +1,54 @@
+{
+  "what": "Check 7 (F05) step 2: a person sorts rows 2-6 by Amount descending (sortRange by sheetId) between the flusher's read and its write.",
+  "ran_at": "2026-10-03T04:49:25+00:00",
+  "elapsed_ms": 227,
+  "request": {
+    "method": "POST",
+    "url": "https://sheets.googleapis.com/v4/spreadsheets/SHEET_ID:batchUpdate",
+    "params": null,
+    "body": {
+      "requests": [
+        {
+          "sortRange": {
+            "range": {
+              "sheetId": 1903783590,
+              "startRowIndex": 1,
+              "endRowIndex": 6,
+              "startColumnIndex": 0,
+              "endColumnIndex": 3
+            },
+            "sortSpecs": [
+              {
+                "dimensionIndex": 1,
+                "sortOrder": "DESCENDING"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=UTF-8",
+      "vary": "Origin, X-Origin, Referer",
+      "content-encoding": "gzip",
+      "date": "Sat, 03 Oct 2026 04:49:25 GMT",
+      "server": "ESF",
+      "x-xss-protection": "0",
+      "x-frame-options": "SAMEORIGIN",
+      "x-content-type-options": "nosniff",
+      "x-l2-request-path": "l2-managed-6",
+      "transfer-encoding": "chunked"
+    },
+    "body_bytes": 145,
+    "body": {
+      "spreadsheetId": "SHEET_ID",
+      "replies": [
+        {}
+      ],
+      "commentUpdateState": "NO_UPDATES_REQUESTED"
+    }
+  }
+}

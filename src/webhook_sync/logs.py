@@ -29,6 +29,14 @@ LOGGED_FIELDS = (
     "outcome",
     "error_class",
     "http_status",
+    "target",
+    "by",
+    "alert",
+    "suppressed",
+    "jobs",
+    "rows_updated",
+    "rows_appended",
+    "duration_ms",
 )
 
 

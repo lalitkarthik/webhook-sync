@@ -1,0 +1,71 @@
+{
+  "what": "Check 7 (F05) step 4: the post-write check re-reads the key cell of the row just written (row index 2). It is not pay_B, so the move is detected.",
+  "ran_at": "2026-10-03T04:49:25+00:00",
+  "elapsed_ms": 155,
+  "request": {
+    "method": "POST",
+    "url": "https://sheets.googleapis.com/v4/spreadsheets/SHEET_ID:getByDataFilter",
+    "params": {
+      "fields": "sheets(properties(sheetId,title,gridProperties(rowCount,columnCount)),data(startRow,startColumn,rowData(values(effectiveValue))))"
+    },
+    "body": {
+      "dataFilters": [
+        {
+          "gridRange": {
+            "sheetId": 1903783590,
+            "startRowIndex": 2,
+            "endRowIndex": 3,
+            "startColumnIndex": 0,
+            "endColumnIndex": 1
+          }
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=UTF-8",
+      "vary": "Origin, X-Origin, Referer",
+      "content-encoding": "gzip",
+      "date": "Sat, 03 Oct 2026 04:49:25 GMT",
+      "server": "ESF",
+      "x-xss-protection": "0",
+      "x-frame-options": "SAMEORIGIN",
+      "x-content-type-options": "nosniff",
+      "x-l2-request-path": "l2-managed-6",
+      "transfer-encoding": "chunked"
+    },
+    "body_bytes": 539,
+    "body": {
+      "sheets": [
+        {
+          "properties": {
+            "sheetId": 1903783590,
+            "title": "wsync-spike-b-renamed",
+            "gridProperties": {
+              "rowCount": 6,
+              "columnCount": 3
+            }
+          },
+          "data": [
+            {
+              "startRow": 2,
+              "rowData": [
+                {
+                  "values": [
+                    {
+                      "effectiveValue": {
+                        "stringValue": "pay_C"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -130,7 +130,7 @@ stateDiagram-v2
 
 While paused, nothing of that source or sink is claimed. Each pause **reason** has its own probe (F08): the header for "layout changed", the cell count for "sheet full", the Sync status owner for "another deployment writes here", a cheap read for a revoked key. "Sheet changed during write" and "rebuild incomplete" never resume by themselves; they need **Resume** or a finished rebuild. Probes run after 1, 2 and 5 minutes, then every 15, so a week-long pause costs few API reads (F18). On resume the flusher drains in its normal batches of 200.
 
-In the pitch-ready cut, pausing is simpler: a pause-class error stops the sink and alerts, and `wsync resume` restarts it. Probes come after pitching ([build-order.md](build-order.md)).
+In the pitch-ready cut, pausing is simpler: a pause-class error stops the sink and alerts, the pause is stored and survives restarts, and `wsync resume` (through the admin listener) restarts it ([Q133](grilling-log.md), [Q134](grilling-log.md)). Probes come after pitching ([build-order.md](build-order.md)).
 
 ## The dead-letter queue
 

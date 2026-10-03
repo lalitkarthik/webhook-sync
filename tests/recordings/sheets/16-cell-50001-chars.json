@@ -1,0 +1,59 @@
+{
+  "what": "Check 4: updateCells writes a 50001-character stringValue into one cell (body omitted from the request record: it is 'x' * 50001).",
+  "ran_at": "2026-10-03T04:47:42+00:00",
+  "elapsed_ms": 256,
+  "request": {
+    "method": "POST",
+    "url": "https://sheets.googleapis.com/v4/spreadsheets/SHEET_ID:batchUpdate",
+    "params": null,
+    "body": {
+      "requests": [
+        {
+          "updateCells": {
+            "start": {
+              "sheetId": 1600034012,
+              "rowIndex": 2,
+              "columnIndex": 9
+            },
+            "rows": [
+              {
+                "values": [
+                  {
+                    "userEnteredValue": {
+                      "stringValue": "<'x' * 50001>"
+                    }
+                  }
+                ]
+              }
+            ],
+            "fields": "userEnteredValue"
+          }
+        }
+      ]
+    },
+    "body_note": "stringValue shortened in this recording; the real request sent the full string."
+  },
+  "response": {
+    "status": 400,
+    "headers": {
+      "vary": "Origin, X-Origin, Referer",
+      "content-type": "application/json; charset=UTF-8",
+      "content-encoding": "gzip",
+      "date": "Sat, 03 Oct 2026 04:47:43 GMT",
+      "server": "ESF",
+      "x-xss-protection": "0",
+      "x-frame-options": "SAMEORIGIN",
+      "x-content-type-options": "nosniff",
+      "x-l2-request-path": "l2-managed-6",
+      "transfer-encoding": "chunked"
+    },
+    "body_bytes": 202,
+    "body": {
+      "error": {
+        "code": 400,
+        "message": "Invalid requests[0].updateCells: Your input contains more than the maximum of 50000 characters in a single cell.",
+        "status": "INVALID_ARGUMENT"
+      }
+    }
+  }
+}

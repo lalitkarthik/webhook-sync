@@ -1,0 +1,58 @@
+{
+  "what": "Check 4: updateCells at rowIndex 5 on a tab whose rowCount is 5, with no appendDimension first.",
+  "ran_at": "2026-10-03T04:47:19+00:00",
+  "elapsed_ms": 163,
+  "request": {
+    "method": "POST",
+    "url": "https://sheets.googleapis.com/v4/spreadsheets/SHEET_ID:batchUpdate",
+    "params": null,
+    "body": {
+      "requests": [
+        {
+          "updateCells": {
+            "start": {
+              "sheetId": 1600034012,
+              "rowIndex": 5,
+              "columnIndex": 0
+            },
+            "rows": [
+              {
+                "values": [
+                  {
+                    "userEnteredValue": {
+                      "stringValue": "pay_PAST"
+                    }
+                  }
+                ]
+              }
+            ],
+            "fields": "userEnteredValue,userEnteredFormat.numberFormat"
+          }
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 400,
+    "headers": {
+      "vary": "Origin, X-Origin, Referer",
+      "content-type": "application/json; charset=UTF-8",
+      "content-encoding": "gzip",
+      "date": "Sat, 03 Oct 2026 04:47:20 GMT",
+      "server": "ESF",
+      "x-xss-protection": "0",
+      "x-frame-options": "SAMEORIGIN",
+      "x-content-type-options": "nosniff",
+      "x-l2-request-path": "l2-managed-6",
+      "transfer-encoding": "chunked"
+    },
+    "body_bytes": 178,
+    "body": {
+      "error": {
+        "code": 400,
+        "message": "Invalid requests[0].updateCells: GridCoordinate.rowIndex[5] is after last row in grid[4]",
+        "status": "INVALID_ARGUMENT"
+      }
+    }
+  }
+}

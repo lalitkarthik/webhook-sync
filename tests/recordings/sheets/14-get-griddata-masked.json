@@ -1,0 +1,193 @@
+{
+  "what": "Check 4: the same range with a field mask for grid size and effectiveValue only.",
+  "ran_at": "2026-10-03T04:47:42+00:00",
+  "elapsed_ms": 212,
+  "request": {
+    "method": "GET",
+    "url": "https://sheets.googleapis.com/v4/spreadsheets/SHEET_ID",
+    "params": {
+      "ranges": "'wsync-spike-a'!A1:J7",
+      "fields": "sheets(properties(sheetId,gridProperties(rowCount,columnCount)),data(rowData(values(effectiveValue))))"
+    },
+    "body": null
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=UTF-8",
+      "vary": "Origin, X-Origin, Referer",
+      "content-encoding": "gzip",
+      "date": "Sat, 03 Oct 2026 04:47:42 GMT",
+      "server": "ESF",
+      "x-xss-protection": "0",
+      "x-frame-options": "SAMEORIGIN",
+      "x-content-type-options": "nosniff",
+      "x-l2-request-path": "l2-managed-6",
+      "transfer-encoding": "chunked"
+    },
+    "body_bytes": 4153,
+    "body": {
+      "sheets": [
+        {
+          "properties": {
+            "sheetId": 1600034012,
+            "gridProperties": {
+              "rowCount": 7,
+              "columnCount": 10
+            }
+          },
+          "data": [
+            {
+              "rowData": [
+                {
+                  "values": [
+                    {
+                      "effectiveValue": {
+                        "stringValue": "Payment ID"
+                      }
+                    },
+                    {
+                      "effectiveValue": {
+                        "stringValue": "Kind"
+                      }
+                    },
+                    {
+                      "effectiveValue": {
+                        "stringValue": "Amount"
+                      }
+                    },
+                    {
+                      "effectiveValue": {
+                        "stringValue": "Bool"
+                      }
+                    },
+                    {
+                      "effectiveValue": {
+                        "stringValue": "Created (IST)"
+                      }
+                    },
+                    {
+                      "effectiveValue": {
+                        "stringValue": "Formula-looking"
+                      }
+                    },
+                    {
+                      "effectiveValue": {
+                        "stringValue": "Phone"
+                      }
+                    },
+                    {
+                      "effectiveValue": {
+                        "stringValue": "Zeros"
+                      }
+                    },
+                    {
+                      "effectiveValue": {
+                        "stringValue": "Big"
+                      }
+                    },
+                    {
+                      "effectiveValue": {
+                        "stringValue": "Hyperlink-looking"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "values": [
+                    {
+                      "effectiveValue": {
+                        "stringValue": "pay_A"
+                      }
+                    },
+                    {
+                      "effectiveValue": {
+                        "stringValue": "string"
+                      }
+                    },
+                    {
+                      "effectiveValue": {
+                        "numberValue": 500.5
+                      }
+                    },
+                    {
+                      "effectiveValue": {
+                        "boolValue": true
+                      }
+                    },
+                    {
+                      "effectiveValue": {
+                        "numberValue": 46297.89512731481
+                      }
+                    },
+                    {
+                      "effectiveValue": {
+                        "stringValue": "=1+1"
+                      }
+                    },
+                    {
+                      "effectiveValue": {
+                        "stringValue": "+919876543210"
+                      }
+                    },
+                    {
+                      "effectiveValue": {
+                        "stringValue": "007"
+                      }
+                    },
+                    {
+                      "effectiveValue": {
+                        "numberValue": 1.2345678901234568e+18
+                      }
+                    },
+                    {
+                      "effectiveValue": {
+                        "stringValue": "=HYPERLINK(\"https://example.com\",\"x\")"
+                      }
+                    }
+                  ]
+                },
+                {},
+                {},
+                {},
+                {
+                  "values": [
+                    {
+                      "effectiveValue": {
+                        "stringValue": "pay_F"
+                      }
+                    },
+                    {
+                      "effectiveValue": {
+                        "stringValue": "after appendDimension"
+                      }
+                    },
+                    {
+                      "effectiveValue": {
+                        "numberValue": 42
+                      }
+                    }
+                  ]
+                },
+                {
+                  "values": [
+                    {
+                      "effectiveValue": {
+                        "stringValue": "pay_G"
+                      }
+                    },
+                    {
+                      "effectiveValue": {
+                        "stringValue": "appendCells"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

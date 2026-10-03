@@ -1,0 +1,65 @@
+{
+  "what": "Check 4: appendDimension of 2,000,000 empty rows on the 10-column scratch tab (+20,000,000 cells), in one batchUpdate with an updateCells after it: the error the flusher sees when growing the grid would pass the cell limit, and whether the updateCells in the same call is applied.",
+  "ran_at": "2026-10-03T04:48:17+00:00",
+  "elapsed_ms": 494,
+  "request": {
+    "method": "POST",
+    "url": "https://sheets.googleapis.com/v4/spreadsheets/SHEET_ID:batchUpdate",
+    "params": null,
+    "body": {
+      "requests": [
+        {
+          "updateCells": {
+            "start": {
+              "sheetId": 1600034012,
+              "rowIndex": 2,
+              "columnIndex": 0
+            },
+            "rows": [
+              {
+                "values": [
+                  {
+                    "userEnteredValue": {
+                      "stringValue": "pay_ATOMIC"
+                    }
+                  }
+                ]
+              }
+            ],
+            "fields": "userEnteredValue"
+          }
+        },
+        {
+          "appendDimension": {
+            "sheetId": 1600034012,
+            "dimension": "ROWS",
+            "length": 2000000
+          }
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 400,
+    "headers": {
+      "vary": "Origin, X-Origin, Referer",
+      "content-type": "application/json; charset=UTF-8",
+      "content-encoding": "gzip",
+      "date": "Sat, 03 Oct 2026 04:48:18 GMT",
+      "server": "ESF",
+      "x-xss-protection": "0",
+      "x-frame-options": "SAMEORIGIN",
+      "x-content-type-options": "nosniff",
+      "x-l2-request-path": "l2-managed-6",
+      "transfer-encoding": "chunked"
+    },
+    "body_bytes": 224,
+    "body": {
+      "error": {
+        "code": 400,
+        "message": "Invalid requests[1].appendDimension: This action would increase the number of cells in the workbook above the limit of 20000000 cells.",
+        "status": "INVALID_ARGUMENT"
+      }
+    }
+  }
+}

@@ -1,0 +1,119 @@
+{
+  "what": "Check 2 follow-up: getByDataFilter, row 0 and column A by sheetId, on a 20-row grid with 4 used rows: are trailing empty rows returned?",
+  "ran_at": "2026-10-03T04:53:28+00:00",
+  "elapsed_ms": 217,
+  "request": {
+    "method": "POST",
+    "url": "https://sheets.googleapis.com/v4/spreadsheets/SHEET_ID:getByDataFilter",
+    "params": {
+      "fields": "sheets(properties(sheetId,gridProperties(rowCount,columnCount)),data(startRow,startColumn,rowData(values(effectiveValue))))"
+    },
+    "body": {
+      "dataFilters": [
+        {
+          "gridRange": {
+            "sheetId": 1727956071,
+            "startRowIndex": 0,
+            "endRowIndex": 1
+          }
+        },
+        {
+          "gridRange": {
+            "sheetId": 1727956071,
+            "startColumnIndex": 0,
+            "endColumnIndex": 1
+          }
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=UTF-8",
+      "vary": "Origin, X-Origin, Referer",
+      "content-encoding": "gzip",
+      "date": "Sat, 03 Oct 2026 04:53:28 GMT",
+      "server": "ESF",
+      "x-xss-protection": "0",
+      "x-frame-options": "SAMEORIGIN",
+      "x-content-type-options": "nosniff",
+      "x-l2-request-path": "l2-managed-6",
+      "transfer-encoding": "chunked"
+    },
+    "body_bytes": 1509,
+    "body": {
+      "sheets": [
+        {
+          "properties": {
+            "sheetId": 1727956071,
+            "gridProperties": {
+              "rowCount": 20,
+              "columnCount": 3
+            }
+          },
+          "data": [
+            {
+              "rowData": [
+                {
+                  "values": [
+                    {
+                      "effectiveValue": {
+                        "stringValue": "Payment ID"
+                      }
+                    },
+                    {
+                      "effectiveValue": {
+                        "stringValue": "Amount"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "rowData": [
+                {
+                  "values": [
+                    {
+                      "effectiveValue": {
+                        "stringValue": "Payment ID"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "values": [
+                    {
+                      "effectiveValue": {
+                        "stringValue": "pay_A"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "values": [
+                    {
+                      "effectiveValue": {
+                        "stringValue": "pay_B"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "values": [
+                    {
+                      "effectiveValue": {
+                        "stringValue": "pay_C"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

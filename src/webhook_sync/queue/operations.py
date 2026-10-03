@@ -19,7 +19,7 @@ from webhook_sync.clock import to_db_text
 from webhook_sync.config import RetryProfile
 from webhook_sync.db.schema import attempts, jobs
 from webhook_sync.db.writer import Transaction, Writer
-from webhook_sync.queue.pause import Pauses, PauseTarget
+from webhook_sync.queue.pause import Pauses, PauseTarget, record_pause
 from webhook_sync.queue.retry import backoff, max_attempts
 
 log = logging.getLogger("webhook_sync.queue")
@@ -269,11 +269,13 @@ async def fail(
     """Record a failed attempt and move the job by its error class, in one fenced transaction.
 
     `retry`: back to waiting after the backoff (at least `retry_after`), or dead once the
-    attempts are used up. `dead`: straight to dead. `pause`: the source or sink is paused and
-    the job goes back to waiting with its attempt refunded. Returns the job's new status;
-    raises `LeaseLost` (writing nothing, pausing nothing) if the token no longer holds the job.
+    attempts are used up. `dead`: straight to dead. `pause`: the source or sink is paused, in
+    `sinks` and the cache, and the job goes back to waiting with its attempt refunded. Returns
+    the job's new status; raises `LeaseLost` (writing nothing, pausing nothing) if the token no
+    longer holds the job.
     """
     at = to_db_text(now)
+    paused = {"source": job.source, "sink": job.sink, None: None}[failure.pause_target]
     status: Literal["waiting", "dead"] = "waiting"
     moves: dict[str, object] = {"rerun": 0, "run_after": at}
     if failure.error_class == "pause":
@@ -308,10 +310,13 @@ async def fail(
         if not await tx.execute(statement):
             raise LeaseLost(job.id)
         await _record_attempt(tx, job, outcome=failure.error_class, error=failure.error, now=now)
-    if failure.pause_target == "source":
-        pauses.pause("source", job.source)
-    elif failure.pause_target == "sink":
-        pauses.pause("sink", job.sink)
+        newly_paused = paused is not None and await record_pause(
+            tx, failure.pause_target or "sink", paused, failure.error, now=now
+        )
+    if paused is not None:
+        pauses.pause(failure.pause_target or "sink", paused)
+        if newly_paused and pauses.on_pause is not None:
+            await pauses.on_pause(failure.pause_target or "sink", paused, failure.error)
     return status
 
 
