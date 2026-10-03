@@ -215,6 +215,9 @@ How far back a source lets us list events: 30 days for Stripe. Past it, only a f
 The sweeper's hourly second read of a source with no events list (Razorpay): every payment created in the last 7 days and every refund created in the last 21, so a change to an older payment reaches its row.
 _Avoid_: re-fetch (one payment by id), poll (too vague)
 
+**Re-list floor**:
+A list's first checkpoint; the re-list never reads items created before it, so a first start reads only its lookback and older history comes by backfill.
+
 **Synthetic event**:
 An event the sweeper builds from a listed payment or refund when the source has no events list (Razorpay), with origin `sweep` and the id `sweep:<entity id>:<state hash>`. It triggers a fetch like any other event.
 _Avoid_: fake event (a **fake** is a test stand-in)
@@ -245,10 +248,10 @@ The second, loopback-only listener the server runs beside the public one; it ser
 _Avoid_: admin port, admin page
 
 **Alert**:
-A short message posted to the `[alerts] url` Slack or Discord webhook when a source or sink pauses, jobs go dead, the sheet changed during a write or a currency is unknown; at most one per kind an hour, the suppressed repeats counted in the next, ids and counts only.
+A short message posted to the `[alerts] url` Slack or Discord webhook when a source or sink pauses, jobs go dead, the sheet changed during a write, a currency is unknown or the sweeper finds events no delivery brought; at most one per kind an hour, the suppressed repeats counted in the next, ids and counts only.
 
 **Heartbeat URL**:
-An outside service the sweeper pings after every sweep; when the pings stop, it tells a person the service is down. Also called a dead-man's switch.
+An outside service the sweeper pings after every healthy sweep pass (every due slice and re-list stored; none while paused or after a failure); when the pings stop, it tells a person the service is down. Also called a dead-man's switch.
 _Avoid_: health check (that is the `/health` endpoint an outside monitor calls)
 
 ## Testing

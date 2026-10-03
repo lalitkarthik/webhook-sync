@@ -143,7 +143,9 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
             app.state.runners = runners
             runners.start()
             # The sweeper shares the fetch's adapter, so lists and fetches share one bucket.
-            loops = [asyncio.create_task(Sweeper(writer, razorpay, config, pauses=pauses).run())]
+            sweeper = Sweeper(writer, razorpay, config, pauses=pauses, alerter=alerter)
+            app.state.sweeper = sweeper  # backfill and sweep on demand
+            loops = [asyncio.create_task(sweeper.run())]
             if sheet_verify is not None:
                 loops.append(asyncio.create_task(sheet_verify.run_hourly()))
             full_verify = FullVerify(
