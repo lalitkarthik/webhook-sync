@@ -196,9 +196,7 @@ class SheetVerify:
                 findings.append(Finding("sheet_missing", payment_id, repair=payment_id))
                 continue
             if len(rows) > 1:
-                findings.append(
-                    Finding("sheet_duplicate", payment_id, _rows_named(rows))
-                )
+                findings.append(Finding("sheet_duplicate", payment_id, _rows_named(rows)))
             cells = rows[0][1]
             differs = [
                 column.header
