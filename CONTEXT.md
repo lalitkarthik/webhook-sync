@@ -142,6 +142,9 @@ A running worker pushing its lease forward while it is still working.
 The loop that runs one stage's jobs: it claims, heartbeats, completes or fails each job, reaps expired leases and releases unfinished ones at shutdown. A stage (the ledger worker, the flusher) plugs in only the work itself.
 _Avoid_: worker pool, consumer
 
+**Batch stage**:
+A stage whose stage runner claims up to 200 jobs and makes one work call for them all, completing or failing them together; the flusher is one. It flushes every 3 s while jobs wait, or at once when 200 are due.
+
 **Reaper**:
 The loop that returns jobs whose lease has expired to waiting.
 
