@@ -171,7 +171,7 @@ A finding that cites nothing it breaks is an **idea**: reported, never built.
 
 A session hands off at **40%** of its context window and never goes past **45%**. The hook in
 `.claude/settings.json` runs `scripts/claude/context-guard.py` after every tool call and prompt:
-it warns at 35%, says "hand off now" at 40%, and from 45% repeats on every call that the session
+it says nothing below 40%, says "hand off now" at 40%, and from 45% repeats on every call that the session
 is over the hard limit. On the 40% notice, follow [prompts/handoff.md](prompts/handoff.md). Over
 45%, do only what the hand-off itself needs: write the hand-off file, start the successor, end
 the turn.
