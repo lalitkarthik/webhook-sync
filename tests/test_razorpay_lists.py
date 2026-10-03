@@ -134,3 +134,29 @@ async def test_150_payments_created_in_one_second_all_come_back_each_once(
         ("1790970001", None),  # to = the oldest created_at seen + 1: nothing new
         ("1790970001", "100"),  # so that two-second window is paged with skip
     ]
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "refused"),
+    [
+        (1790969938000, 1790970020000, "milliseconds"),
+        (1790969938, 1790970020000, "milliseconds"),
+        (1790970020, 1790969938, "after its end"),
+    ],
+)
+@pytest.mark.parametrize("path", ["/v1/payments", "/v1/refunds"])
+async def test_bounds_in_milliseconds_or_a_start_after_the_end_are_refused_before_any_call(
+    adapter: RazorpayAdapter,
+    razorpay: respx.MockRouter,
+    path: str,
+    start: int,
+    end: int,
+    refused: str,
+) -> None:
+    route = razorpay.get(path).respond(200, json={"entity": "collection", "items": []})
+    list_ = adapter.list_payments if path == "/v1/payments" else adapter.list_refunds
+
+    with pytest.raises(ValueError, match=refused):
+        await list_(start, end)
+
+    assert not route.called
