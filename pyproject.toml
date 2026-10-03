@@ -60,6 +60,7 @@ pythonpath = ["tests"]
 markers = [
     "unrecorded: uses Razorpay's documented samples, not recorded deliveries (Q113)",
     "posix: needs POSIX signals and a direct child process; skipped on Windows (deploys run Linux)",
+    "smoke: drives the real wsync serve end to end; run on every push to main (uv run pytest -m smoke)",
 ]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
