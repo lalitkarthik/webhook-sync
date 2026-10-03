@@ -110,7 +110,7 @@ def test_migrations_apply_once_across_two_starts(tmp_path: Path) -> None:
     with sqlite3.connect(tmp_path / "conf" / "data" / "webhook-sync.db") as db:
         versions = db.execute("SELECT version FROM schema_version").fetchall()
     db.close()
-    assert versions == [(1,), (2,)]
+    assert versions == [(1,), (2,), (3,)]
 
 
 def test_a_missing_secret_exits_non_zero_naming_the_variable(tmp_path: Path) -> None:
