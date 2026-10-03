@@ -14,8 +14,14 @@ then, in its own transaction, the checkpoint moves to the slice's end. An empty 
 too, so a quiet account's checkpoint keeps up. A sweep stopped mid-slice re-reads that slice
 next time, and insert-if-absent stores nothing twice.
 
+Each list is also re-listed hourly over its last 7 days (payments) or 21 days (refunds), so a
+later change to an item the slices have passed (a capture, a fee, a refund reaching processed)
+is a new state hash, so a new event (Q108). Backfill lists payments created on past local dates
+as `backfill:` events and never touches a checkpoint (Q156).
+
 The app's lifespan runs `run`: one sweep after a random 0-30 s delay, then one every 10 minutes,
-skipped while Razorpay is paused.
+skipped while Razorpay is paused. A pass that stored every due slice, and each re-list when due,
+POSTs the heartbeat URL when one is set (Q148).
 """
 
 import asyncio
@@ -25,6 +31,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, Literal
 
+import httpx
 import sqlalchemy as sa
 from sqlalchemy.dialects import sqlite
 
@@ -61,6 +68,8 @@ RELIST_WINDOW: dict[ListName, timedelta] = {
     "refunds": timedelta(days=21),
 }
 """How far back the re-list reads each list, by creation time (Q108)."""
+HEARTBEAT_TIMEOUT = 10.0
+"""Seconds the heartbeat URL gets to answer."""
 
 type Sleep = Callable[[float], Awaitable[None]]
 
@@ -91,10 +100,31 @@ class Sweeper:
         await self._sleep(self._rng.uniform(0, START_DELAY.total_seconds()))
         while True:
             try:
-                await self.sweep()
+                if await self.sweep():
+                    await self._heartbeat()
             except Exception:
                 log.exception("sweep failed; the next one runs on time")
             await self._sleep(SWEEP_EVERY.total_seconds())
+
+    async def _heartbeat(self) -> None:
+        """POST the heartbeat URL after a healthy pass (Q148): one try, 10 s, a failure
+        logged. No URL, no ping."""
+        url = self._config.sweeper.heartbeat_url
+        if not url:
+            return
+        try:
+            async with httpx.AsyncClient(timeout=HEARTBEAT_TIMEOUT) as client:
+                answer = await client.post(url)
+            answer.raise_for_status()
+        except httpx.HTTPError as error:
+            status = (
+                error.response.status_code if isinstance(error, httpx.HTTPStatusError) else None
+            )
+            log.warning(
+                "heartbeat not sent: %s", type(error).__name__, extra={"http_status": status}
+            )
+            return
+        log.info("heartbeat sent")
 
     async def sweep(self) -> bool:
         """One sweep of both lists; True when every due slice of each was stored, and its

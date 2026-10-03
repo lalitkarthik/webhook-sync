@@ -16,7 +16,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from email.utils import format_datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -697,3 +697,127 @@ async def test_a_backfill_of_past_local_dates_stores_backfill_events_and_moves_n
         str(at(datetime(2026, 9, 1, tzinfo=IST))),
         str(at(datetime(2026, 9, 11, tzinfo=IST)) - 1),
     )
+
+
+# The heartbeat (#40): one POST after each healthy pass, so an outside service notices silence.
+
+HEARTBEAT = "https://hc-ping.test/a-check"
+
+
+def requests(router: respx.MockRouter) -> list[httpx.Request]:
+    """Every request the router answered, in order."""
+    calls = cast(list[respx.models.Call], list(router.calls))
+    return [call.request for call in calls]
+
+
+def heartbeats(router: respx.MockRouter) -> list[httpx.Request]:
+    return [request for request in requests(router) if request.url.host == "hc-ping.test"]
+
+
+@pytest.fixture
+def heartbeat_config(swept_config: Config) -> Config:
+    return replace(swept_config, sweeper=replace(swept_config.sweeper, heartbeat_url=HEARTBEAT))
+
+
+async def test_with_a_heartbeat_url_each_healthy_pass_is_followed_by_one_post(
+    heartbeat_config: Config,
+    data_dir: Path,
+    outside: Outside,
+    read_rows: ReadRows,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sweeper_module, "SWEEP_EVERY", timedelta(milliseconds=200))
+    outside.router.post(HEARTBEAT).mock(return_value=httpx.Response(200, text="OK"))
+
+    async with running(heartbeat_config, data_dir):
+        await wait_for(read_rows, CAUGHT_UP, [{"n": 2}])
+        for _ in range(500):
+            if len(heartbeats(outside.router)) >= 2:
+                break
+            await asyncio.sleep(0.01)
+        passes = len(outside.razorpay.calls_to("/v1/refunds"))  # the walk's probe, at least
+
+    pings = heartbeats(outside.router)
+    assert len(pings) >= 2
+    assert all(ping.method == "POST" for ping in pings)
+    assert len(pings) <= passes
+
+
+async def test_no_heartbeat_follows_a_failed_pass(
+    heartbeat_config: Config,
+    data_dir: Path,
+    outside: Outside,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="webhook_sync.sweeper")
+    outside.router.post(HEARTBEAT).mock(return_value=httpx.Response(200, text="OK"))
+    outside.router.get(f"{RAZORPAY_API}/v1/refunds").mock(
+        return_value=httpx.Response(503, json={"error": {"description": "down"}})
+    )
+
+    async with running(heartbeat_config, data_dir):
+        for _ in range(500):
+            if any(r.message == "sweep stopped: the list failed" for r in caplog.records):
+                break
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.1)
+
+    assert any(r.message == "sweep stopped: the list failed" for r in caplog.records)
+    assert heartbeats(outside.router) == []
+
+
+async def test_no_heartbeat_while_razorpay_is_paused(
+    heartbeat_config: Config,
+    data_dir: Path,
+    writer: Writer,
+    outside: Outside,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="webhook_sync.sweeper")
+    outside.router.post(HEARTBEAT).mock(return_value=httpx.Response(200, text="OK"))
+    async with writer.transaction() as tx:
+        await record_pause(tx, "source", "razorpay", "Razorpay answered HTTP 401", now=NOW)
+
+    async with running(heartbeat_config, data_dir):
+        for _ in range(500):
+            if any(r.message == "sweep skipped: Razorpay is paused" for r in caplog.records):
+                break
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.1)
+
+    assert any(r.message == "sweep skipped: Razorpay is paused" for r in caplog.records)
+    assert heartbeats(outside.router) == []
+
+
+async def test_with_no_heartbeat_url_a_healthy_pass_posts_nowhere(
+    swept_config: Config, data_dir: Path, outside: Outside, read_rows: ReadRows
+) -> None:
+    async with running(swept_config, data_dir):
+        await wait_for(read_rows, CAUGHT_UP, [{"n": 2}])
+        await asyncio.sleep(0.1)
+
+    hosts = {request.url.host for request in requests(outside.router)}
+    assert hosts <= {"api.razorpay.test", "oauth2.googleapis.com", "sheets.googleapis.com"}
+    assert "api.razorpay.test" in hosts
+
+
+async def test_a_heartbeat_that_fails_is_logged_and_not_retried(
+    heartbeat_config: Config,
+    data_dir: Path,
+    outside: Outside,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="webhook_sync.sweeper")
+    outside.router.post(HEARTBEAT).mock(return_value=httpx.Response(500))
+
+    async with running(heartbeat_config, data_dir):
+        for _ in range(500):
+            if any(r.message.startswith("heartbeat not sent") for r in caplog.records):
+                break
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.1)
+
+    assert [r.message for r in caplog.records if r.message.startswith("heartbeat")] == [
+        "heartbeat not sent: HTTPStatusError"
+    ]
+    assert len(heartbeats(outside.router)) == 1
