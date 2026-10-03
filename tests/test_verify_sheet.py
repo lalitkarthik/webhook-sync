@@ -197,8 +197,11 @@ async def checked(
 
 
 def last_verify(sheets: FakeSheets) -> str | None:
-    rows = dict([*row, None][:2] for row in sheets.tab(SYNC_STATUS).values()[1:])
-    return rows.get("Last verify")
+    """Sync status's Last verify value, None while blank."""
+    for row in sheets.tab(SYNC_STATUS).values()[1:]:
+        if row[:1] == ["Last verify"]:
+            return row[1] if len(row) > 1 else None
+    return None
 
 
 async def test_a_clean_sheet_gives_0_differences_with_exactly_one_read(
