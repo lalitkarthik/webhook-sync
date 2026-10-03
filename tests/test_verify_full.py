@@ -522,6 +522,8 @@ async def test_a_payment_a_stalled_sweeper_never_brought_in_is_missing(
                     checkpoint_at=to_db_text(EARLY),
                     last_sweep_at=to_db_text(EARLY),
                     last_sweep_stored=0,
+                    relist_floor_at=to_db_text(EARLY - timedelta(days=30)),
+                    first_start_at=to_db_text(EARLY - timedelta(days=30)),
                 )
             )
     monkeypatch.setattr(sweeper_module, "START_DELAY", timedelta(days=365))
