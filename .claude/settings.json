@@ -38,5 +38,30 @@
         ]
       }
     ]
+  },
+  "permissions": {
+    "deny": [
+      "Bash(gh pr merge *)",
+      "Bash(gh pr edit*human-approved*)",
+      "Bash(gh issue edit*human-approved*)",
+      "Bash(gh api*human-approved*)",
+      "Bash(gh api*labels*--input*)",
+      "Bash(gh api*--input*labels*)",
+      "Bash(gh label *)",
+      "Bash(gh variable set *)",
+      "Bash(gh api *rulesets*)",
+      "Bash(gh api *protection*)",
+      "Bash(git push*--force*)",
+      "Bash(git push* -f)",
+      "Bash(git push* -f *)",
+      "Bash(git push* +*)",
+      "Bash(git push* main)",
+      "Bash(git push* main *)",
+      "Bash(git push*:main)",
+      "Bash(git push*:main *)",
+      "Bash(git push*/heads/main)",
+      "Bash(git push*/heads/main *)",
+      "Bash(*automerge.py*--appr*)"
+    ]
   }
 }

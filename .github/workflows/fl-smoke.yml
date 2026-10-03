@@ -1,0 +1,87 @@
+name: feature-loop smoke
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  smoke:
+    if: ${{ !startsWith(github.event.head_commit.message, 'revert') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v7
+      # .python-version says 3.14; uv installs it for the project, setup-python serves the gate scripts.
+      - run: uv python install
+      - run: uv sync --locked
+      - name: Smoke
+        id: smoke
+        run: python scripts/claude/ci_check.py --only smoke
+      - name: Switch auto-merge off, revert, tell the user
+        if: failure() && steps.smoke.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.FL_REVERT_TOKEN }}
+        run: |
+          set +e
+          short="${GITHUB_SHA::7}"
+          branch="revert-$short"
+          logs="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
+          # 1. Kill switch first, before anything that can fail.
+          if gh variable set AUTOMERGE --body off; then
+            switch="Auto-merge is off."
+          else
+            switch="Switching auto-merge off FAILED: run gh variable set AUTOMERGE --body off yourself."
+          fi
+
+          # 2. Best-effort revert: open the revert PR and arm it; fall back to --admin when --auto is refused or ignored.
+          revert=failed
+          pr=""
+          if git config user.name "feature-loop smoke" \
+            && git config user.email "feature-loop-smoke@users.noreply.github.com" \
+            && git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            && git checkout -b "$branch" \
+            && git revert --no-edit "$GITHUB_SHA" \
+            && git push origin "$branch"; then
+            pr="$(gh pr create --base main --head "$branch" --title "revert: $short broke the smoke test" \
+              --body "Automatic revert. Smoke failed after $short landed: $logs")"
+            if [ -n "$pr" ]; then
+              if gh pr merge "$branch" --squash --delete-branch --auto; then
+                state="$(gh pr view "$branch" --json state --jq .state)"
+                armed="$(gh pr view "$branch" --json autoMergeRequest --jq '.autoMergeRequest != null')"
+                if [ "$state" = "MERGED" ]; then
+                  revert=merged
+                elif [ "$armed" = "true" ]; then
+                  revert=armed
+                fi
+              fi
+              if [ "$revert" = failed ] && gh pr merge "$branch" --squash --delete-branch --admin; then
+                revert=merged
+              fi
+            fi
+          fi
+
+          # 3. Always tell the user what actually happened.
+          case "$revert" in
+            merged)
+              title="Smoke failed on main at $short; reverted"
+              what="The commit was reverted ($pr)." ;;
+            armed)
+              title="Smoke failed on main at $short; revert PR open and armed, not merged yet"
+              what="A revert PR is open with auto-merge armed but has not merged yet: $pr. Check that it lands." ;;
+            *)
+              title="Smoke failed on main at $short; NOT reverted"
+              what="The automatic revert failed${pr:+ (PR: $pr)}. main still contains $short: revert it by hand." ;;
+          esac
+          body="$what $switch Logs: $logs. After fixing, turn auto-merge back on with: gh variable set AUTOMERGE --body on"
+          gh issue create --label ready-for-human --title "$title" --body "$body" \
+            || gh issue create --title "$title" --body "$body"
+
+          # 4. Stay red unless the revert landed.
+          [ "$revert" = merged ]

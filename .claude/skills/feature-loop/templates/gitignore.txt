@@ -1,0 +1,7 @@
+# feature-loop
+.claude/worktrees/
+.fl-ticket.json
+.fl-stop-count.json
+.verify/
+verification/
+.playwright-cli/

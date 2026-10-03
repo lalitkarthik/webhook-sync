@@ -17,14 +17,14 @@ Turns the feature's tickets into waves under the wave rule in [../workflow.md](.
 
    Parallelism cap: none (1 implementer while Docker runs).
 
-   | Wave | Ticket | Areas | Blocked by |
-   | --- | --- | --- | --- |
-   | 1 | #12 Add order model | `src/orders/` | — |
-   | 1 | #13 Add price feed | `src/feeds/` | — |
-   | 2 | #14 Show order history | `src/orders/`, `src/web/` | #12 |
+   | Wave | Ticket | Worker | Areas | ACs | Blocked by |
+   | --- | --- | --- | --- | --- | --- |
+   | 1 | #12 Add order model | opus-medium | `src/orders/` | 3 | — |
+   | 1 | #13 Add price feed | sonnet-high | `src/feeds/` | 2 | — |
+   | 2 | #14 Show order history | opus-high | `src/orders/`, `src/web/` | 4 | #12 |
    ```
 
 5. **Show the user** the table and any edges you added.
 
-Done when every open ticket sits in exactly one wave, no two tickets in one wave share an area,
+Done when every open ticket sits in exactly one wave and carries exactly one `worker:` label, no two tickets in one wave share an area,
 and every blocker of a ticket sits in an earlier wave.

@@ -1,0 +1,38 @@
+name: feature-loop
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v7
+      # .python-version says 3.14; uv installs it for the project, setup-python serves the gate scripts.
+      - run: uv python install
+      - run: uv sync --locked
+      - name: Typecheck, lint, suite, every acceptance test, boundaries
+        run: python scripts/claude/ci_check.py
+  risk-gate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Auto-merge risk tier
+        run: |
+          if [ "${{ contains(github.event.pull_request.labels.*.name, 'human-approved') }}" = "true" ]; then
+            echo "Held changes approved by the user."; exit 0
+          fi
+          python scripts/claude/risk_tier.py --base "origin/${{ github.base_ref }}"

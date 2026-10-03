@@ -7,9 +7,10 @@ How the engineering skills read and write this repo's domain documentation. The 
 
 - **`CONTEXT.md`** at the repo root — the glossary, one line per term. It is the source of truth
   for the project's vocabulary.
-- **`docs/design/`**, when it exists — the project design: `overview.md`, `build-order.md`,
-  `grilling-log.md` (numbered `Q#` decisions), `decisions/`, `research-gaps.md`, `audit/`. It is
-  the source of truth for everything it covers; specs link to it rather than restating it.
+- **`docs/design/`**, when it exists — the project design: `00-overview.md` (`overview.md` in
+  older projects), `build-order.md`, `grilling-log.md` (numbered `Q#` decisions), `decisions/`,
+  `research-gaps.md`, `audit/`. It is the source of truth for everything it covers; specs link
+  to it rather than restating it.
 - **The decisions folder** — `docs/design/decisions/` when `docs/design/` exists, otherwise
   `docs/decisions/`. Records are named `NNNN-<slug>.md`. Read the ones that touch the area you
   are about to work in.

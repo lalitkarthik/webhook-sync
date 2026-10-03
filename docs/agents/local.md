@@ -16,7 +16,9 @@ equivalent is [cloud.md](cloud.md).
 | Bash for the hooks | on Windows, Git for Windows provides it; Claude Code runs hooks with it | `bash --version` |
 | Dependencies | `uv sync` in the repo root | `uv run python -V` prints 3.14.x |
 | Secrets in `.env` | copy the names from `.env.example`; `python scripts/set_env.py google <service-account.json>` writes `GOOGLE_SERVICE_ACCOUNT_B64`; add the three `RAZORPAY_*` test-mode values; `.env` is git-ignored | `python scripts/set_env.py show` lists the names, never values |
-| Optional: extra Claude accounts | `~/.claude/accounts/cx.mjs` (Node), used by the orchestrator's Accounts route | `node ~/.claude/accounts/cx.mjs pick` |
+| Claude accounts runner | `~/.claude/accounts/cx.mjs` (Node): v2 starts the orchestrator and every ticket worker with it | `node ~/.claude/accounts/cx.mjs pick` prints an account |
+| Worker definitions | `~/.claude/agents/fl-*.md` (implementers, test author, verifier, reviewer) | the files exist |
+| Pre-commit hook | `uv run pre-commit install` (ruff check and format, from `uv.lock`) | `.git/hooks/pre-commit` exists |
 | Optional: Herdr | `HERDR_ENV=1` switches the loop to Herdr tabs (`.claude/skills/feature-loop/herdr.md`) | — |
 
 Only `wsync serve` and the live research checks need the secrets; the test suite never calls
@@ -32,7 +34,8 @@ Run once per new machine or after a long break, and report each line:
 | Hooks run | after the first tool call, no hook error is shown | fix the Python/bash rows above |
 | GitHub | `gh api 'repos/{owner}/{repo}/issues?per_page=1' --jq length` | `gh auth login` |
 | Python | `uv run python -V` | `uv python install 3.14 && uv sync`; never lower the version |
-| Branch is green | `uv run pyright`, `uv run ruff check . && uv run ruff format --check .`, `uv run pytest` | report the failure before planning or building on it |
+| Branch is green | `uv run pyright`, `uv run ruff check . && uv run ruff format --check .`, `uv run pytest` (tests marked `posix` skip on Windows) | report the failure before planning or building on it |
+| Gate is green | `python scripts/claude/ci_check.py --acs ""` and `python scripts/claude/ci_check.py --only smoke` print `PASS` | fix it before planning: every ticket's gate runs these |
 | Worktrees | `git worktree add ../wt-smoke -b smoke/wt && git worktree remove ../wt-smoke && git branch -D smoke/wt` | run implementers one at a time in the main checkout |
 | Secrets (only when a step needs live calls) | `python scripts/set_env.py show`; `RAZORPAY_KEY_ID` starts `rzp_test_` | set them as above; a `rzp_live_` key: stop and tell the owner |
 
@@ -58,11 +61,18 @@ Run once per new machine or after a long break, and report each line:
 One step of `docs/design/build-order.md` at a time, each in its own sessions:
 
 1. **Plan** (one session): `/feature-loop plan <step>`; ends with the feature issue, its tickets
-   and waves, and an orchestrator hand-off comment on the feature issue.
-2. **Build** (a fresh session): `/feature-loop orchestrate #<feature issue>`; ends with one PR.
-3. **Merge**: the owner merges the PR, or tells a session to merge it once CI is green and it
-   merges cleanly.
-4. **Clean up**: tell the session "the PR is merged" (Phase C), then plan the next step.
+   (acceptance criteria and a worker label each), their failing acceptance tests, the waves, and
+   one approval from the owner. On approval it starts the build itself
+   (`cx run --detach yes --name orch-<slug>`), and posts the orchestrator hand-off on the issue.
+2. **Build** (unattended): the orchestrator gates, reviews and verifies each ticket, opens one PR
+   and merges it with `scripts/claude/automerge.py`, unless the risk gate holds it. Progress shows
+   on the feature issue and in `~/.claude/accounts/runs/orch-<slug>.json`. To start or resume it
+   by hand: `/feature-loop orchestrate #<feature issue>`.
+3. **Merge**: a held PR (it touches `scripts/claude/`, `.claude/` or `.github/`, or the gate
+   flagged it) is merged by the owner; `gh pr merge` is denied to sessions.
+4. **Clean up**: the orchestrator runs Phase C after its own merge; after a held PR, tell a
+   session "the PR is merged". Then plan the next step. `/feature-loop audit` checks a merged
+   feature or the whole product.
 
 A planning session's last message gives the owner the exact prompt for step 2, and its
 hand-off for the next planning session is a comment on the feature issue it just planned.

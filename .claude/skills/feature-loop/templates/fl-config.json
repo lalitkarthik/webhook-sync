@@ -1,0 +1,9 @@
+{
+  "typecheck": "{{TYPECHECK}}",
+  "lint": "{{LINT}}",
+  "full_suite": "{{FULL_SUITE_NO_AC}}",
+  "ac_cmd": "{{AC_CMD}}",
+  "mutation_cmd": "{{MUTATION_CMD}}",
+  "boundaries_cmd": "{{BOUNDARIES_CMD}}",
+  "smoke_cmd": "{{SMOKE_CMD}}"
+}

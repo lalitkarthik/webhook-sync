@@ -1,6 +1,6 @@
 # Hand-off file format
 
-Written when a session reaches 60% of its context window, and at the end of planning. The
+Written when a session reaches 40% of its context window, and at the end of planning. The
 procedure is `.claude/skills/feature-loop/prompts/handoff.md`. Save it outside the repo as
 `<temp dir>/feature-loop-handoff-<role>-<slug>-<yyyymmdd-hhmm>.md`. Redact secrets. Link to
 issues, specs, commits and diffs instead of repeating them.
@@ -22,7 +22,8 @@ issues, specs, commits and diffs instead of repeating them.
 - <ticket or step> — <one line>
 
 ## In flight
-- <ticket> — status `<done|question|running>`, worktree `<path>`, branch `ticket/<n>-<slug>`
+- <ticket> — status `<done|question|running|gate|review|verify>`, worktree `<path>`, branch
+  `ticket/<n>-<slug>`
 
 ## Not started
 - <ticket> — blocked by <…> / waiting for wave <k>
