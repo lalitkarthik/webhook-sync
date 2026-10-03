@@ -18,7 +18,15 @@ from webhook_sync.queue.operations import (
     reclaim,
     release,
 )
-from webhook_sync.queue.pause import Pauses, PauseTarget
+from webhook_sync.queue.pause import (
+    Pauses,
+    PauseTarget,
+    Resumed,
+    load_pauses,
+    record_pause,
+    register,
+    resume,
+)
 from webhook_sync.queue.retry import backoff, max_attempts
 from webhook_sync.queue.runner import Done, Runners, StageFailed, StageRunner, Work, run_reaper
 
@@ -30,6 +38,7 @@ __all__ = [
     "LeaseLost",
     "PauseTarget",
     "Pauses",
+    "Resumed",
     "Runners",
     "StageFailed",
     "StageRunner",
@@ -40,9 +49,13 @@ __all__ = [
     "enqueue",
     "fail",
     "heartbeat",
+    "load_pauses",
     "max_attempts",
     "reap",
     "reclaim",
+    "record_pause",
+    "register",
     "release",
+    "resume",
     "run_reaper",
 ]
