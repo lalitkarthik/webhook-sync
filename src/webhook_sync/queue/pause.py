@@ -40,6 +40,12 @@ class Pauses:
     def pause(self, target: PauseTarget, name: str) -> None:
         (self._sources if target == "source" else self._sinks).add(name)
 
+    async def stored(self, target: PauseTarget, name: str, reason: str, *, new: bool) -> None:
+        """Set a pause just stored in `sinks`, and alert when it is `new` there."""
+        self.pause(target, name)
+        if new and self.on_pause is not None:
+            await self.on_pause(target, name, reason)
+
     def resume(self, name: str) -> None:
         self._sources.discard(name)
         self._sinks.discard(name)
@@ -73,6 +79,16 @@ async def record_pause(
         ).returning(sinks.c.name)
     )
     return bool(stored)
+
+
+async def pause(
+    writer: Writer, pauses: Pauses, target: PauseTarget, name: str, reason: str, *, now: datetime
+) -> None:
+    """Pause a source or sink outside any job (the sweeper's list refused): stored in `sinks`,
+    set in the cache, and alerted when new."""
+    async with writer.transaction() as tx:
+        new = await record_pause(tx, target, name, reason, now=now)
+    await pauses.stored(target, name, reason, new=new)
 
 
 async def register(writer: Writer, names: dict[str, PauseTarget]) -> None:
