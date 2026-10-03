@@ -15,9 +15,10 @@ too, so a quiet account's checkpoint keeps up. A sweep stopped mid-slice re-read
 next time, and insert-if-absent stores nothing twice.
 
 Each list is also re-listed hourly over its last 7 days (payments) or 21 days (refunds), never
-before its first checkpoint, so a later change to an item the slices have passed (a capture, a fee, a refund reaching processed)
-is a new state hash, so a new event (Q108). Backfill lists payments created on past local dates
-as `backfill:` events and never touches a checkpoint (Q156).
+before its first checkpoint, so a later change to an item the slices have passed (a capture, a
+fee, a refund reaching processed) is a new state hash, so a new event (Q108). Backfill lists
+payments created on past local dates as `backfill:` events and never touches a checkpoint
+(Q156).
 
 The app's lifespan runs `run`: one sweep after a random 0-30 s delay, then one every 10 minutes,
 skipped while Razorpay is paused. A pass that stored every due slice, and each re-list when due,
