@@ -36,7 +36,8 @@ from support import (
 )
 from time_machine import TimeMachineFixture
 
-from webhook_sync.config import Config, SweeperConfig
+from webhook_sync.alerts import SILENT_WEBHOOK_ADVICE
+from webhook_sync.config import AlertsConfig, Config, SweeperConfig
 from webhook_sync.db.writer import Writer
 from webhook_sync.queue import record_pause
 from webhook_sync.queue import runner as runner_module
@@ -548,6 +549,7 @@ async def test_a_payment_captured_after_it_was_swept_is_re_listed_and_its_row_su
 
     async with running(swept_config, data_dir):
         await wait_for(read_rows, row, [{"status": "authorized", "fee_minor": None}])
+        await wait_for(read_rows, CAUGHT_UP, [{"n": 2}])  # this pass's re-list check is done
         fake.payments["pay_Tj9rKBOXWcsMeE"] = CAPTURED
         fake.fetches["pay_Tj9rKBOXWcsMeE"] = CAPTURED
         await an_hour_later(clock, fake)
@@ -821,3 +823,176 @@ async def test_a_heartbeat_that_fails_is_logged_and_not_retried(
         "heartbeat not sent: HTTPStatusError"
     ]
     assert len(heartbeats(outside.router)) == 1
+
+
+# Silent webhooks (#40): events reaching us only through the sweeper raise `silent_webhook`.
+
+HOOK = "https://hooks.test/alerts"
+RE_ENABLE = SILENT_WEBHOOK_ADVICE
+
+
+@pytest.fixture
+def alerting_config(swept_config: Config) -> Config:
+    return replace(swept_config, alerts=AlertsConfig(url=HOOK))
+
+
+def alert_texts(router: respx.MockRouter) -> list[str]:
+    return [
+        json.loads(request.content)["text"]
+        for request in requests(router)
+        if str(request.url) == HOOK
+    ]
+
+
+async def wait_for_alert(router: respx.MockRouter) -> None:
+    for _ in range(500):
+        if alert_texts(router):
+            return
+        await asyncio.sleep(0.01)
+
+
+@pytest.mark.usefixtures("frequent_sweeps")
+async def test_an_old_payment_found_only_by_the_sweep_raises_one_silent_webhook_alert(
+    alerting_config: Config,
+    data_dir: Path,
+    outside: Outside,
+    read_rows: ReadRows,
+    clock: TimeMachineFixture,
+) -> None:
+    outside.router.post(HOOK).mock(return_value=httpx.Response(200))
+    fake = outside.razorpay
+    listed = recorded_listed_payments()
+    # The first start's lookback is history, not missed deliveries: no alert.
+    fake.payments["pay_Tj64grZUMO3PEj"] = listed["pay_Tj64grZUMO3PEj"]
+    async with running(alerting_config, data_dir):
+        await wait_for(read_rows, CAUGHT_UP, [{"n": 2}])
+        await asyncio.sleep(0.1)
+    assert alert_texts(outside.router) == []
+
+    # An hour on, a payment created 50 minutes ago that no delivery brought is swept; then a
+    # second one, within the hour.
+    await an_hour_later(clock, fake)
+    fake.payments["pay_Tj66x2JuEXjIdB"] = {
+        **listed["pay_Tj66x2JuEXjIdB"],
+        "created_at": at(NOW + timedelta(minutes=11)),
+    }
+    async with running(alerting_config, data_dir):
+        await wait_for_alert(outside.router)
+        fake.payments["pay_Tj9rKBOXWcsMeE"] = {
+            **listed["pay_Tj9rKBOXWcsMeE"],
+            "created_at": at(AN_HOUR_ON - timedelta(minutes=8)),  # in the next overlap
+        }
+        fake.now = AN_HOUR_ON + timedelta(minutes=5)
+        await wait_for(
+            read_rows,
+            "SELECT count(*) AS n FROM events WHERE payment_key = 'pay_Tj9rKBOXWcsMeE'",
+            [{"n": 1}],
+        )
+        await wait_for(
+            read_rows,
+            "SELECT suppressed_count FROM alerts WHERE kind = 'silent_webhook'",
+            [{"suppressed_count": 1}],
+        )
+
+    [text] = alert_texts(outside.router)
+    assert text.startswith("webhook-sync silent_webhook: ")
+    assert "pay_Tj66x2JuEXjIdB" in text
+    assert RE_ENABLE in text
+
+
+async def test_a_swept_payment_that_a_delivery_already_brought_raises_no_alert(
+    alerting_config: Config,
+    data_dir: Path,
+    outside: Outside,
+    read_rows: ReadRows,
+    clock: TimeMachineFixture,
+) -> None:
+    outside.router.post(HOOK).mock(return_value=httpx.Response(200))
+    fake = outside.razorpay
+    async with running(alerting_config, data_dir):
+        await wait_for(read_rows, CAUGHT_UP, [{"n": 2}])
+
+    # Delivered at once, then swept 50 minutes later by a server that was down meanwhile.
+    fake.payments["pay_Tj9rKBOXWcsMeE"] = {
+        **CAPTURED,
+        "created_at": at(NOW + timedelta(minutes=11)),
+    }
+    clock.move_to(NOW + timedelta(minutes=11), tick=True)
+    body, headers = sign_razorpay(recorded_delivery("Tj9sMcl7hE9PaT"), event_id="Tj9sMcl7hE9PaT")
+    await an_hour_later(clock, fake)
+    async with running(alerting_config, data_dir) as client:
+        delivered = await client.post("/webhooks/razorpay", content=body, headers=headers)
+        await wait_for(
+            read_rows,
+            "SELECT origin FROM events ORDER BY origin",
+            [{"origin": "delivery"}, {"origin": "sweep"}],
+        )
+        await asyncio.sleep(0.1)
+
+    assert delivered.status_code == 202
+    assert alert_texts(outside.router) == []
+
+
+async def test_no_delivery_for_a_day_while_sweeps_store_events_raises_a_silent_webhook_alert(
+    alerting_config: Config,
+    data_dir: Path,
+    outside: Outside,
+    read_rows: ReadRows,
+    clock: TimeMachineFixture,
+) -> None:
+    outside.router.post(HOOK).mock(return_value=httpx.Response(200))
+    fake = outside.razorpay
+    day_before = NOW - timedelta(hours=25)
+    clock.move_to(day_before, tick=True)
+    fake.now = day_before
+    body, headers = sign_razorpay(recorded_delivery("Tj9sMcl7hE9PaT"), event_id="Tj9sMcl7hE9PaT")
+    async with running(alerting_config, data_dir) as client:
+        delivered = await client.post("/webhooks/razorpay", content=body, headers=headers)
+        await wait_for(read_rows, "SELECT origin FROM events", [{"origin": "delivery"}])
+    assert delivered.status_code == 202
+
+    # A day later, a payment made five minutes ago is swept: fresh, but no delivery since.
+    clock.move_to(NOW, tick=True)
+    fake.now = NOW
+    fake.payments["pay_Tj64grZUMO3PEj"] = {
+        **recorded_listed_payments()["pay_Tj64grZUMO3PEj"],
+        "created_at": at(NOW - timedelta(minutes=5)),
+    }
+    async with running(alerting_config, data_dir):
+        await wait_for_alert(outside.router)
+
+    [text] = alert_texts(outside.router)
+    assert "24 hours" in text
+    assert RE_ENABLE in text
+    assert await read_rows("SELECT kind FROM alerts") == [{"kind": "silent_webhook"}]
+
+
+async def test_sweeps_storing_events_with_a_recent_delivery_raise_no_alert(
+    alerting_config: Config,
+    data_dir: Path,
+    outside: Outside,
+    read_rows: ReadRows,
+    clock: TimeMachineFixture,
+) -> None:
+    outside.router.post(HOOK).mock(return_value=httpx.Response(200))
+    fake = outside.razorpay
+    hours_before = NOW - timedelta(hours=23)
+    clock.move_to(hours_before, tick=True)
+    fake.now = hours_before
+    body, headers = sign_razorpay(recorded_delivery("Tj9sMcl7hE9PaT"), event_id="Tj9sMcl7hE9PaT")
+    async with running(alerting_config, data_dir) as client:
+        await client.post("/webhooks/razorpay", content=body, headers=headers)
+        await wait_for(read_rows, "SELECT origin FROM events", [{"origin": "delivery"}])
+
+    clock.move_to(NOW, tick=True)
+    fake.now = NOW
+    fake.payments["pay_Tj64grZUMO3PEj"] = {
+        **recorded_listed_payments()["pay_Tj64grZUMO3PEj"],
+        "created_at": at(NOW - timedelta(minutes=5)),
+    }
+    async with running(alerting_config, data_dir):
+        await wait_for(read_rows, CAUGHT_UP, [{"n": 2}])
+        await asyncio.sleep(0.1)
+
+    assert await read_rows("SELECT count(*) AS n FROM events WHERE origin = 'sweep'") == [{"n": 1}]
+    assert alert_texts(outside.router) == []

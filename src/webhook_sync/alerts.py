@@ -54,6 +54,13 @@ TIMEOUT = 10.0
 DEAD_JOBS_CHECK_EVERY = 60.0
 """Seconds between dead-jobs checks (A17)."""
 
+SILENT_WEBHOOK_ADVICE = (
+    "Check the webhook settings in your Razorpay dashboard. A webhook Razorpay disabled after"
+    " 24 hours of failures stays disabled until you re-enable it under Accounts & Settings"
+    " \u203a Webhooks."
+)
+"""What the `silent_webhook` alert tells the owner to do (sweeper.md, "Silent webhooks")."""
+
 MASK = "***"
 _EMAIL = re.compile(r"[^\s@<>()\[\]{}\"',;:]+@[^\s@<>()\[\]{}\"',;:]+")
 
@@ -92,6 +99,14 @@ class Alerter:
         await self._never_raise(
             "unknown_currency",
             f"{count} payment(s) held back from the sheet, their jobs dead ({codes})",
+        )
+
+    async def silent_webhook(self, found: str) -> None:
+        """The `silent_webhook` alert: what the sweeper found that no delivery brought, and how
+        to re-enable a webhook Razorpay disabled (Q149). Never raises."""
+        await self._never_raise(
+            "silent_webhook",
+            f"Events are reaching us only through the sweeper: {found}. {SILENT_WEBHOOK_ADVICE}",
         )
 
     async def check_dead_jobs(self) -> Outcome | None:

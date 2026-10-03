@@ -139,7 +139,7 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
             app.state.runners = runners
             runners.start()
             # The sweeper shares the fetch's adapter, so lists and fetches share one bucket.
-            sweeper = Sweeper(writer, razorpay, config, pauses=pauses)
+            sweeper = Sweeper(writer, razorpay, config, pauses=pauses, alerter=alerter)
             app.state.sweeper = sweeper  # backfill and sweep on demand
             app.state.sweep_loop = asyncio.create_task(sweeper.run())
             minutely = asyncio.create_task(_write_rejection_counts_every_minute(receiver))
