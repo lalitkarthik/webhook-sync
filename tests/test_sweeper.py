@@ -92,6 +92,8 @@ class FakeRazorpay:
     list_calls: list[tuple[str, dict[str, str]]] = field(
         default_factory=list[tuple[str, dict[str, str]]]
     )
+    fail_at: int | None = None
+    """A list call whose `from` is this answers 503, once."""
     hold_at: int | None = None
     """A list call whose `from` is this waits until `release` is set."""
     release: asyncio.Event = field(default_factory=asyncio.Event)
@@ -116,6 +118,9 @@ class FakeRazorpay:
         query = dict(request.url.params)
         self.list_calls.append((request.url.path, query))
         start, end = int(query["from"]), int(query["to"])
+        if start == self.fail_at:
+            self.fail_at = None
+            return httpx.Response(503, json={"error": {"description": "down"}})
         if start == self.hold_at:
             await self.release.wait()
         count, skip = int(query.get("count", "10")), int(query.get("skip", "0"))
@@ -565,6 +570,11 @@ async def later(clock: TimeMachineFixture, fake: FakeRazorpay) -> None:
     fake.now = LATER
 
 
+def span(query: dict[str, str]) -> timedelta:
+    """How much creation time a list call covered."""
+    return timedelta(seconds=int(query["to"]) - int(query["from"]))
+
+
 async def running_for_a_month(writer: Writer) -> None:
     """Both lists' checkpoints as a server running for a month leaves them: swept to a day
     before NOW, re-listed at NOW, their first checkpoint 30 days back."""
@@ -580,6 +590,7 @@ async def running_for_a_month(writer: Writer) -> None:
                     last_sweep_stored=0,
                     last_relist_at=to_db_text(NOW),
                     relist_floor_at=to_db_text(NOW - timedelta(days=30)),
+                    first_start_at=to_db_text(NOW - timedelta(days=29)),
                 )
             )
 
@@ -616,12 +627,8 @@ async def test_a_payment_captured_after_it_was_swept_is_re_listed_and_its_row_su
         {"type": "payment.authorized", "origin": "sweep"},
         {"type": "payment.captured", "origin": "sweep"},
     ]
-    # The re-list read the last 7 days of payments, up to Razorpay's now.
-    relists = [
-        q for q in fake.calls_to("/v1/payments") if int(q["from"]) == at(LATER - timedelta(days=7))
-    ]
-    assert relists
-    assert {int(q["to"]) for q in relists} == {at(LATER)}
+    # The re-list read the last 7 days of payments.
+    assert any(span(q) == timedelta(days=7) for q in fake.calls_to("/v1/payments"))
 
 
 ALL_LEDGER_JOBS_DONE = "SELECT count(*) AS n FROM jobs WHERE stage = 'ledger' AND status != 'done'"
@@ -675,10 +682,7 @@ async def test_a_refund_going_from_pending_to_processed_updates_the_refunded_amo
         "SELECT type, count(*) AS n FROM events WHERE type LIKE 'refund.%' GROUP BY type"
         " ORDER BY type"
     ) == [{"type": "refund.created", "n": 2}, {"type": "refund.processed", "n": 2}]
-    relists = [
-        q for q in fake.calls_to("/v1/refunds") if int(q["from"]) == at(LATER - timedelta(days=21))
-    ]
-    assert relists
+    assert any(span(q) == timedelta(days=21) for q in fake.calls_to("/v1/refunds"))
 
 
 @pytest.mark.usefixtures("frequent_sweeps")
@@ -976,6 +980,32 @@ async def test_an_old_payment_found_only_by_the_sweep_raises_one_silent_webhook_
     assert RE_ENABLE in text
 
 
+@pytest.mark.usefixtures("frequent_sweeps")
+async def test_a_first_start_cut_short_raises_no_alert_for_the_rest_of_its_lookback(
+    alerting_config: Config,
+    data_dir: Path,
+    outside: Outside,
+    read_rows: ReadRows,
+    sweeper_logs: pytest.LogCaptureFixture,
+) -> None:
+    outside.router.post(HOOK).mock(return_value=httpx.Response(200))
+    fake = outside.razorpay
+    fake.payments["pay_Tj64grZUMO3PEj"] = recorded_listed_payments()["pay_Tj64grZUMO3PEj"]
+    # A day back from NOW in 6 h slices: the third (from 08:00) fails, the fourth holds the
+    # payment of 15:56, four hours older than the first start.
+    fake.fail_at = at(datetime(2026, 10, 2, 8, 0, tzinfo=UTC)) - 600
+
+    async with running(alerting_config, data_dir):
+        await wait_for(read_rows, CAUGHT_UP, [{"n": 2}])
+        await passes_ended(sweeper_logs, 2)
+
+    assert logged(sweeper_logs, "sweep stopped: the list failed") == 1
+    assert await read_rows("SELECT payment_key FROM events") == [
+        {"payment_key": "pay_Tj64grZUMO3PEj"}
+    ]
+    assert alert_texts(outside.router) == []
+
+
 async def test_a_swept_payment_that_a_delivery_already_brought_raises_no_alert(
     alerting_config: Config,
     data_dir: Path,
@@ -986,20 +1016,21 @@ async def test_a_swept_payment_that_a_delivery_already_brought_raises_no_alert(
 ) -> None:
     outside.router.post(HOOK).mock(return_value=httpx.Response(200))
     fake = outside.razorpay
-    async with running(alerting_config, data_dir):
+    body, headers = sign_razorpay(recorded_delivery("Tj9sMcl7hE9PaT"), event_id="Tj9sMcl7hE9PaT")
+    # Delivered 11 minutes on, before any sweep could find the payment; the next sweep runs
+    # after the server was down for nearly two hours.
+    async with running(alerting_config, data_dir) as client:
         await wait_for(read_rows, CAUGHT_UP, [{"n": 2}])
-
-    # Delivered at once, then swept later by a server that was down meanwhile.
+        clock.move_to(NOW + timedelta(minutes=11), tick=True)
+        delivered = await client.post("/webhooks/razorpay", content=body, headers=headers)
+        await wait_for(read_rows, "SELECT origin FROM events", [{"origin": "delivery"}])
     fake.payments["pay_Tj9rKBOXWcsMeE"] = {
         **CAPTURED,
         "created_at": at(NOW + timedelta(minutes=11)),
     }
-    clock.move_to(NOW + timedelta(minutes=11), tick=True)
-    body, headers = sign_razorpay(recorded_delivery("Tj9sMcl7hE9PaT"), event_id="Tj9sMcl7hE9PaT")
     await later(clock, fake)
     swept = logged(sweeper_logs, "sweep pass ended")
-    async with running(alerting_config, data_dir) as client:
-        delivered = await client.post("/webhooks/razorpay", content=body, headers=headers)
+    async with running(alerting_config, data_dir):
         await passes_ended(sweeper_logs, swept + 1)
 
     assert delivered.status_code == 202

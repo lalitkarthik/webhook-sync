@@ -76,6 +76,7 @@ async def test_p4s_tables_hold_a_checkpoint_per_list_and_verify_runs_with_their_
             "last_sweep_stored",
             "last_relist_at",
             "relist_floor_at",
+            "first_start_at",
         ],
         "verify_findings": [
             "id",

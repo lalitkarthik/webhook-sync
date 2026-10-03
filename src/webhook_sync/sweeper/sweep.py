@@ -202,8 +202,7 @@ class Sweeper:
         if isinstance(probe, Failure):
             return _stopped(list_name, probe)
         source_now = probe
-        start, first = await self._checkpoint(list_name, source_now)
-        lookback = first  # the first start's history: no delivery was ever due for it
+        start, first, history = await self._checkpoint(list_name, source_now)
         stored = 0
         unannounced: list[str] = []
         while True:
@@ -218,9 +217,12 @@ class Sweeper:
             source_now = _seconds_of(listed.source_now)
             kept = [item for item in listed.items if floor <= item["created_at"] < end]
             new = await self._store(entity, kept, origin="sweep")
-            if entity == "payment" and not lookback:
+            if entity == "payment":
+                # Created before the first start: the lookback's history, never delivered.
                 old = source_now - _seconds(SILENT_AGE)
-                unannounced.extend(item["id"] for item in new if item["created_at"] < old)
+                unannounced.extend(
+                    item["id"] for item in new if history <= item["created_at"] < old
+                )
             await self._advance(list_name, end)
             log.info(
                 "sweep slice",
@@ -320,7 +322,8 @@ class Sweeper:
         """The silent-webhook check after a pass (Q149): an alert when the slices stored a
         payment more than 10 minutes old that no delivery brought, or stored anything while no
         delivery has arrived for 24 h (counted from the first stored event when none ever
-        did). The first start's lookback counts for neither: it is history."""
+        did). Payments created before the first start are the lookback's history and count
+        for neither rule's old payments."""
         if self._alerter is None or not stored:
             return
         ours = (
@@ -357,12 +360,14 @@ class Sweeper:
             log.warning("events reaching us only through the sweeper", extra={"stored": stored})
             await self._alerter.silent_webhook("; ".join(found))
 
-    async def _checkpoint(self, list_name: ListName, source_now: int) -> tuple[int, bool]:
-        """The list's checkpoint in Unix seconds, and whether it is still the first start's (no
-        slice stored yet). With none, one is stored at once, `initial_lookback_days` before
-        Razorpay's now, so a restart doesn't move it. The re-list never reads before this first
-        checkpoint (`relist_floor_at`), so a first start reads only its lookback (Q157), and
-        it is first due an hour on."""
+    async def _checkpoint(self, list_name: ListName, source_now: int) -> tuple[int, bool, int]:
+        """The list's checkpoint in Unix seconds, whether it is still the first start's (no
+        slice stored yet), and Razorpay's now at the first start (`first_start_at`): what was
+        created before it is the lookback's history, however many passes the walk takes. With
+        none, one is stored at once, `initial_lookback_days` before Razorpay's now, so a restart
+        doesn't move it. The re-list never reads before this first checkpoint
+        (`relist_floor_at`), so a first start reads only its lookback (Q157), and it is first
+        due an hour on."""
         key = self._key(list_name)
         lookback = timedelta(days=self._config.sweeper.initial_lookback_days)
         first = _moment(source_now - _seconds(lookback))
@@ -375,6 +380,7 @@ class Sweeper:
                     last_sweep_stored=0,
                     last_relist_at=to_db_text(utc_now()),
                     relist_floor_at=to_db_text(first),
+                    first_start_at=to_db_text(_moment(source_now)),
                 )
                 .on_conflict_do_nothing()
             )
@@ -382,17 +388,23 @@ class Sweeper:
         assert stored is not None
         return stored
 
-    async def _stored_checkpoint(self, key: Mapping[str, str]) -> tuple[int, bool] | None:
+    async def _stored_checkpoint(self, key: Mapping[str, str]) -> tuple[int, bool, int] | None:
         async with self._writer.transaction() as tx:
             rows = await tx.execute(
-                sa.select(checkpoints.c.checkpoint_at, checkpoints.c.last_sweep_at).where(
-                    *_matching(key)
-                )
+                sa.select(
+                    checkpoints.c.checkpoint_at,
+                    checkpoints.c.last_sweep_at,
+                    checkpoints.c.first_start_at,
+                ).where(*_matching(key))
             )
         if not rows:
             return None
-        at = int(datetime.fromisoformat(rows[0]["checkpoint_at"]).timestamp())
-        return at, rows[0]["last_sweep_at"] is None
+        row = rows[0]
+        return (
+            _seconds_of(datetime.fromisoformat(row["checkpoint_at"])),
+            row["last_sweep_at"] is None,
+            _seconds_of(datetime.fromisoformat(row["first_start_at"])),
+        )
 
     async def _advance(self, list_name: ListName, end: int) -> None:
         """Move the checkpoint to a stored slice's end; `last_sweep_at` is when it last moved."""

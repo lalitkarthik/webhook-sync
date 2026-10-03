@@ -5,7 +5,9 @@
 -- One row per source, account and list. Every item created before `checkpoint_at` has been
 -- listed and stored at least once (sweeper.md). The hourly re-list never reads items
 -- created before `relist_floor_at`, the list's first checkpoint: a first start reads
--- only its lookback, and older history comes by backfill (Q157).
+-- only its lookback, and older history comes by backfill (Q157). `first_start_at` is
+-- Razorpay's now at the first start: items created before it are the lookback's
+-- history, which no delivery was ever due for (no silent-webhook alert).
 CREATE TABLE checkpoints (
     source            TEXT NOT NULL,
     account           TEXT NOT NULL,
@@ -15,6 +17,7 @@ CREATE TABLE checkpoints (
     last_sweep_stored INTEGER NOT NULL DEFAULT 0,
     last_relist_at    TEXT,
     relist_floor_at   TEXT NOT NULL,
+    first_start_at    TEXT NOT NULL,
     PRIMARY KEY (source, account, list)
 ) WITHOUT ROWID;
 
