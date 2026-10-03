@@ -1,0 +1,61 @@
+{
+  "what": "Check 7 (F05): the whole tab after sort + write by row number: pay_B's update sits on another payment's row.",
+  "ran_at": "2026-10-03T04:49:25+00:00",
+  "elapsed_ms": 174,
+  "request": {
+    "method": "GET",
+    "url": "https://sheets.googleapis.com/v4/spreadsheets/SHEET_ID/values/'wsync-spike-b-renamed'!A1:C6",
+    "params": {
+      "valueRenderOption": "UNFORMATTED_VALUE"
+    },
+    "body": null
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=UTF-8",
+      "vary": "Origin, X-Origin, Referer",
+      "content-encoding": "gzip",
+      "date": "Sat, 03 Oct 2026 04:49:26 GMT",
+      "server": "ESF",
+      "x-xss-protection": "0",
+      "x-frame-options": "SAMEORIGIN",
+      "x-content-type-options": "nosniff",
+      "x-l2-request-path": "l2-managed-6",
+      "transfer-encoding": "chunked"
+    },
+    "body_bytes": 366,
+    "body": {
+      "range": "'wsync-spike-b-renamed'!A1:C6",
+      "majorDimension": "ROWS",
+      "values": [
+        [
+          "Payment ID",
+          "Amount",
+          "Note"
+        ],
+        [
+          "pay_A",
+          50
+        ],
+        [
+          "pay_C",
+          11,
+          "update for pay_B"
+        ],
+        [
+          "pay_E",
+          30
+        ],
+        [
+          "pay_D",
+          20
+        ],
+        [
+          "pay_B",
+          10
+        ]
+      ]
+    }
+  }
+}

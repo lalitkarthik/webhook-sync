@@ -1,0 +1,46 @@
+{
+  "what": "Check 3: getByDataFilter by the deleted tab's sheetId (the flusher's read).",
+  "ran_at": "2026-10-03T04:49:57+00:00",
+  "elapsed_ms": 122,
+  "request": {
+    "method": "POST",
+    "url": "https://sheets.googleapis.com/v4/spreadsheets/SHEET_ID:getByDataFilter",
+    "params": {
+      "fields": "sheets(properties(sheetId),data(rowData(values(effectiveValue))))"
+    },
+    "body": {
+      "dataFilters": [
+        {
+          "gridRange": {
+            "sheetId": 1600034012,
+            "startRowIndex": 0,
+            "endRowIndex": 1
+          }
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 400,
+    "headers": {
+      "vary": "Origin, X-Origin, Referer",
+      "content-type": "application/json; charset=UTF-8",
+      "content-encoding": "gzip",
+      "date": "Sat, 03 Oct 2026 04:49:57 GMT",
+      "server": "ESF",
+      "x-xss-protection": "0",
+      "x-frame-options": "SAMEORIGIN",
+      "x-content-type-options": "nosniff",
+      "x-l2-request-path": "l2-managed-6",
+      "transfer-encoding": "chunked"
+    },
+    "body_bytes": 118,
+    "body": {
+      "error": {
+        "code": 400,
+        "message": "No sheet with id: 1600034012",
+        "status": "INVALID_ARGUMENT"
+      }
+    }
+  }
+}

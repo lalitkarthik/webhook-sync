@@ -1,0 +1,36 @@
+{
+  "what": "Check 5: spreadsheets.get on a random, well-formed 44-character id (no such spreadsheet). The id is recorded as RANDOM_ID.",
+  "ran_at": "2026-10-03T04:49:57+00:00",
+  "elapsed_ms": 137,
+  "request": {
+    "method": "GET",
+    "url": "https://sheets.googleapis.com/v4/spreadsheets/RANDOM_ID",
+    "params": {
+      "fields": "spreadsheetId"
+    },
+    "body": null
+  },
+  "response": {
+    "status": 404,
+    "headers": {
+      "vary": "Origin, X-Origin, Referer",
+      "content-type": "application/json; charset=UTF-8",
+      "content-encoding": "gzip",
+      "date": "Sat, 03 Oct 2026 04:49:58 GMT",
+      "server": "ESF",
+      "x-xss-protection": "0",
+      "x-frame-options": "SAMEORIGIN",
+      "x-content-type-options": "nosniff",
+      "x-l2-request-path": "l2-managed-6",
+      "transfer-encoding": "chunked"
+    },
+    "body_bytes": 114,
+    "body": {
+      "error": {
+        "code": 404,
+        "message": "Requested entity was not found.",
+        "status": "NOT_FOUND"
+      }
+    }
+  }
+}

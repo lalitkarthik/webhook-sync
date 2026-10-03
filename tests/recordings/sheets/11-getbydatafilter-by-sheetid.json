@@ -1,0 +1,316 @@
+{
+  "what": "Check 2: spreadsheets.getByDataFilter with a GridRange by sheetId (no title), field mask for grid size and userEnteredValue/effectiveValue/formattedValue/numberFormat per cell.",
+  "ran_at": "2026-10-03T04:47:29+00:00",
+  "elapsed_ms": 192,
+  "request": {
+    "method": "POST",
+    "url": "https://sheets.googleapis.com/v4/spreadsheets/SHEET_ID:getByDataFilter",
+    "params": {
+      "fields": "sheets(properties(sheetId,title,gridProperties(rowCount,columnCount)),data(startRow,startColumn,rowData(values(userEnteredValue,effectiveValue,formattedValue,effectiveFormat.numberFormat))))"
+    },
+    "body": {
+      "dataFilters": [
+        {
+          "gridRange": {
+            "sheetId": 1600034012,
+            "startRowIndex": 0,
+            "endRowIndex": 10
+          }
+        }
+      ],
+      "includeGridData": true
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=UTF-8",
+      "vary": "Origin, X-Origin, Referer",
+      "content-encoding": "gzip",
+      "date": "Sat, 03 Oct 2026 04:47:29 GMT",
+      "server": "ESF",
+      "x-xss-protection": "0",
+      "x-frame-options": "SAMEORIGIN",
+      "x-content-type-options": "nosniff",
+      "x-l2-request-path": "l2-managed-6",
+      "transfer-encoding": "chunked"
+    },
+    "body_bytes": 8553,
+    "body": {
+      "sheets": [
+        {
+          "properties": {
+            "sheetId": 1600034012,
+            "title": "wsync-spike-a",
+            "gridProperties": {
+              "rowCount": 7,
+              "columnCount": 10
+            }
+          },
+          "data": [
+            {
+              "rowData": [
+                {
+                  "values": [
+                    {
+                      "userEnteredValue": {
+                        "stringValue": "Payment ID"
+                      },
+                      "effectiveValue": {
+                        "stringValue": "Payment ID"
+                      },
+                      "formattedValue": "Payment ID"
+                    },
+                    {
+                      "userEnteredValue": {
+                        "stringValue": "Kind"
+                      },
+                      "effectiveValue": {
+                        "stringValue": "Kind"
+                      },
+                      "formattedValue": "Kind"
+                    },
+                    {
+                      "userEnteredValue": {
+                        "stringValue": "Amount"
+                      },
+                      "effectiveValue": {
+                        "stringValue": "Amount"
+                      },
+                      "formattedValue": "Amount"
+                    },
+                    {
+                      "userEnteredValue": {
+                        "stringValue": "Bool"
+                      },
+                      "effectiveValue": {
+                        "stringValue": "Bool"
+                      },
+                      "formattedValue": "Bool"
+                    },
+                    {
+                      "userEnteredValue": {
+                        "stringValue": "Created (IST)"
+                      },
+                      "effectiveValue": {
+                        "stringValue": "Created (IST)"
+                      },
+                      "formattedValue": "Created (IST)"
+                    },
+                    {
+                      "userEnteredValue": {
+                        "stringValue": "Formula-looking"
+                      },
+                      "effectiveValue": {
+                        "stringValue": "Formula-looking"
+                      },
+                      "formattedValue": "Formula-looking"
+                    },
+                    {
+                      "userEnteredValue": {
+                        "stringValue": "Phone"
+                      },
+                      "effectiveValue": {
+                        "stringValue": "Phone"
+                      },
+                      "formattedValue": "Phone"
+                    },
+                    {
+                      "userEnteredValue": {
+                        "stringValue": "Zeros"
+                      },
+                      "effectiveValue": {
+                        "stringValue": "Zeros"
+                      },
+                      "formattedValue": "Zeros"
+                    },
+                    {
+                      "userEnteredValue": {
+                        "stringValue": "Big"
+                      },
+                      "effectiveValue": {
+                        "stringValue": "Big"
+                      },
+                      "formattedValue": "Big"
+                    },
+                    {
+                      "userEnteredValue": {
+                        "stringValue": "Hyperlink-looking"
+                      },
+                      "effectiveValue": {
+                        "stringValue": "Hyperlink-looking"
+                      },
+                      "formattedValue": "Hyperlink-looking"
+                    }
+                  ]
+                },
+                {
+                  "values": [
+                    {
+                      "userEnteredValue": {
+                        "stringValue": "pay_A"
+                      },
+                      "effectiveValue": {
+                        "stringValue": "pay_A"
+                      },
+                      "formattedValue": "pay_A"
+                    },
+                    {
+                      "userEnteredValue": {
+                        "stringValue": "string"
+                      },
+                      "effectiveValue": {
+                        "stringValue": "string"
+                      },
+                      "formattedValue": "string"
+                    },
+                    {
+                      "userEnteredValue": {
+                        "numberValue": 500.5
+                      },
+                      "effectiveValue": {
+                        "numberValue": 500.5
+                      },
+                      "formattedValue": "500.50",
+                      "effectiveFormat": {
+                        "numberFormat": {
+                          "type": "NUMBER",
+                          "pattern": "0.00"
+                        }
+                      }
+                    },
+                    {
+                      "userEnteredValue": {
+                        "boolValue": true
+                      },
+                      "effectiveValue": {
+                        "boolValue": true
+                      },
+                      "formattedValue": "TRUE"
+                    },
+                    {
+                      "userEnteredValue": {
+                        "numberValue": 46297.89512731481
+                      },
+                      "effectiveValue": {
+                        "numberValue": 46297.89512731481
+                      },
+                      "formattedValue": "2026-10-02 21:28:59",
+                      "effectiveFormat": {
+                        "numberFormat": {
+                          "type": "DATE_TIME",
+                          "pattern": "yyyy-mm-dd hh:mm:ss"
+                        }
+                      }
+                    },
+                    {
+                      "userEnteredValue": {
+                        "stringValue": "=1+1"
+                      },
+                      "effectiveValue": {
+                        "stringValue": "=1+1"
+                      },
+                      "formattedValue": "=1+1"
+                    },
+                    {
+                      "userEnteredValue": {
+                        "stringValue": "+919876543210"
+                      },
+                      "effectiveValue": {
+                        "stringValue": "+919876543210"
+                      },
+                      "formattedValue": "+919876543210"
+                    },
+                    {
+                      "userEnteredValue": {
+                        "stringValue": "007"
+                      },
+                      "effectiveValue": {
+                        "stringValue": "007"
+                      },
+                      "formattedValue": "007"
+                    },
+                    {
+                      "userEnteredValue": {
+                        "numberValue": 1.2345678901234568e+18
+                      },
+                      "effectiveValue": {
+                        "numberValue": 1.2345678901234568e+18
+                      },
+                      "formattedValue": "1.23457E+18"
+                    },
+                    {
+                      "userEnteredValue": {
+                        "stringValue": "=HYPERLINK(\"https://example.com\",\"x\")"
+                      },
+                      "effectiveValue": {
+                        "stringValue": "=HYPERLINK(\"https://example.com\",\"x\")"
+                      },
+                      "formattedValue": "=HYPERLINK(\"https://example.com\",\"x\")"
+                    }
+                  ]
+                },
+                {},
+                {},
+                {},
+                {
+                  "values": [
+                    {
+                      "userEnteredValue": {
+                        "stringValue": "pay_F"
+                      },
+                      "effectiveValue": {
+                        "stringValue": "pay_F"
+                      },
+                      "formattedValue": "pay_F"
+                    },
+                    {
+                      "userEnteredValue": {
+                        "stringValue": "after appendDimension"
+                      },
+                      "effectiveValue": {
+                        "stringValue": "after appendDimension"
+                      },
+                      "formattedValue": "after appendDimension"
+                    },
+                    {
+                      "userEnteredValue": {
+                        "numberValue": 42
+                      },
+                      "effectiveValue": {
+                        "numberValue": 42
+                      },
+                      "formattedValue": "42"
+                    }
+                  ]
+                },
+                {
+                  "values": [
+                    {
+                      "userEnteredValue": {
+                        "stringValue": "pay_G"
+                      },
+                      "effectiveValue": {
+                        "stringValue": "pay_G"
+                      },
+                      "formattedValue": "pay_G"
+                    },
+                    {
+                      "userEnteredValue": {
+                        "stringValue": "appendCells"
+                      },
+                      "effectiveValue": {
+                        "stringValue": "appendCells"
+                      },
+                      "formattedValue": "appendCells"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -49,7 +49,7 @@ flowchart TD
   BLD --> WR["WRITE, one call"]
   WR -- error --> FL["fail every job with the class"]
   WR -- ok --> CHK["CHECK, one call:<br/>re-read the keys of the rows written"]
-  CHK -- "a key moved" --> RP["enqueue repair for every key involved;<br/>alert; twice in a row → pause"]
+  CHK -- "a key moved" --> RP["enqueue repair for every key involved<br/>(the expected and the found key);<br/>alert; twice in a row → pause"]
   CHK -- "all in place" --> DONE["complete every job (one transaction)"]
 ```
 
@@ -75,7 +75,7 @@ flowchart TD
 | Amounts: `Decimal(minor) / 10^exponent`, with a number format per exponent. The exponent comes from ISO 4217 plus a per-source override table; codes upper-cased | 19.99 USD, 1999 JPY ([Q19](grilling-log.md)) |
 | An unknown currency code holds back that sheet row: its mirror job goes `dead` with an alert. The table is built from Stripe's zero-decimal and special-case lists; BHD, JOD, KWD, OMR, TND, UGX and ISK count as unknown until the spike records a real charge in each ([Q100](grilling-log.md), G15) | No amount 100 times off reaches the sheet ([Q62](grilling-log.md)) |
 | Amounts past 15 significant digits are written as text | A Sheets number can't hold them exactly |
-| Cells over 50,000 characters are cut, ending `…[truncated]` | Sheets' hard limit per cell |
+| Cells over 50,000 UTF-16 code units are cut, ending `…[truncated]` ([Q142](grilling-log.md)) | Sheets' hard limit per cell counts UTF-16 units: an emoji counts twice (G69) |
 | Email masked when configured: `a***@gmail.com` | [Q21](grilling-log.md) |
 
 ## When people touch the sheet
@@ -117,11 +117,13 @@ Sheets allows 60 reads and 60 writes a minute per user. A flush costs **two read
 
 | Failure | Class |
 |---|---|
-| 429, 5xx, timeout, connection error | `retry`, honouring `Retry-After` |
+| 429, 5xx, timeout, connection error | `retry`. A Sheets 429 carries no `Retry-After`; its body's `window_start_time` + 60 s is used as the minimum wait (G68) |
 | 401 or 403 (unshared, revoked) | `pause` |
-| 404, or a 400 naming a sheet id, grid or range (tab deleted between read and write) | `pause`, "tab missing" (F08) |
+| 400 "No grid with id" or "No sheet with id" (tab deleted between read and write) | `pause`, "tab missing" (F08) |
+| 404 "Requested entity was not found" (the spreadsheet id isn't found) | `pause`, "spreadsheet missing" |
+| 400 "… is after last row in grid" (a person deleted rows after our read) | `retry`: the next flush reads again (G67) |
 | Header differs from config | `pause`, "layout changed" |
-| A 400 naming one request's cell value | Split the batch in halves until the row is found; that job goes `dead`, the rest are written |
+| A 400 naming one request's cell value | Every 400 names the failing request as `requests[N]`: that row's job goes `dead`, the batch is rebuilt without it and written again (G70) |
 | Spreadsheet past 80 % of the configured cell limit (default 20 million, Google's limit since September 2026), or the API's own cell-limit error | Alert at 80 %; at the limit or on that error, `pause`, "sheet full" (G22) |
 | Another deployment's id on Sync status within 10 minutes | `pause`, "another deployment writes here" |
 

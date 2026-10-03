@@ -1,0 +1,46 @@
+{
+  "what": "Check 3: updateSheetProperties renames wsync-spike-a to wsync-spike-a-renamed.",
+  "ran_at": "2026-10-03T04:48:58+00:00",
+  "elapsed_ms": 553,
+  "request": {
+    "method": "POST",
+    "url": "https://sheets.googleapis.com/v4/spreadsheets/SHEET_ID:batchUpdate",
+    "params": null,
+    "body": {
+      "requests": [
+        {
+          "updateSheetProperties": {
+            "properties": {
+              "sheetId": 1600034012,
+              "title": "wsync-spike-a-renamed"
+            },
+            "fields": "title"
+          }
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=UTF-8",
+      "vary": "Origin, X-Origin, Referer",
+      "content-encoding": "gzip",
+      "date": "Sat, 03 Oct 2026 04:48:58 GMT",
+      "server": "ESF",
+      "x-xss-protection": "0",
+      "x-frame-options": "SAMEORIGIN",
+      "x-content-type-options": "nosniff",
+      "x-l2-request-path": "l2-managed-6",
+      "transfer-encoding": "chunked"
+    },
+    "body_bytes": 145,
+    "body": {
+      "spreadsheetId": "SHEET_ID",
+      "replies": [
+        {}
+      ],
+      "commentUpdateState": "NO_UPDATES_REQUESTED"
+    }
+  }
+}

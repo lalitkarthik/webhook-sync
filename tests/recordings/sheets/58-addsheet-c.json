@@ -1,0 +1,61 @@
+{
+  "what": "Check 2 follow-up: a third scratch tab, 20 x 3, to see how reads treat trailing empty rows.",
+  "ran_at": "2026-10-03T04:53:27+00:00",
+  "elapsed_ms": 624,
+  "request": {
+    "method": "POST",
+    "url": "https://sheets.googleapis.com/v4/spreadsheets/SHEET_ID:batchUpdate",
+    "params": null,
+    "body": {
+      "requests": [
+        {
+          "addSheet": {
+            "properties": {
+              "title": "wsync-spike-c",
+              "gridProperties": {
+                "rowCount": 20,
+                "columnCount": 3
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=UTF-8",
+      "vary": "Origin, X-Origin, Referer",
+      "content-encoding": "gzip",
+      "date": "Sat, 03 Oct 2026 04:53:28 GMT",
+      "server": "ESF",
+      "x-xss-protection": "0",
+      "x-frame-options": "SAMEORIGIN",
+      "x-content-type-options": "nosniff",
+      "x-l2-request-path": "l2-managed-6",
+      "transfer-encoding": "chunked"
+    },
+    "body_bytes": 433,
+    "body": {
+      "spreadsheetId": "SHEET_ID",
+      "replies": [
+        {
+          "addSheet": {
+            "properties": {
+              "sheetId": 1727956071,
+              "title": "wsync-spike-c",
+              "index": 1,
+              "sheetType": "GRID",
+              "gridProperties": {
+                "rowCount": 20,
+                "columnCount": 3
+              }
+            }
+          }
+        }
+      ],
+      "commentUpdateState": "NO_UPDATES_REQUESTED"
+    }
+  }
+}

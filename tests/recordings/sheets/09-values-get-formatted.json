@@ -1,0 +1,71 @@
+{
+  "what": "Check 2: spreadsheets.values.get by A1 range with the tab's title, valueRenderOption=FORMATTED_VALUE (dateTimeRenderOption default SERIAL_NUMBER).",
+  "ran_at": "2026-10-03T04:47:29+00:00",
+  "elapsed_ms": 191,
+  "request": {
+    "method": "GET",
+    "url": "https://sheets.googleapis.com/v4/spreadsheets/SHEET_ID/values/'wsync-spike-a'!A1:J10",
+    "params": {
+      "valueRenderOption": "FORMATTED_VALUE"
+    },
+    "body": null
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=UTF-8",
+      "vary": "Origin, X-Origin, Referer",
+      "content-encoding": "gzip",
+      "date": "Sat, 03 Oct 2026 04:47:29 GMT",
+      "server": "ESF",
+      "x-xss-protection": "0",
+      "x-frame-options": "SAMEORIGIN",
+      "x-content-type-options": "nosniff",
+      "x-l2-request-path": "l2-managed-6",
+      "transfer-encoding": "chunked"
+    },
+    "body_bytes": 645,
+    "body": {
+      "range": "'wsync-spike-a'!A1:J7",
+      "majorDimension": "ROWS",
+      "values": [
+        [
+          "Payment ID",
+          "Kind",
+          "Amount",
+          "Bool",
+          "Created (IST)",
+          "Formula-looking",
+          "Phone",
+          "Zeros",
+          "Big",
+          "Hyperlink-looking"
+        ],
+        [
+          "pay_A",
+          "string",
+          "500.50",
+          "TRUE",
+          "2026-10-02 21:28:59",
+          "=1+1",
+          "+919876543210",
+          "007",
+          "1.23457E+18",
+          "=HYPERLINK(\"https://example.com\",\"x\")"
+        ],
+        [],
+        [],
+        [],
+        [
+          "pay_F",
+          "after appendDimension",
+          "42"
+        ],
+        [
+          "pay_G",
+          "appendCells"
+        ]
+      ]
+    }
+  }
+}

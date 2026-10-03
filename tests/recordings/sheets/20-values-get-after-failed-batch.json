@@ -1,0 +1,33 @@
+{
+  "what": "Check 4: read A3 after the failed batch: an atomic batchUpdate leaves the updateCells that preceded the failing request unapplied.",
+  "ran_at": "2026-10-03T04:48:18+00:00",
+  "elapsed_ms": 173,
+  "request": {
+    "method": "GET",
+    "url": "https://sheets.googleapis.com/v4/spreadsheets/SHEET_ID/values/'wsync-spike-a'!A3",
+    "params": {
+      "valueRenderOption": "UNFORMATTED_VALUE"
+    },
+    "body": null
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=UTF-8",
+      "vary": "Origin, X-Origin, Referer",
+      "content-encoding": "gzip",
+      "date": "Sat, 03 Oct 2026 04:48:18 GMT",
+      "server": "ESF",
+      "x-xss-protection": "0",
+      "x-frame-options": "SAMEORIGIN",
+      "x-content-type-options": "nosniff",
+      "x-l2-request-path": "l2-managed-6",
+      "transfer-encoding": "chunked"
+    },
+    "body_bytes": 64,
+    "body": {
+      "range": "'wsync-spike-a'!A3",
+      "majorDimension": "ROWS"
+    }
+  }
+}

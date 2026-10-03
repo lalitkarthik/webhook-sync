@@ -1,0 +1,70 @@
+{
+  "what": "Check 6: the same with the drive.metadata.readonly scope (the design grants only spreadsheets).",
+  "ran_at": "2026-10-03T04:49:00+00:00",
+  "elapsed_ms": 91,
+  "request": {
+    "method": "GET",
+    "url": "https://www.googleapis.com/drive/v3/files/SHEET_ID",
+    "params": {
+      "fields": "version,modifiedTime,headRevisionId"
+    },
+    "body": null
+  },
+  "response": {
+    "status": 403,
+    "headers": {
+      "content-type": "application/json; charset=UTF-8",
+      "content-encoding": "gzip",
+      "date": "Sat, 03 Oct 2026 04:49:00 GMT",
+      "server": "ESF",
+      "x-xss-protection": "0",
+      "x-frame-options": "SAMEORIGIN",
+      "x-content-type-options": "nosniff",
+      "transfer-encoding": "chunked"
+    },
+    "body_bytes": 2225,
+    "body": {
+      "error": {
+        "code": 403,
+        "message": "Google Drive API has not been used in project PROJECT_NUMBER before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/drive.googleapis.com/overview?project=PROJECT_NUMBER then retry. If you enabled this API recently, wait a few minutes for the action to propagate to our systems and retry.",
+        "errors": [
+          {
+            "message": "Google Drive API has not been used in project PROJECT_NUMBER before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/drive.googleapis.com/overview?project=PROJECT_NUMBER then retry. If you enabled this API recently, wait a few minutes for the action to propagate to our systems and retry.",
+            "domain": "usageLimits",
+            "reason": "accessNotConfigured",
+            "extendedHelp": "https://console.developers.google.com"
+          }
+        ],
+        "status": "PERMISSION_DENIED",
+        "details": [
+          {
+            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            "reason": "SERVICE_DISABLED",
+            "domain": "googleapis.com",
+            "metadata": {
+              "consumer": "projects/PROJECT_NUMBER",
+              "containerInfo": "PROJECT_NUMBER",
+              "serviceTitle": "Google Drive API",
+              "activationUrl": "https://console.developers.google.com/apis/api/drive.googleapis.com/overview?project=PROJECT_NUMBER",
+              "service": "drive.googleapis.com"
+            }
+          },
+          {
+            "@type": "type.googleapis.com/google.rpc.LocalizedMessage",
+            "locale": "en-US",
+            "message": "Google Drive API has not been used in project PROJECT_NUMBER before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/drive.googleapis.com/overview?project=PROJECT_NUMBER then retry. If you enabled this API recently, wait a few minutes for the action to propagate to our systems and retry."
+          },
+          {
+            "@type": "type.googleapis.com/google.rpc.Help",
+            "links": [
+              {
+                "description": "Google developers console API activation",
+                "url": "https://console.developers.google.com/apis/api/drive.googleapis.com/overview?project=PROJECT_NUMBER"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

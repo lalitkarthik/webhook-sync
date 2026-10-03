@@ -1,0 +1,98 @@
+{
+  "what": "Check 6: createDeveloperMetadata on the tab (key wsync.deployment) and on row index 2, pay_B's row (key wsync.payment = pay_B).",
+  "ran_at": "2026-10-03T04:48:44+00:00",
+  "elapsed_ms": 229,
+  "request": {
+    "method": "POST",
+    "url": "https://sheets.googleapis.com/v4/spreadsheets/SHEET_ID:batchUpdate",
+    "params": null,
+    "body": {
+      "requests": [
+        {
+          "createDeveloperMetadata": {
+            "developerMetadata": {
+              "metadataKey": "wsync.deployment",
+              "metadataValue": "spike-deployment-1",
+              "location": {
+                "sheetId": 1903783590
+              },
+              "visibility": "DOCUMENT"
+            }
+          }
+        },
+        {
+          "createDeveloperMetadata": {
+            "developerMetadata": {
+              "metadataKey": "wsync.payment",
+              "metadataValue": "pay_B",
+              "location": {
+                "dimensionRange": {
+                  "sheetId": 1903783590,
+                  "dimension": "ROWS",
+                  "startIndex": 2,
+                  "endIndex": 3
+                }
+              },
+              "visibility": "DOCUMENT"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=UTF-8",
+      "vary": "Origin, X-Origin, Referer",
+      "content-encoding": "gzip",
+      "date": "Sat, 03 Oct 2026 04:48:45 GMT",
+      "server": "ESF",
+      "x-xss-protection": "0",
+      "x-frame-options": "SAMEORIGIN",
+      "x-content-type-options": "nosniff",
+      "x-l2-request-path": "l2-managed-6",
+      "transfer-encoding": "chunked"
+    },
+    "body_bytes": 1002,
+    "body": {
+      "spreadsheetId": "SHEET_ID",
+      "replies": [
+        {
+          "createDeveloperMetadata": {
+            "developerMetadata": {
+              "metadataId": 1565947114,
+              "metadataKey": "wsync.deployment",
+              "metadataValue": "spike-deployment-1",
+              "location": {
+                "locationType": "SHEET",
+                "sheetId": 1903783590
+              },
+              "visibility": "DOCUMENT"
+            }
+          }
+        },
+        {
+          "createDeveloperMetadata": {
+            "developerMetadata": {
+              "metadataId": 1194162050,
+              "metadataKey": "wsync.payment",
+              "metadataValue": "pay_B",
+              "location": {
+                "locationType": "ROW",
+                "dimensionRange": {
+                  "sheetId": 1903783590,
+                  "dimension": "ROWS",
+                  "startIndex": 2,
+                  "endIndex": 3
+                }
+              },
+              "visibility": "DOCUMENT"
+            }
+          }
+        }
+      ],
+      "commentUpdateState": "NO_UPDATES_REQUESTED"
+    }
+  }
+}

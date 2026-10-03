@@ -1,0 +1,124 @@
+{
+  "what": "Check 9: the same date serial (2026-10-02 21:28:59 IST) written with no format, DATE_TIME with no pattern, DATE with no pattern, our pattern, and a dd/mm pattern; one batchUpdate (appendDimension 1 column first).",
+  "ran_at": "2026-10-03T04:51:34+00:00",
+  "elapsed_ms": 585,
+  "request": {
+    "method": "POST",
+    "url": "https://sheets.googleapis.com/v4/spreadsheets/SHEET_ID:batchUpdate",
+    "params": null,
+    "body": {
+      "requests": [
+        {
+          "appendDimension": {
+            "sheetId": 1903783590,
+            "dimension": "COLUMNS",
+            "length": 2
+          }
+        },
+        {
+          "updateCells": {
+            "start": {
+              "sheetId": 1903783590,
+              "rowIndex": 1,
+              "columnIndex": 3
+            },
+            "rows": [
+              {
+                "values": [
+                  {
+                    "userEnteredValue": {
+                      "numberValue": 46297.89512731481
+                    }
+                  }
+                ]
+              },
+              {
+                "values": [
+                  {
+                    "userEnteredValue": {
+                      "numberValue": 46297.89512731481
+                    },
+                    "userEnteredFormat": {
+                      "numberFormat": {
+                        "type": "DATE_TIME"
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "values": [
+                  {
+                    "userEnteredValue": {
+                      "numberValue": 46297.89512731481
+                    },
+                    "userEnteredFormat": {
+                      "numberFormat": {
+                        "type": "DATE"
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "values": [
+                  {
+                    "userEnteredValue": {
+                      "numberValue": 46297.89512731481
+                    },
+                    "userEnteredFormat": {
+                      "numberFormat": {
+                        "type": "DATE_TIME",
+                        "pattern": "yyyy-mm-dd hh:mm:ss"
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "values": [
+                  {
+                    "userEnteredValue": {
+                      "numberValue": 46297.89512731481
+                    },
+                    "userEnteredFormat": {
+                      "numberFormat": {
+                        "type": "DATE_TIME",
+                        "pattern": "dd/mm/yyyy hh:mm"
+                      }
+                    }
+                  }
+                ]
+              }
+            ],
+            "fields": "userEnteredValue,userEnteredFormat.numberFormat"
+          }
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=UTF-8",
+      "vary": "Origin, X-Origin, Referer",
+      "content-encoding": "gzip",
+      "date": "Sat, 03 Oct 2026 04:51:34 GMT",
+      "server": "ESF",
+      "x-xss-protection": "0",
+      "x-frame-options": "SAMEORIGIN",
+      "x-content-type-options": "nosniff",
+      "x-l2-request-path": "l2-managed-6",
+      "transfer-encoding": "chunked"
+    },
+    "body_bytes": 153,
+    "body": {
+      "spreadsheetId": "SHEET_ID",
+      "replies": [
+        {},
+        {}
+      ],
+      "commentUpdateState": "NO_UPDATES_REQUESTED"
+    }
+  }
+}
