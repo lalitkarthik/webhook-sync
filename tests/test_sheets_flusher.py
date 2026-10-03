@@ -27,6 +27,7 @@ from webhook_sync.config import Config
 from webhook_sync.db.schema import payments
 from webhook_sync.db.writer import Writer
 from webhook_sync.queue import Pauses, enqueue
+from webhook_sync.queue.pause import record_pause, register
 from webhook_sync.queue.runner import HEARTBEAT_EVERY, IDLE_WAIT, BatchStageRunner
 from webhook_sync.receiver.app import create_app
 from webhook_sync.sinks.sheets import (
@@ -283,7 +284,9 @@ async def test_a_payment_that_changes_is_updated_in_place_its_key_cell_untouched
     tab = sheets.payments
     assert len(tab.values()) == 2
     assert tab.value(1, 0) == "pay_A"
-    [update] = sheets.last_write()
+    [update] = [
+        r for r in sheets.last_write() if r["updateCells"]["start"]["sheetId"] == tab.sheet_id
+    ]
     assert update["updateCells"]["start"]["rowIndex"] == 1
     assert update["updateCells"]["start"]["columnIndex"] == 1  # the key cell never rewritten
     assert shown(tab, 1)[3:7] == ["refunded", "500.00", "INR", "500.00"]
@@ -577,3 +580,163 @@ async def test_formula_phone_and_zero_padded_text_stay_text(sheets: Sheets) -> N
 
     row = sheets.payments.values()[1]
     assert (row[11], row[13], row[14]) == ("+919876543210", '=HYPERLINK("http://x")', "007")
+
+
+# -- Daily summary and Sync status (#33) ------------------------------------------------------
+
+
+def summary(sheets: Sheets) -> list[list[str]]:
+    """The Daily summary's rows below the header, as the sheet shows them."""
+    tab = sheets.fake.tab(DAILY_SUMMARY)
+    return [shown(tab, row) for row in range(1, len(tab.values()))]
+
+
+def status_lines(sheets: Sheets) -> dict[str, str]:
+    """Sync status as label → shown value."""
+    tab = sheets.fake.tab(SYNC_STATUS)
+    lines: dict[str, str] = {}
+    for row in range(1, tab.last_used_row() + 1):
+        label = tab.value(row, 0)
+        lines[label] = tab.show(row, 1, formatted=True).get("formattedValue", "")
+    return lines
+
+
+async def test_three_payments_on_two_ist_days_make_two_summary_rows(sheets: Sheets) -> None:
+    # 00:10 IST on 2 Oct is still 1 Oct in UTC: it counts on 2 Oct.
+    after_midnight = datetime(2026, 10, 1, 18, 40, tzinfo=UTC)
+    await put(sheets.writer, captured("pay_1", source_created_at=to_db_text(after_midnight)))
+    await put(
+        sheets.writer,
+        captured(
+            "pay_2",
+            source_created_at=to_db_text(datetime(2026, 10, 2, 10, 0, tzinfo=UTC)),
+            amount_minor=20000,
+            refunded_minor=5000,
+            fee_minor=472,
+            fee_tax_minor=72,
+            net_minor=19528,
+        ),
+    )
+    await put(
+        sheets.writer,
+        captured("pay_3", source_created_at=to_db_text(datetime(2026, 10, 1, 10, 0, tzinfo=UTC))),
+    )
+
+    await sheets.flush()
+
+    assert sorted(summary(sheets)) == [
+        ["2026-10-01", "INR", "INR", "1", "500.00", "0.00", "11.80", "488.20", "0"],
+        ["2026-10-02", "INR", "INR", "2", "700.00", "50.00", "16.52", "683.48", "0"],
+    ]
+
+
+async def test_a_fee_pending_payment_counts_in_gross_not_fees_and_is_corrected_later(
+    sheets: Sheets,
+) -> None:
+    await put(sheets.writer, captured(fee_minor=None, fee_tax_minor=None, net_minor=None))
+    await sheets.flush()
+
+    assert summary(sheets) == [
+        ["2026-10-02", "INR", "INR", "1", "500.00", "0.00", "0.00", "0.00", "1"]
+    ]
+
+    await put(sheets.writer, captured())
+    await sheets.flush()
+
+    assert summary(sheets) == [
+        ["2026-10-02", "INR", "INR", "1", "500.00", "0.00", "11.80", "488.20", "0"]
+    ]
+
+
+async def test_a_late_payment_for_an_older_day_updates_that_row_in_place(
+    sheets: Sheets,
+) -> None:
+    older = to_db_text(datetime(2026, 9, 30, 6, 0, tzinfo=UTC))
+    await put(sheets.writer, captured("pay_old", source_created_at=older))
+    await sheets.flush()
+    await put(sheets.writer, captured("pay_new"))
+    await sheets.flush()
+    sheets.fake.calls.clear()
+
+    await put(sheets.writer, captured("pay_late", source_created_at=older))
+    await sheets.flush()
+
+    assert summary(sheets) == [
+        ["2026-09-30", "INR", "INR", "2", "1000.00", "0.00", "23.60", "976.40", "0"],
+        ["2026-10-02", "INR", "INR", "1", "500.00", "0.00", "11.80", "488.20", "0"],
+    ]
+    assert sheets.fake.calls == ["getByDataFilter", "batchUpdate"]
+    tab_id = sheets.fake.tab(DAILY_SUMMARY).sheet_id
+    summary_writes = [
+        r["updateCells"]["start"]
+        for r in sheets.last_write()
+        if "updateCells" in r and r["updateCells"]["start"]["sheetId"] == tab_id
+    ]
+    assert summary_writes == [{"sheetId": tab_id, "rowIndex": 1, "columnIndex": 3}]
+
+
+async def test_a_failed_payment_changes_no_summary_row(sheets: Sheets) -> None:
+    await put(sheets.writer, captured("pay_ok"))
+    await sheets.flush()
+    before = summary(sheets)
+
+    await put(sheets.writer, captured("pay_failed", status="failed", source_status="failed"))
+    await put(
+        sheets.writer,
+        captured(
+            "pay_failed_old",
+            status="failed",
+            source_status="failed",
+            source_created_at=to_db_text(datetime(2026, 9, 1, tzinfo=UTC)),
+        ),
+    )
+    await sheets.flush()
+
+    assert summary(sheets) == before
+    assert len(sheets.payments.values()) == 4
+
+
+async def test_sync_status_shows_the_flush_numbers_and_both_states(
+    sheets: Sheets, read_rows: ReadRows
+) -> None:
+    await put(sheets.writer, captured("pay_00"))
+    await sheets.flush()
+    await put(sheets.writer, captured("pay_01"))
+    await put(sheets.writer, captured("pay_02", currency="XYZ"))
+    await put(sheets.writer, captured("pay_03"))
+
+    await sheets.flush()
+
+    tab = sheets.fake.tab(SYNC_STATUS)
+    assert tab.values()[0] == ["Label", "Value"]
+    [state] = await read_rows("SELECT deployment_id FROM sheet_state")
+    assert state["deployment_id"]
+    assert status_lines(sheets) == {
+        "Last flush": "2026-10-02 21:30:00",
+        "Rows written (last flush)": "2",
+        "Rows written (total)": "3",
+        "Sheet jobs waiting": "0",
+        "Dead jobs": "1",
+        "Sheet state": "active",
+        "Razorpay state": "active",
+        "Last verify": "",
+        "Deployment id": state["deployment_id"],
+    }
+
+
+async def test_sync_status_counts_jobs_still_waiting_and_shows_a_paused_source(
+    writer: Writer, sheet_config: Config
+) -> None:
+    async with flusher_on(writer, sheet_config) as sheets:
+        await register(writer, {"razorpay": "source", "sheets": "sink"})
+        async with writer.transaction() as tx:
+            await record_pause(tx, "source", "razorpay", "credentials rejected", now=NOW)
+        for n in range(FLUSH_LIMIT + 3):
+            await put(writer, captured(f"pay_{n:03d}"))
+
+        await sheets.flush()
+
+        lines = status_lines(sheets)
+        assert lines["Sheet jobs waiting"] == "3"
+        assert lines["Razorpay state"] == "paused: credentials rejected"
+        assert lines["Sheet state"] == "active"
