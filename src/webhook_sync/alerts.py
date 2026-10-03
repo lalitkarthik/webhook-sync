@@ -14,7 +14,7 @@ since its last alert, one `dead_jobs` alert gives their counts by stage.
 import asyncio
 import logging
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timedelta
 from typing import Literal
 
@@ -73,6 +73,16 @@ class Alerter:
     async def paused(self, target: PauseTarget, name: str, reason: str) -> None:
         """The `paused` alert: which source or sink, and why. Never raises."""
         await self._never_raise("paused", f"{target} {name} paused: {reason}")
+
+    async def unknown_currency(self, held: Mapping[str, Sequence[str]]) -> None:
+        """The `unknown_currency` alert: each unknown code with the payment ids held back.
+        Never raises."""
+        count = sum(len(ids) for ids in held.values())
+        codes = "; ".join(f"{code}: {', '.join(ids)}" for code, ids in sorted(held.items()))
+        await self._never_raise(
+            "unknown_currency",
+            f"{count} payment(s) held back from the sheet, their jobs dead ({codes})",
+        )
 
     async def check_dead_jobs(self) -> Outcome | None:
         """One dead-jobs check: when `dead_jobs` is due and jobs went dead since its last alert,

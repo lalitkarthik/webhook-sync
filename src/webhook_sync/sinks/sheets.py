@@ -13,6 +13,9 @@ do, it claims up to 200 and makes one flush of them all:
    the key after the last used row, `appendDimension` first when the grid is too small;
 6. complete every job and update `sheet_state` in one transaction.
 
+A payment in an unknown currency is held back: its job alone goes dead, with one
+`unknown_currency` alert naming the code and payment ids; the rest are written.
+
 Every write is by key, so a flush done twice changes nothing: a write whose reply was lost
 fails as `retry`, and the next flush finds the rows it wrote and updates them in place.
 Nothing here logs the spreadsheet id, an email or the service-account address.
@@ -29,13 +32,14 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.dialects import sqlite
 
+from webhook_sync.alerts import Alerter
 from webhook_sync.clock import to_db_text, utc_now
 from webhook_sync.config import Config
 from webhook_sync.db.schema import payments, sheet_state
 from webhook_sync.db.writer import Transaction, Writer
 from webhook_sync.queue import ClaimedJob, Done, Failure, Pauses, StageFailed
 from webhook_sync.queue.runner import BatchStageRunner, BatchWork, Sleep
-from webhook_sync.sinks.encoding import payment_columns
+from webhook_sync.sinks.encoding import UnknownCurrency, payment_columns
 from webhook_sync.sinks.sheets_client import TAB_MISSING, Json, SheetsClient, SheetsFailure
 
 log = logging.getLogger("webhook_sync.sheets")
@@ -103,9 +107,10 @@ def sheets_runner(
     pauses: Pauses,
     rng: random.Random | None = None,
     sleep: Sleep | None = None,
+    alerter: Alerter | None = None,
 ) -> BatchStageRunner:
     """The flusher: the `mirror` stage of the `sheets` sink, as a batch stage on the runner."""
-    flusher = Flusher(writer, client, config)
+    flusher = Flusher(writer, client, config, alerter=alerter)
     options: dict[str, Any] = {} if sleep is None else {"sleep": sleep}
     return BatchStageRunner(
         writer,
@@ -125,9 +130,17 @@ def sheets_runner(
 class Flusher:
     """One spreadsheet's flush: the work the batch stage runs on every claimed mirror job."""
 
-    def __init__(self, writer: Writer, client: SheetsClient, config: Config) -> None:
+    def __init__(
+        self,
+        writer: Writer,
+        client: SheetsClient,
+        config: Config,
+        *,
+        alerter: Alerter | None = None,
+    ) -> None:
         self._writer = writer
         self._client = client
+        self._alerter = alerter
         self._spreadsheet_id = config.sheets.spreadsheet_id
         self._columns = payment_columns(config)
         self._key = next(i for i, c in enumerate(self._columns) if c.key == "payment_id")
@@ -141,26 +154,36 @@ class Flusher:
         tabs = await self._tabs()
         keys, last_used, row_count = await self._read_keys(tabs.payments)
         rows = await self._ledger_rows(claimed)
-        updates: list[Mapping[str, Any]] = []
-        appended: list[Mapping[str, Any]] = []
+        updates: list[Json] = []
+        appended: list[list[Json]] = []
+        failed: dict[int, Failure] = {}
+        held: dict[str, list[str]] = {}
         for job in claimed:
             row = rows.get((job.source, job.account, job.payment_key))
             if row is None:
                 continue  # nothing in the ledger to mirror
+            try:
+                cells = self._cells(row)
+            except UnknownCurrency as unknown:
+                # Held back, never written 100 times off (Q62): only this job goes dead.
+                failed[job.id] = Failure(str(unknown), "dead")
+                held.setdefault(unknown.code, []).append(job.payment_key)
+                continue
             at = keys.get(job.payment_key)
             if at is None:
-                appended.append(row)
+                appended.append(cells)
             else:
-                updates.extend(self._update(tabs.payments, at, row))
+                updates.extend(self._update(tabs.payments, at, cells))
         requests = [*updates, *self._append(tabs.payments, appended, last_used, row_count)]
         if requests:
             written = await self._client.batch_update(requests)
             if isinstance(written, SheetsFailure):
                 _log_flush(claimed, 0, 0, started, outcome=written.error_class)
                 raise StageFailed(written)
-        updated = len(rows) - len(appended)
-        _log_flush(claimed, updated, len(appended), started, outcome="ok")
-        rows_written = len(rows)
+        rows_written = len(rows) - len(failed)
+        _log_flush(claimed, rows_written - len(appended), len(appended), started, outcome="ok")
+        if held and self._alerter is not None:
+            await self._alerter.unknown_currency(held)
         now = utc_now()
 
         async def writes(tx: Transaction) -> None:
@@ -174,7 +197,7 @@ class Flusher:
                 )
             )
 
-        return Done(writes=writes)
+        return Done(writes=writes, failed=failed)
 
     # -- tabs ----------------------------------------------------------------------------------
 
@@ -303,14 +326,13 @@ class Flusher:
     def _cells(self, row: Mapping[str, Any]) -> list[Json]:
         return [column.cell(row) for column in self._columns]
 
-    def _update(self, sheet_id: int, at: int, row: Mapping[str, Any]) -> list[Json]:
+    def _update(self, sheet_id: int, at: int, cells: Sequence[Json]) -> list[Json]:
         """A row already on the tab, rewritten around its key cell, never through it (F05)."""
-        cells = self._cells(row)
         parts = [(0, cells[: self._key]), (self._key + 1, cells[self._key + 1 :])]
         return [_update_cells(sheet_id, at, column, [part]) for column, part in parts if part]
 
     def _append(
-        self, sheet_id: int, rows: Sequence[Mapping[str, Any]], last_used: int, row_count: int
+        self, sheet_id: int, rows: Sequence[Sequence[Json]], last_used: int, row_count: int
     ) -> list[Json]:
         """New rows, key included, straight after the last used row; the grid grown first
         when it is too small (F07)."""
@@ -323,7 +345,7 @@ class Flusher:
             requests.append(
                 {"appendDimension": {"sheetId": sheet_id, "dimension": "ROWS", "length": short}}
             )
-        requests.append(_update_cells(sheet_id, first, 0, [self._cells(row) for row in rows]))
+        requests.append(_update_cells(sheet_id, first, 0, rows))
         return requests
 
 
