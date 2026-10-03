@@ -1,4 +1,4 @@
-Status: planned
+Status: implemented
 
 # P3: mirror the ledger to the Google Sheet
 
@@ -97,6 +97,23 @@ A flusher runs as a batch stage on P1's stage runner: every 3 s when sheet jobs 
 - The live check (2026-10-03) on the owner's throwaway sheet: locale `en_GB`, time zone `Asia/Calcutta`; a date format without an explicit pattern follows the locale, so the pattern is always sent; reads of 70 in a burst hit 429 at the 67th and recovered at the next minute; the cell limit is 20,000,000 and counts empty grid cells; a failed batch applies nothing.
 - Whether an unshared private sheet answers 403 or 404 is untested; both pause, with different reasons.
 - Developer metadata could address rows without the post-write check, but only through the values API with a 30,000-character budget per sheet; the post-write check stays.
+
+## Decisions made during the build
+
+Settled by the implementers or in review, within what this spec and the design leave open:
+
+- `sinks` holds one row per name with `kind` `sink` or `source`; every configured source and sink gets an active row at start, so `wsync status` lists them before anything pauses. A second pause keeps the first reason and time; resume sets `since` to the resume time.
+- `columns` must include `payment_id` and refuses repeated keys. The CLI sends `x-wsync-by: cli` to the admin listener; the resume log line carries `target` and `by`. Commands detect a running server by taking the lock without waiting.
+- Alerts: one JSON POST carrying both `text` and `content`, formatted `webhook-sync <kind>: <text>`. A failed POST still counts as that hour's send. A dead-jobs check that is not yet due skips without counting a suppression, so the next alert covers every job that died since the last one. Unknown-currency alerts are batched one per flush, sent only after the write succeeds.
+- Sheets client: a key Google refuses pauses the sink; an unreachable token endpoint retries. A 401 drops the cached token, so the first call after `wsync resume` fetches a new one. A 200 whose body is not JSON retries; a 400 that names no request is dead for the whole batch.
+- The batch runner's `Done.failed` maps a job id to its failure, so one bad row goes dead while the rest complete. Each appended Payments row is its own `updateCells` request, so a 400 naming `requests[N]` points to one job.
+- First run creates the three tabs with sheet ids we choose, in one `batchUpdate`. Frozen key columns: Payments 1, Daily summary 3, Sync status 1. Sync status is a `Label | Value` tab. Amounts use the number format `0.00` (or their currency's decimals).
+- Currency codes are upper-cased for the exponent lookup only; the Currency cell shows the code as the ledger stores it. A summary row in an unknown currency is left out, as its payments are. The Note joins its two parts with "; ". Cells for unknown columns are left as they are; only the Note names them.
+- A mirror job with no ledger row completes without writing. A touched Daily summary key that no longer matches the ledger is set to zero rather than removed. The Day key is written as a date formatted `yyyy-mm-dd`.
+- The deployment id is a uuid4 made on the first flush and stored in `sheet_state.deployment_id`; it is shown only (G17's check stays deferred).
+- Dead jobs in Sync status count every stage plus the jobs this flush made dead; jobs waiting count sheet mirror jobs left after this flush claims its batch.
+- The post-write check re-reads only the Payments key cells; Daily summary rows moved by a sort are not checked. If the check read fails, every job fails with that class (the next flush writes by key). `wsync resume` also resets `moved_in_a_row` to 0.
+- User story 37's second half (a public read of the sheet for verify to reuse) is left to P4, which will shape it to verify's needs; the flush's read lives in `Flusher._read`. Sync status already carries the blank "Last verify" line.
 
 ## Assumptions
 
