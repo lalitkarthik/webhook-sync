@@ -6,6 +6,7 @@ in-memory `Pauses`, the claim-time cache: loaded from `sinks` at start and updat
 pause and resume (A13). Probes and automatic resume come later.
 """
 
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Literal
 
@@ -19,6 +20,9 @@ from webhook_sync.db.writer import Transaction, Writer
 type PauseTarget = Literal["source", "sink"]
 """What a `pause`-class error stops: the source it read from, or the sink it wrote to."""
 
+type PauseAlert = Callable[[PauseTarget, str, str], Awaitable[None]]
+"""Told of every new pause: what it stops, its name and the reason (the `paused` alert)."""
+
 type Resumed = Literal["resumed", "active", "unknown"]
 """What `resume` found: a pause it cleared, a name not paused, or a name `sinks` doesn't hold."""
 
@@ -26,8 +30,11 @@ type Resumed = Literal["resumed", "active", "unknown"]
 class Pauses:
     """The claim-time cache of what is paused."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, on_pause: PauseAlert | None = None) -> None:
         self._sources: set[str] = set()
+        self.on_pause = on_pause
+        """Awaited after a pause newly stored in `sinks` is set here; never with one already
+        in force."""
         self._sinks: set[str] = set()
 
     def pause(self, target: PauseTarget, name: str) -> None:
@@ -48,12 +55,13 @@ class Pauses:
 
 async def record_pause(
     tx: Transaction, target: PauseTarget, name: str, reason: str, *, now: datetime
-) -> None:
-    """Store a pause in `sinks`. A name already paused keeps its first reason and time."""
+) -> bool:
+    """Store a pause in `sinks`. A name already paused keeps its first reason and time.
+    Returns whether the pause is new."""
     insert = sqlite.insert(sinks).values(
         name=name, kind=target, state="paused", reason=reason, since=to_db_text(now)
     )
-    await tx.execute(
+    stored = await tx.execute(
         insert.on_conflict_do_update(
             index_elements=[sinks.c.name],
             set_={
@@ -62,8 +70,9 @@ async def record_pause(
                 "since": insert.excluded.since,
             },
             where=sinks.c.state != "paused",
-        )
+        ).returning(sinks.c.name)
     )
+    return bool(stored)
 
 
 async def register(writer: Writer, names: dict[str, PauseTarget]) -> None:

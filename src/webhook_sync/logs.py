@@ -31,6 +31,8 @@ LOGGED_FIELDS = (
     "http_status",
     "target",
     "by",
+    "alert",
+    "suppressed",
 )
 
 

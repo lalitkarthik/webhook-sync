@@ -19,6 +19,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from webhook_sync.alerts import Alerter
 from webhook_sync.clock import to_db_text, utc_now
 from webhook_sync.config import Config
 from webhook_sync.db.migrations import apply_pending
@@ -64,6 +65,7 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
             config.razorpay_secrets.key_id,
             config.razorpay_secrets.key_secret,
         )
+        alerter = Alerter(writer, config.alerts.url, redact=alert_redactions(config))
         try:
             # Under `wsync serve`, start() has already migrated under the lock and this is a
             # no-op; it migrates an app built in process (tests).
@@ -89,6 +91,7 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
             claimed_by = instance_id()
             await register(writer, configured_names(config))
             pauses = await load_pauses(writer)  # pauses survive a restart (A3, A13)
+            pauses.on_pause = alerter.paused  # every new pause sends a `paused` alert (A8)
             app.state.pauses = pauses
             app.state.writer = writer
             ledger = ledger_runner(
@@ -103,6 +106,7 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
             app.state.runners = runners
             runners.start()
             minutely = asyncio.create_task(_write_rejection_counts_every_minute(receiver))
+            dead_jobs_check = asyncio.create_task(alerter.run_dead_jobs_check())  # A17
             reaper = asyncio.create_task(
                 run_reaper(writer, retry_profile=config.service.retry_profile)
             )
@@ -111,9 +115,10 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
             finally:
                 if not receiver.shutting_down:  # stopped some other way than `shut_down`
                     await shut_down(app)
-                reaper.cancel()
-                with suppress(asyncio.CancelledError):
-                    await reaper
+                for loop in (reaper, dead_jobs_check):
+                    loop.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await loop
                 minutely.cancel()
                 with suppress(asyncio.CancelledError):
                     await minutely
@@ -121,6 +126,7 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
         finally:
             app.state.writer = None  # the admin listener answers 503 from here on
             await razorpay_api.aclose()
+            await alerter.aclose()
             await writer.close()
 
     app = FastAPI(lifespan=lifespan, openapi_url=None, docs_url=None, redoc_url=None)
@@ -220,6 +226,17 @@ def configured_names(config: Config) -> dict[str, PauseTarget]:
     for sink in config.sinks:
         names[sink] = "sink"
     return names
+
+
+def alert_redactions(config: Config) -> tuple[str, ...]:
+    """What no alert body may carry: the spreadsheet id and every key and secret."""
+    secrets = config.razorpay_secrets
+    return (
+        config.sheets.spreadsheet_id,
+        secrets.key_id,
+        secrets.key_secret,
+        *secrets.webhook_secrets,
+    )
 
 
 def instance_id() -> str:
