@@ -21,6 +21,8 @@ jobs:
         run: uv run ruff check .
       - name: Format check
         run: uv run ruff format --check .
+      - name: Import layers
+        run: uv run lint-imports
       - name: Typecheck
         run: uv run pyright
       - name: Tests

@@ -3,7 +3,9 @@
 
 Hook mode (default, no arguments): reads the hook event JSON on stdin, works
 out how full this session's context window is, and injects a notice into the
-model's context when usage crosses 50% (warning) or 60% (hand off now).
+model's context: an early warning at 35%, "hand off now" at 40% (repeated
+every few tool uses), and from 45%, the hard limit no session may pass, a
+stronger notice on every single call.
 The rule is in .claude/skills/feature-loop/workflow.md, "Context budget".
 
 Report mode (--report): prints one line per recently active Claude session on
@@ -28,9 +30,10 @@ import sys
 import tempfile
 import time
 
-WARN_PCT = 50
-HANDOFF_PCT = 60
-DEBOUNCE_CALLS = 5      # tool uses between repeated hand-off notices
+WARN_PCT = 35
+HANDOFF_PCT = 40
+HARD_PCT = 45           # the hard limit: from here the notice comes on every call
+DEBOUNCE_CALLS = 5      # tool uses between repeated hand-off notices (40% to 45%)
 BRIDGE_STALE_SECONDS = 120
 HANDOFF_DOC = ".claude/skills/feature-loop/prompts/handoff.md"
 DEFAULT_WINDOW = int(os.environ.get("FEATURE_LOOP_CONTEXT_WINDOW", "0"))  # 0 = pick by model
@@ -123,19 +126,38 @@ def usage_from_transcript(transcript_path):
     return context_tokens(entry) * 100.0 / window_for(model), "transcript estimate"
 
 
+def level_for(pct):
+    return (
+        "hard" if pct >= HARD_PCT
+        else "handoff" if pct >= HANDOFF_PCT
+        else "warn" if pct >= WARN_PCT
+        else None
+    )
+
+
 def notice(level, pct, source):
+    pct = int(pct)  # floored: 44.6% must not read as the 45% hard limit
+    if level == "hard":
+        return (
+            f"[Context budget] OVER THE HARD LIMIT: this session has used {pct}% of "
+            f"its context window ({source}), and no session goes past {HARD_PCT}%. Do not "
+            "start, read or run anything except what the hand-off itself needs: write "
+            f"the hand-off file ({HANDOFF_DOC}, format in docs/agents/handoff.md), start "
+            "the successor, end your turn. This notice repeats on every call until you do."
+        )
     if level == "handoff":
         return (
-            f"[Context budget] This session has used {pct:.0f}% of its context window "
-            f"({source}), over the 60% limit. Hand off now: follow "
-            f"{HANDOFF_DOC} (format in docs/agents/handoff.md). Finish the current "
-            "tool call, start nothing new, write the hand-off file, hand over to the "
-            "successor, then end your turn."
+            f"[Context budget] This session has used {pct}% of its context window "
+            f"({source}): the hand-off point is {HANDOFF_PCT}% and the hard limit is "
+            f"{HARD_PCT}%. Hand off now: follow {HANDOFF_DOC} (format in "
+            "docs/agents/handoff.md). Finish the current tool call, start nothing new, "
+            "write the hand-off file, hand over to the successor, then end your turn."
         )
     return (
-        f"[Context budget] This session has used {pct:.0f}% of its context window "
-        f"({source}). The hard limit is 60%. Finish the current step, avoid reading "
-        f"large files or long outputs, and get ready to hand off ({HANDOFF_DOC})."
+        f"[Context budget] This session has used {pct}% of its context window "
+        f"({source}). It hands off at {HANDOFF_PCT}% and must never pass {HARD_PCT}%. "
+        "Finish the current step, avoid reading large files or long outputs, and get "
+        f"ready to hand off ({HANDOFF_DOC})."
     )
 
 
@@ -165,7 +187,7 @@ def hook_mode():
     if not usage:
         return
     pct, source = usage
-    level = "handoff" if pct >= HANDOFF_PCT else "warn" if pct >= WARN_PCT else None
+    level = level_for(pct)
 
     state_path = os.path.join(tmpdir(), f"feature-loop-ctx-guard-{session_id}.json")
     state = read_json(state_path) or {"level": None, "calls": 0}
@@ -174,7 +196,8 @@ def hook_mode():
         return
     state["calls"] = int(state.get("calls") or 0) + 1
     escalated = level != state.get("level")
-    repeat = level == "handoff" and state["calls"] >= DEBOUNCE_CALLS
+    # Over the hard limit the notice comes on every call; a hand-off notice is debounced.
+    repeat = level == "hard" or (level == "handoff" and state["calls"] >= DEBOUNCE_CALLS)
     if not (escalated or repeat):
         write_json(state_path, state)
         return
@@ -205,7 +228,8 @@ def report_mode(minutes):
     rows.sort(reverse=True)
     print(f"{'used%':>6}  {'source':<22} {'model':<18} {'branch':<24} cwd  [session]")
     for pct, source, model, branch, cwd, sid in rows:
-        flag = "  <-- HAND OFF" if pct >= HANDOFF_PCT else ("  <-- warn" if pct >= WARN_PCT else "")
+        flag = {"hard": f"  <-- OVER {HARD_PCT}% LIMIT", "handoff": "  <-- HAND OFF",
+                "warn": "  <-- warn"}.get(level_for(pct), "")
         print(f"{pct:>5.0f}%  {source:<22} {model[:18]:<18} {branch[:24]:<24} {cwd}  [{sid[:8]}]{flag}")
 
 

@@ -8,7 +8,8 @@ feature loop's (`.claude/skills/feature-loop/workflow.md`).
 
 - **This repo only.** Nothing from the owner's laptop: no user-level skills, plugins, memory or
   `~/.claude/CLAUDE.md`. Everything the loop needs is committed here:
-  - `.claude/skills/feature-loop/`: the loop (`/feature-loop plan | orchestrate #<n> | gaps`).
+  - `.claude/skills/feature-loop/`: the loop (`/feature-loop design | plan | gaps`; rule 2 says
+    what does not run here).
   - `.claude/skills/mp-*/`: the Matt Pocock skills the loop calls, vendored under the MIT
     licence (`.claude/skills/MATT-POCOCK-SKILLS-LICENSE`): `/mp-grilling`, `/mp-research`,
     `/mp-to-spec`, `/mp-to-tickets`, `/mp-code-review`, `/mp-resolving-merge-conflicts`,
@@ -33,8 +34,19 @@ feature loop's (`.claude/skills/feature-loop/workflow.md`).
      on the feature issue that begins `Orchestrator state` (edit the same comment each time).
      On startup with no state file, rebuild it from that comment.
    - Write a hand-off into a comment on the feature issue as well as the temp file.
-2. **The extra-accounts route does not exist here.** `~/.claude/accounts/cx.mjs` is missing, so
-   every implementer is a background `Agent` call with `isolation: "worktree"`.
+2. **The build and the audit do not run here.** The loop starts workers with
+   `node ~/.claude/accounts/cx.mjs` and names agent definitions from `~/.claude/agents/`; both
+   exist only on the owner's machine, so in a cloud session:
+   - plan's **Launch** step cannot start the orchestrator, and `/feature-loop orchestrate` cannot
+     start an implementer, wait on one or send it a fix (`CX run`, `CX wait`, `CX send`);
+   - the flow check and the fixers are `cx run` workers too, so they cannot start;
+   - the ticket reviewer (`fl-opus-medium`, `fl-opus-high`) and the auditors and design/gaps
+     readers (`fl-opus-high`) name definitions that are not here;
+   - the research step's extra-account route needs `cx pick`;
+   - the usage-limit and successor rules (`CX pick`, `cx run --detach yes`) cannot run.
+   A cloud session can design, find gaps and plan up to **Approval**; it then posts the
+   hand-off on the feature issue and stops, and the owner launches the build on their machine
+   (`docs/agents/local.md`).
 3. **No inbound traffic.** Razorpay cannot deliver a webhook to this machine. Tests run on
    fakes and recordings. Outbound calls to Razorpay's test API and the Google Sheets API work
    when the keys are set and the network setting allows those hosts. Test payments can be paid

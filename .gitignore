@@ -20,8 +20,10 @@ data/
 *.sqlite3
 out/
 
-# Feature-loop worktrees
+# Feature-loop worktrees, playwright-cli and the verify skill's runs
 .claude/worktrees/
+.playwright-cli/
+.verify/
 
 # Research scratch
 .firecrawl/

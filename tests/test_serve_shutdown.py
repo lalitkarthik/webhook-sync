@@ -99,6 +99,7 @@ def wait_for_log(log_path: Path, message: str) -> None:
     pytest.fail(f"no log line starting {message!r}")
 
 
+@pytest.mark.posix
 @pytest.mark.parametrize("stop_signal", [signal.SIGTERM, signal.SIGINT], ids=["SIGTERM", "SIGINT"])
 def test_a_stop_signal_answers_503_releases_the_lease_writes_the_counts_and_frees_the_lock(
     tmp_path: Path, stop_signal: signal.Signals
