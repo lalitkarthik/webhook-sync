@@ -100,7 +100,8 @@ async def load_pauses(writer: Writer) -> Pauses:
 
 
 async def resume(writer: Writer, name: str, *, pauses: Pauses | None, now: datetime) -> Resumed:
-    """Clear `name`'s pause in `sinks` and, when a server's cache is given, in the cache."""
+    """Clear `name`'s pause in `sinks` and, when a server's cache is given, in the cache; the
+    count of flushes in a row whose rows moved starts again at 0."""
     async with writer.transaction() as tx:
         rows = await tx.execute(sa.select(sinks.c.state).where(sinks.c.name == name))
         if not rows:
@@ -110,7 +111,7 @@ async def resume(writer: Writer, name: str, *, pauses: Pauses | None, now: datet
         await tx.execute(
             sa.update(sinks)
             .where(sinks.c.name == name)
-            .values(state="active", reason=None, since=to_db_text(now))
+            .values(state="active", reason=None, since=to_db_text(now), moved_in_a_row=0)
         )
     if pauses is not None:
         pauses.resume(name)
