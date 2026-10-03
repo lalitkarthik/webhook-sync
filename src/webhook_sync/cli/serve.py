@@ -18,14 +18,15 @@ from typing import override
 import uvicorn
 from fastapi import FastAPI
 
+from webhook_sync.admin.app import create_admin_app
 from webhook_sync.clock import utc_now
-from webhook_sync.config import Config, ConfigError, RetryProfile, load_config, locate_data_dir
+from webhook_sync.config import Config, ConfigError, load_config, locate_data_dir
 from webhook_sync.db.lock import LockHeld, hold_lock
 from webhook_sync.db.migrations import SchemaTooNew, apply_pending
 from webhook_sync.db.writer import Writer
 from webhook_sync.logs import configure_logging
-from webhook_sync.queue import reclaim
-from webhook_sync.receiver.app import create_app, shut_down
+from webhook_sync.queue import reclaim, register
+from webhook_sync.receiver.app import configured_names, create_app, shut_down
 from webhook_sync.receiver.demo import check_demo_switch
 
 log = logging.getLogger("webhook_sync.serve")
@@ -69,9 +70,16 @@ def serve(args: argparse.Namespace) -> int:
     configure_logging()
     try:
         with start(args.config, demo_fail_first=args.demo_fail_first) as config:
-            host, port = split_listen(config.service.public_listen)
             app = create_app(config, config.service.data_dir, args.demo_fail_first)
-            asyncio.run(_serve_until_stopped(app, host, port))
+            admin = create_admin_app(app, config.service.data_dir)
+            asyncio.run(
+                _serve_until_stopped(
+                    app,
+                    admin,
+                    split_listen(config.service.public_listen),
+                    split_listen(config.service.admin_listen),
+                )
+            )
     except StartRefused as refusal:
         print(f"wsync serve: {refusal}", file=sys.stderr)
         return EXIT_REFUSED
@@ -91,13 +99,26 @@ class _Listener(uvicorn.Server):
         yield
 
 
-async def _serve_until_stopped(app: FastAPI, host: str, port: int) -> None:
-    """Serve until SIGTERM or SIGINT, then shut down in operations.md's order: the app answers
-    503 to new deliveries, stops claiming, gives running jobs up to 20 s, releases the rest and
-    writes the rejection counts while it still listens; then the listener stops and the app's
-    lifespan ends. The caller releases the lock once this returns."""
+async def _serve_until_stopped(
+    app: FastAPI, admin: FastAPI, public_at: tuple[str, int], admin_at: tuple[str, int]
+) -> None:
+    """Serve the public app and the admin app, each on its own listener, until SIGTERM or
+    SIGINT; then shut down in operations.md's order: the app answers 503 to new deliveries,
+    stops claiming, gives running jobs up to 20 s, releases the rest and writes the rejection
+    counts while it still listens; then both listeners stop and the app's lifespan ends. One
+    signal handler of ours stops both (G13). The caller releases the lock once this returns."""
     listener = _Listener(
-        uvicorn.Config(app, host=host, port=port, log_config=None, access_log=False)
+        uvicorn.Config(app, host=public_at[0], port=public_at[1], log_config=None, access_log=False)
+    )
+    admin_listener = _Listener(
+        uvicorn.Config(
+            admin,
+            host=admin_at[0],
+            port=admin_at[1],
+            log_config=None,
+            access_log=False,
+            lifespan="off",  # it shares the public app's writer and pauses
+        )
     )
     stopping: list[asyncio.Task[None]] = []
 
@@ -109,6 +130,7 @@ async def _serve_until_stopped(app: FastAPI, host: str, port: int) -> None:
             log.exception("shutdown step failed; stopping anyway")
         finally:
             listener.should_exit = True
+            admin_listener.should_exit = True
 
     def on_signal() -> None:
         if stopping:
@@ -117,7 +139,7 @@ async def _serve_until_stopped(app: FastAPI, host: str, port: int) -> None:
         stopping.append(asyncio.create_task(stop()))
 
     with _handling_stop_signals(asyncio.get_running_loop(), on_signal):
-        await listener.serve()
+        await asyncio.gather(listener.serve(), admin_listener.serve())
 
 
 @contextmanager
@@ -170,19 +192,25 @@ def start(
             config = load_config(config_path, environ)
             if demo_fail_first is not None:  # part of validating the config (A6)
                 check_demo_switch(config)
-            asyncio.run(_prepare_database(config.service.data_dir, config.service.retry_profile))
+            asyncio.run(_prepare_database(config))
         except (ConfigError, LockHeld, SchemaTooNew) as error:
             raise StartRefused(str(error)) from None
         yield config
 
 
-async def _prepare_database(data_dir: Path, retry_profile: RetryProfile) -> None:
-    """Refuse a newer schema, apply pending migrations, then reclaim jobs left running (A13)."""
-    writer = await Writer.open(data_dir)
+async def _prepare_database(config: Config) -> None:
+    """Refuse a newer schema, apply pending migrations, give each configured source and sink
+    its `sinks` row (so `wsync status` lists them with no server running), then reclaim jobs
+    left running (A13)."""
+    writer = await Writer.open(config.service.data_dir)
     try:
         await apply_pending(writer)
+        await register(writer, configured_names(config))
         reclaimed = await reclaim(
-            writer, retry_profile=retry_profile, now=utc_now(), rng=random.Random()
+            writer,
+            retry_profile=config.service.retry_profile,
+            now=utc_now(),
+            rng=random.Random(),
         )
         if reclaimed:
             log.info("jobs left running by a previous run reclaimed: %d", len(reclaimed))

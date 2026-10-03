@@ -217,6 +217,13 @@ def locate_data_dir(path: Path) -> Path:
     return (path.parent / data_dir).resolve()
 
 
+def locate_admin_listen(path: Path) -> str:
+    """The admin listener's address `[service] admin_listen` names, loopback only (Q133): what
+    `wsync resume` and `wsync status` call, without needing the secrets."""
+    service = _read_toml(path).get("service", {})
+    return _admin_listen(cast(Mapping[str, Any], service) if isinstance(service, dict) else {})
+
+
 def load_config(path: Path, environ: Mapping[str, str] | None = None) -> Config:
     """Read the config file at `path` and the secrets; raise ConfigError naming what is wrong."""
     document = _read_toml(path)

@@ -87,9 +87,7 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
             app.state.receiver = receiver
             # One instance id and one pause set, shared by every stage runner (A15).
             claimed_by = instance_id()
-            names: dict[str, PauseTarget] = {receiver.razorpay.name: "source"}
-            names |= dict.fromkeys(config.sinks, "sink")
-            await register(writer, names)
+            await register(writer, configured_names(config))
             pauses = await load_pauses(writer)  # pauses survive a restart (A3, A13)
             app.state.pauses = pauses
             app.state.writer = writer
@@ -214,6 +212,14 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
         return JSONResponse({"result": stored.result}, status_code=stored.status_code)
 
     return app
+
+
+def configured_names(config: Config) -> dict[str, PauseTarget]:
+    """Every configured source and sink, as `sinks` names them."""
+    names: dict[str, PauseTarget] = {RazorpayAdapter.name: "source"}
+    for sink in config.sinks:
+        names[sink] = "sink"
+    return names
 
 
 def instance_id() -> str:
