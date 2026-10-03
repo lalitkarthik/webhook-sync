@@ -19,7 +19,12 @@ do, it claims up to 200 and makes one flush of them all:
    same for the touched Daily summary rows, recomputed (A15); Sync status rewritten whole.
    A 400 naming `requests[N]` of one payment's row sends that job dead, and the batch is
    rebuilt without it and written again (G70); every other failure fails every job;
-6. complete every job and update `sheet_state` in one transaction.
+6. the post-write check: one read of the key cells of every Payments row written; a row a
+   person moved (sorted) between the read and the write shows another key, so the expected
+   and the found key get mirror jobs, one `sheet_changed` alert, `sinks.moved_in_a_row` + 1
+   and the moved jobs retry; a second flush in a row pauses "sheet changed during write",
+   and a clean flush resets the count (Q63, Q143, A14);
+7. complete every job and update `sheet_state` in one transaction.
 
 A payment in an unknown currency is held back: its job alone goes dead, with one
 `unknown_currency` alert naming the code and payment ids; the rest are written.
@@ -43,10 +48,10 @@ from sqlalchemy.dialects import sqlite
 
 from webhook_sync.alerts import Alerter
 from webhook_sync.clock import to_db_text, utc_now
-from webhook_sync.config import Config
+from webhook_sync.config import Config, RetryProfile
 from webhook_sync.db.schema import jobs, payments, sheet_state, sinks
 from webhook_sync.db.writer import Transaction, Writer
-from webhook_sync.queue import ClaimedJob, Done, Failure, Pauses, StageFailed
+from webhook_sync.queue import ClaimedJob, Done, Failure, Pauses, StageFailed, enqueue
 from webhook_sync.queue.runner import BatchStageRunner, BatchWork, Sleep
 from webhook_sync.sinks.encoding import UnknownCurrency, payment_columns
 from webhook_sync.sinks.sheets_client import TAB_MISSING, Json, SheetsClient, SheetsFailure
@@ -101,6 +106,9 @@ SYNC_STATUS_HEADER = ("Label", "Value")
 
 LAYOUT_CHANGED = "layout changed"
 """The pause reason when a header row differs from ours in our columns (G8, Q140)."""
+
+SHEET_CHANGED = "sheet changed during write"
+"""The pause reason when rows moved under two flushes in a row (Q63, A14)."""
 
 NEW_TAB_ROWS = 1000
 NEW_TAB_COLUMNS = 26
@@ -167,6 +175,7 @@ class Flusher:
     ) -> None:
         self._writer = writer
         self._client = client
+        self._retry_profile: RetryProfile = config.service.retry_profile
         self._alerter = alerter
         self._spreadsheet_id = config.sheets.spreadsheet_id
         self._zone = config.service.timezone
@@ -203,7 +212,9 @@ class Flusher:
             writing = [job for job in claimed if job.id in cells and job.id not in failed]
             rows_written = len(rows) - len(failed)
             status = await self._status(state, rows_written, failed, now)
-            payment_requests, owners = self._payment_requests(tabs.payments, read, writing, cells)
+            payment_requests, owners, placed = self._payment_requests(
+                tabs.payments, read, writing, cells
+            )
             requests = [
                 *payment_requests,
                 *summary,
@@ -221,18 +232,28 @@ class Flusher:
             # without it and written again.
             failed[owner] = written
         appended = sum(1 for job in writing if job.payment_key not in read.payment_keys)
+        moved = await self._moved(tabs.payments, placed)
         _log_flush(
             claimed,
             rows_written - appended,
             appended,
             summary_rows,
             started,
-            outcome="ok",
+            outcome="moved" if moved else "ok",
         )
         if held and self._alerter is not None:
             await self._alerter.unknown_currency(held)
+        if moved:
+            for job, _ in moved:
+                failed[job.id] = Failure(SHEET_CHANGED, "retry")
+            if await self._repair(moved) > 1:
+                raise StageFailed(Failure(SHEET_CHANGED, "pause", pause_target="sink"))
 
         async def writes(tx: Transaction) -> None:
+            if not moved:
+                await tx.execute(
+                    sa.update(sinks).where(sinks.c.name == SINK).values(moved_in_a_row=0)
+                )
             await tx.execute(
                 sa.update(sheet_state)
                 .where(sheet_state.c.spreadsheet_id == self._spreadsheet_id)
@@ -244,6 +265,80 @@ class Flusher:
             )
 
         return Done(writes=writes, failed=failed)
+
+    # -- the post-write check ---------------------------------------------------------------
+
+    async def _moved(
+        self, sheet_id: int, placed: Mapping[int, ClaimedJob]
+    ) -> list[tuple[ClaimedJob, str | None]]:
+        """The post-write check (sheets-sink.md step 9, Q63): one read of the key cells of every
+        Payments row just written. Updates never write the key cell, so a row a person moved
+        between the read and the write shows another key than expected (F05). Each job whose
+        row did, with the key found there (None for an empty one)."""
+        if not placed:
+            return []
+        first, last = min(placed), max(placed)
+        answer = _answered(
+            await self._client.get_by_data_filter(
+                [_key_columns(sheet_id, self._key, self._key + 1, first, last + 1)],
+                fields=KEY_COLUMN_FIELDS,
+            )
+        )
+        found: dict[int, str] = {}
+        for sheet in answer.get("sheets", []):
+            for data in sheet.get("data", []):
+                start = data.get("startRow", 0)
+                for offset, row in enumerate(data.get("rowData", [])):
+                    key = _payment_key(row.get("values") or [])
+                    if key is not None:
+                        found[start + offset] = key
+        return [
+            (job, found.get(at))
+            for at, job in sorted(placed.items())
+            if found.get(at) != job.payment_key
+        ]
+
+    async def _repair(self, moved: Sequence[tuple[ClaimedJob, str | None]]) -> int:
+        """Every key involved gets a mirror job, the one expected and the one found (Q143),
+        `moved_in_a_row` goes up by one, and one `sheet_changed` alert says what happened.
+        Returns the new `moved_in_a_row`."""
+        now = utc_now()
+        involved: dict[tuple[str, str, str], None] = {}
+        for job, found in moved:
+            involved[(job.source, job.account, job.payment_key)] = None
+            if found is not None:
+                involved[(job.source, job.account, found)] = None
+        count = sqlite.insert(sinks).values(
+            name=SINK, kind="sink", state="active", moved_in_a_row=1
+        )
+        async with self._writer.transaction() as tx:
+            for source, account, payment_key in involved:
+                await enqueue(
+                    tx,
+                    stage=STAGE,
+                    sink=SINK,
+                    source=source,
+                    account=account,
+                    payment_key=payment_key,
+                    event_id=None,
+                    retry_profile=self._retry_profile,
+                    now=now,
+                )
+            [row] = await tx.execute(
+                count.on_conflict_do_update(
+                    index_elements=[sinks.c.name],
+                    set_={"moved_in_a_row": sinks.c.moved_in_a_row + 1},
+                ).returning(sinks.c.moved_in_a_row)
+            )
+        keys = ", ".join(sorted({key for _, _, key in involved}))
+        log.warning("sheet changed during write", extra={"rows_moved": len(moved)})
+        if self._alerter is not None:
+            await self._alerter.send(
+                "sheet_changed",
+                f"{len(moved)} Payments row(s) moved during a write; "
+                f"queued again to rewrite: {keys}",
+            )
+        return row["moved_in_a_row"]
 
     # -- Daily summary and Sync status -----------------------------------------------------------
 
@@ -457,11 +552,7 @@ class Flusher:
             if _header_of(found[sheet_id]) != spec.header:
                 raise StageFailed(_layout_changed())
 
-        def payment_key(values: list[Json]) -> str | None:
-            key: object = (values or [{}])[0].get("effectiveValue", {}).get("stringValue")
-            return key if isinstance(key, str) and key else None
-
-        payment_keys, payments_last, payments_rows = _keys(found[tabs.payments], payment_key)
+        payment_keys, payments_last, payments_rows = _keys(found[tabs.payments], _payment_key)
         summary_keys, summary_last, summary_rows = _keys(found[tabs.daily_summary], read_key)
         return _Read(
             tabs,
@@ -513,18 +604,20 @@ class Flusher:
         read: _Read,
         writing: Sequence[ClaimedJob],
         cells: Mapping[int, list[Json]],
-    ) -> tuple[list[Json], list[int | None]]:
+    ) -> tuple[list[Json], list[int | None], dict[int, ClaimedJob]]:
         """The Payments tab's requests and, for each, the job whose row it writes (None for
         the grid growing): updates around the key cell, then one request per appended row, so
-        that a 400 naming `requests[N]` names one job."""
+        that a 400 naming `requests[N]` names one job. Also each row written, with its job."""
         requests: list[Json] = []
         owners: list[int | None] = []
         appended: list[ClaimedJob] = []
+        placed: dict[int, ClaimedJob] = {}
         for job in writing:
             at = read.payment_keys.get(job.payment_key)
             if at is None:
                 appended.append(job)
                 continue
+            placed[at] = job
             for request in self._update(sheet_id, at, cells[job.id]):
                 requests.append(request)
                 owners.append(job.id)
@@ -536,7 +629,8 @@ class Flusher:
         for offset, job in enumerate(appended):
             requests.append(_update_cells(sheet_id, first + offset, 0, [cells[job.id]]))
             owners.append(job.id)
-        return requests, owners
+            placed[first + offset] = job
+        return requests, owners, placed
 
     def _cells(self, row: Mapping[str, Any]) -> list[Json]:
         return [column.cell(row) for column in self._columns]
@@ -600,16 +694,25 @@ def _header(sheet_id: int, width: int) -> Json:
     }
 
 
-def _key_columns(sheet_id: int, first: int, end: int) -> Json:
-    """A tab's key columns below the header (a range the read clips to the grid)."""
-    return {
-        "gridRange": {
-            "sheetId": sheet_id,
-            "startRowIndex": 1,
-            "startColumnIndex": first,
-            "endColumnIndex": end,
-        }
+def _key_columns(
+    sheet_id: int, first: int, end: int, first_row: int = 1, end_row: int | None = None
+) -> Json:
+    """A tab's key columns below the header, or rows `first_row` up to `end_row` of them (a
+    range the read clips to the grid)."""
+    grid: Json = {
+        "sheetId": sheet_id,
+        "startRowIndex": first_row,
+        "startColumnIndex": first,
+        "endColumnIndex": end,
     }
+    if end_row is not None:
+        grid["endRowIndex"] = end_row
+    return {"gridRange": grid}
+
+
+def _payment_key(values: list[Json]) -> str | None:
+    key: object = (values or [{}])[0].get("effectiveValue", {}).get("stringValue")
+    return key if isinstance(key, str) and key else None
 
 
 def _header_of(sheet: Json) -> tuple[str, ...] | None:
