@@ -205,7 +205,7 @@ The point in a source's history, by the source's own clock, up to which we know 
 _Avoid_: cursor, watermark, offset
 
 **Time slice**:
-One window of source time (for example ten minutes) that a sweep reads completely before moving the checkpoint past it. Each sweep re-reads a 10-minute overlap before the checkpoint.
+One window of source time (for example ten minutes) that a sweep reads completely before moving the checkpoint past it. Each sweep re-reads a 10-minute overlap before the checkpoint, except a list's first slice.
 _Avoid_: page (a page is one API response), batch
 
 **Horizon**:
