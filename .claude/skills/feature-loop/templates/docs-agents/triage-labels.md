@@ -17,3 +17,4 @@ Labels added by the feature loop:
 | `feature` | A feature spec; the parent issue of its tickets |
 | `ticket` | One vertical slice of a feature, built by one implementer |
 | `in-progress` | An implementer is working on this ticket now |
+| `audit` | Found by the audit loop; with `ticket` it is a fix, with `needs-info` it waits on the user, alone it is a minor finding |

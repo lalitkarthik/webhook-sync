@@ -1,9 +1,10 @@
 # Herdr recipes (only when `HERDR_ENV=1`)
 
 In the Herdr route every role is a full Claude Code session in its own Herdr tab: the planning
-session launches the orchestrator, the orchestrator launches implementers, and any session past
-60% launches its own successor. Everything else in the workflow is unchanged. For Herdr itself,
-see the `herdr` skill.
+session launches the orchestrator, the orchestrator launches implementers and the flow checker, and
+any session but a worker launches its own successor at 40%; a worker hands off to its
+orchestrator ([prompts/handoff.md](prompts/handoff.md), **Workers**). Everything else in the
+workflow is unchanged. For Herdr itself, see the `herdr` skill.
 
 Read every id from the JSON Herdr returns. `jget` pulls one field out of it (no `jq` needed):
 
@@ -12,9 +13,9 @@ jget() { python -c "import json,sys,functools; print(functools.reduce(lambda d,k
 ```
 
 Variables: `SLUG` feature slug, `N` ticket number, `FEATURE` feature issue number, `TSLUG`
-ticket slug, `EFFORT` the implementer's effort (`medium` or `high`; the orchestrator picks it by
-the test in [prompts/orchestrator.md](prompts/orchestrator.md), Accounts route step 3),
-`HANDOFF` hand-off path, `PROMPT` a file holding a filled prompt.
+ticket slug, `MODEL` and `EFFORT` the implementer's model and effort, from the ticket's tier
+([prompts/orchestrator.md](prompts/orchestrator.md), loop step 2.1: `sonnet` / `high`, `opus` /
+`medium`, `opus` / `high`), `HANDOFF` hand-off path, `PROMPT` a file holding a filled prompt.
 
 ## Launch the orchestrator (Phase A, Hand off)
 
@@ -39,7 +40,7 @@ git worktree add "$WT" -b "ticket/$N-$TSLUG" "feature/$SLUG"
 OUT=$(herdr tab create --workspace "$HERDR_WORKSPACE_ID" --cwd "$WT" --label "ticket #$N" --no-focus)
 PANE=$(printf '%s' "$OUT" | jget result root_pane pane_id)
 TAB=$(printf '%s' "$OUT" | jget result tab tab_id)
-herdr agent start "ticket-$N" --kind claude --pane "$PANE" --timeout 90000 -- --model opus --effort "$EFFORT" --dangerously-skip-permissions --name "ticket #$N"
+herdr agent start "ticket-$N" --kind claude --pane "$PANE" --timeout 90000 -- --model "$MODEL" --effort "$EFFORT" --dangerously-skip-permissions --name "ticket #$N"
 herdr agent prompt "ticket-$N" "$(cat "$PROMPT")"
 ```
 
@@ -47,11 +48,27 @@ Record the worktree, tab id and agent name in the state file. A resumed ticket k
 worktree and branch: skip `git worktree add`, and tell the implementer to continue from the
 commits already on the branch.
 
+## Launch the flow checker (orchestrator, Finish step 2)
+
+`PROMPT` holds the filled [prompts/flow-check.md](prompts/flow-check.md); the working directory
+is the main checkout.
+
+```bash
+OUT=$(herdr tab create --workspace "$HERDR_WORKSPACE_ID" --cwd "$PWD" --label "flows #$FEATURE" --no-focus)
+PANE=$(printf '%s' "$OUT" | jget result root_pane pane_id)
+herdr agent start "flow-$SLUG" --kind claude --pane "$PANE" --timeout 90000 -- --model opus --effort medium --dangerously-skip-permissions --name "flows #$FEATURE"
+herdr agent prompt "flow-$SLUG" "$(cat "$PROMPT")"
+```
+
+Wait for it and read its reply as below, then close its tab.
+
 ## Watch, read, answer, stop
 
 Set the Bash tool timeout to 600000 for waits. Between waits, check every session's context use:
-`python scripts/claude/context-guard.py --report`. An implementer over 60% hands itself off; its
-successor is `<name>-2`, `-3`, … — record the current name in the state file.
+`python scripts/claude/context-guard.py --report`. An implementer at 40% commits its work and
+replies `HANDOFF`, so none should show the over-45% flag. Close its tab and start a fresh one
+with the implementer recipe (skip `git worktree add`) as `ticket-$N-r<k>`
+(orchestrator.md, loop step 7); record the current name in the state file.
 
 ```bash
 herdr agent list
@@ -64,7 +81,7 @@ herdr tab close "$TAB"
 
 Close an implementer's tab once its ticket is closed or parked, before removing its worktree.
 
-## Successor on a context hand-off (any role)
+## Successor on a context hand-off (orchestrator, audit orchestrator, planning, design)
 
 ```bash
 OUT=$(herdr tab create --workspace "$HERDR_WORKSPACE_ID" --cwd "$PWD" --label "<same label> (2)" --no-focus)

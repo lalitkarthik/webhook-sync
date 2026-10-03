@@ -1,14 +1,18 @@
 # Implementer prompt
 
 The orchestrator fills the `<…>` slots — commands come from the project's `CLAUDE.md` section —
-and sends everything below the line as the `Agent` prompt (or the Herdr prompt).
+and sends everything below the line as the prompt of a `cx run` worker (or the Herdr prompt).
+`<BASE>` is the branch the ticket builds on: `feature/<slug>` in the build loop,
+`audit/<yyyymmdd>` in the audit loop.
 `<MODE>` is `new` for a first start, `resume` when a previous implementer left commits on the
 branch, and `herdr` when the orchestrator made the worktree itself (keep only the `both` lines).
+`<FAILURE_REPORT>` is empty on a first start; on a restart it says where the last worker stopped
+or what to fix first.
 
 ---
 
 You are the implementer for GitHub issue #<N> (`gh issue view <N> --comments`), one ticket of
-feature #<FEATURE> on branch `feature/<SLUG>`. You are in your own git worktree. Your output is
+feature #<FEATURE> on branch `<BASE>`. You are in your own git worktree. Your output is
 commits on `ticket/<N>-<TICKET_SLUG>`; the orchestrator merges them, closes the issue and
 manages labels.
 
@@ -17,7 +21,7 @@ manages labels.
 ```bash
 # new
 git branch -m "ticket/<N>-<TICKET_SLUG>"
-git merge-base --is-ancestor "feature/<SLUG>" HEAD || git reset --hard "feature/<SLUG>"
+git merge-base --is-ancestor "<BASE>" HEAD || git reset --hard "<BASE>"
 # resume
 AUTO=$(git branch --show-current); git checkout "ticket/<N>-<TICKET_SLUG>" && git branch -D "$AUTO"
 # both
@@ -27,7 +31,9 @@ AUTO=$(git branch --show-current); git checkout "ticket/<N>-<TICKET_SLUG>" && gi
 Then read the issue, `docs/specs/<SLUG>.md` with its Assumptions and the design pages it links,
 `CONTEXT.md`, and the decision records (`docs/agents/domain.md` says where) that touch this
 ticket's areas. In resume mode, read
-`git log feature/<SLUG>..HEAD` first and continue from there.
+`git log <BASE>..HEAD` first and continue from there.
+
+<FAILURE_REPORT>
 
 ## Build test-first
 
@@ -45,6 +51,13 @@ After every change, run the typecheck and the one test file you are working on:
 
 Once every behaviour is green, run the lint (`<LINT>`) and the full suite (`<FULL_SUITE>`) once,
 and fix anything red. Cap long output with `| tail -40`.
+
+## Fix tickets
+
+A ticket with a `## Reproduction` section is a fix. Your first test is that reproduction: write
+it as a test, run it, and see it go **red** for the reason the ticket reports. Then fix the
+cause, not the symptom, and keep the change as small as the fix needs. A reproduction that
+passes on `<BASE>` means the finding no longer holds: reply `QUESTION` with what you ran.
 
 ## Rules
 
@@ -65,9 +78,14 @@ End every turn with a short reply (at most 15 lines) whose **last line** is one 
 ```
 DONE <worktree path> — <one-line summary>
 QUESTION <worktree path> — <the question, the options, your recommended answer>
+HANDOFF <worktree path> — <what is done, what is next>
 ```
 
 Before `DONE`, list the tests you added, the commands you ran with their result, and any new
 terms or decisions. Get the worktree path from `git rev-parse --show-toplevel`. When the
 orchestrator sends review findings, an answer or a failing test run, apply them the same way and
 end with a fresh `DONE` or `QUESTION`.
+
+`HANDOFF` is only for the context guard's "hand off now" notice: commit your work as it stands
+(`WIP: <what is done> (#<N>)`) and reply with it; the orchestrator starts a fresh worker on your
+commits.
