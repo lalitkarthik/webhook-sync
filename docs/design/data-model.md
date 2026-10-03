@@ -114,7 +114,7 @@ The state machine and every statement are in [queue.md](queue.md).
 
 | Table | One row per | Holds |
 |---|---|---|
-| `sinks` | sink, and source | `state` (`active`, `paused`), `paused_reason`, `paused_since`, `consecutive_failures`, `next_probe_at` ([queue.md](queue.md)) |
+| `sinks` | sink, and source | `state` (`active`, `paused`), `paused_reason`, `paused_since`, `consecutive_failures`, `next_probe_at` ([queue.md](queue.md)); a pause persists across restarts until `wsync resume` ([Q134](grilling-log.md)) |
 | `checkpoints` | source and account | `checkpoint_at` (the source's clock), `last_sweep_at`, `last_sweep_stored`, `horizon_warned_at` ([sweeper.md](sweeper.md)) |
 | `sheet_state` | spreadsheet | tab ids, `deployment_id`, last flush, cell count |
 | `verify_runs`, `verify_findings` | run; difference found | counts, totals per currency, the finding and the job that repaired it |

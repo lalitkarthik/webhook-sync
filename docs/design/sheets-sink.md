@@ -10,11 +10,13 @@ Three **machine-owned** tabs: the service writes every cell, and buyers read, so
 
 **Payments**: one row per payment. Default columns, declared in config ([Q69](grilling-log.md)):
 
-| Payment ID | Source | Created (IST) | Status | Amount | Currency | Refunded | Settled | Fee | GST on fee | Net | Settled in | Method | Customer email | Description | order_id | Via | Note | Updated (IST) |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| pay_Tj66x… | razorpay | 2026-10-02 21:28:59 | succeeded | 500.00 | INR | 0.00 | 500.00 | 12.98 | 1.98 | 487.02 | INR | netbanking | a***@gmail.com | Pro plan | A-1042 | delivery | | 2026-10-02 21:29:02 |
+| Payment ID | Source | Created (IST) | Status | Amount | Currency | Refunded | Fee | GST on fee | Net | Fee currency | Method | Customer email | Description | order_id | Via | Note | Updated (IST) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| pay_Tj66x… | razorpay | 2026-10-02 21:28:59 | succeeded | 500.00 | INR | 0.00 | 11.80 | 1.80 | 488.20 | INR | netbanking (CNRB) | a***@gmail.com | Pro plan | A-1042 | delivery | | 2026-10-02 21:29:02 |
 
-- **Amount** and **Refunded** are in the currency the customer paid in. **Settled**, **Fee** and **Net** are in the currency the buyer is paid out in (**Settled in**), which is where fees are charged; for a buyer paid in the same currency the two match. They show `pending` until the source reports the fee: Razorpay at capture ([Q110](grilling-log.md)), Stripe when its balance transaction arrives, usually within an hour ([Q97](grilling-log.md)). Version 1 is Razorpay in INR, so the two currencies match.
+A **Settled** column returns when a source can fill it (Stripe); Razorpay never reports a per-payment settled amount ([Q130](grilling-log.md), [Q136](grilling-log.md)).
+
+- **Amount** and **Refunded** are in the currency the customer paid in. **Fee** and **Net** are in the currency the buyer is paid out in (**Fee currency**), which is where fees are charged; for a buyer paid in the same currency the two match. They show `pending` until the source reports the fee: Razorpay at capture ([Q110](grilling-log.md)), Stripe when its balance transaction arrives, usually within an hour ([Q97](grilling-log.md)). Version 1 is Razorpay in INR, so the two currencies match.
 - **Status** carries the refund state: `succeeded`, `partially_refunded` or `refunded`, with **Refunded** the amount ([sources.md](sources.md)).
 - **GST on fee** is the tax Razorpay charges on its fee (`tax`); **Fee** already includes it, so **Net** = Amount − Fee. Empty for Stripe.
 - A **Dispute** column joins with disputes, after the cut ([Q104](grilling-log.md)).
@@ -25,7 +27,9 @@ Three **machine-owned** tabs: the service writes every cell, and buyers read, so
 
 **Daily summary**: one row per day, per currency paid in, per currency paid out, from payments that succeeded (fully or partly refunded included): count, gross and refunds in the currency paid in; settled, fees and net (before refunds) in the currency paid out. Days are the buyer's local days by payment date, and refunds count on the day of the payment they belong to; the tab header says both. A payment whose fee is still pending counts in count, gross and refunds, but not yet in settled, fees and net; Sync status shows how many are pending ([Q97](grilling-log.md)). Buyers get correct totals without summing raw rows that include failed attempts (F10). Refund-date accounting, and net after refunds, come with a refunds tab later.
 
-**Sync status**: last successful flush, rows written, jobs waiting and dead, whether the sink is paused and why, the last verify line, this deployment's id.
+**Sync status**: label and value rows, rewritten on every flush: last successful flush, rows written (last flush and total), sheet jobs waiting, dead jobs, whether the sheet and Razorpay are paused and why, the last verify line, this deployment's id ([Q138](grilling-log.md)).
+
+**First run** ([Q140](grilling-log.md)). With no tab ids stored, a tab already named Payments, Daily summary or Sync status is adopted when its header matches and pauses "layout changed" when it doesn't; a missing one is created with its header, header note and frozen header row; the tab ids are then stored. Daily summary is keyed by day, currency and fee currency, columns Day, Currency, Fee currency, Payments, Gross, Refunds, Fees, Net (before refunds), Fee pending ([Q137](grilling-log.md)).
 
 ## The flush
 
@@ -107,7 +111,7 @@ A crash at any point leaves the sink paused with "rebuild incomplete" until the 
 
 Sheets allows 60 reads and 60 writes a minute per user. A flush costs **two reads and one write** whatever its size, and runs at most every 3 s: at worst 40 reads and 20 writes a minute. Calls grow with how long work keeps arriving, not with the number of events. 200 payments arriving over 30 seconds take about ten flushes, so around 30 calls; 200 events never cost 200 calls (F19). The README prints the number measured in rehearsal. Google says over-quota calls may be billed later in 2026, so a 429 always backs off.
 
-**Auth** ([Q90](grilling-log.md)). A Google service account with the `spreadsheets` scope only; the buyer shares the one spreadsheet with its address. Sharing with the service account works unless the buyer's Workspace admin has turned off sharing outside the domain; the admin's allowlist takes only Workspace domains, so it can't admit a service account. For that buyer, or one whose Google organisation blocks service-account keys (the default for organisations created since May 2024), the fallback is an **Internal** OAuth app created in the buyer's own Workspace, with a dedicated user's refresh token: an Internal app needs no Google review, and its tokens don't expire after 7 days as a "Testing" app's do ([Q101](grilling-log.md), G3). `doctor` says which is in use and explains the sharing-blocked and key-blocked errors in plain words.
+**Auth** ([Q90](grilling-log.md), [Q135](grilling-log.md)). A Google service account with the `spreadsheets` scope only, its key in `GOOGLE_SERVICE_ACCOUNT_B64`; the buyer shares the one spreadsheet with its address. Sharing with the service account works unless the buyer's Workspace admin has turned off sharing outside the domain; the admin's allowlist takes only Workspace domains, so it can't admit a service account. For that buyer, or one whose Google organisation blocks service-account keys (the default for organisations created since May 2024), the fallback is an **Internal** OAuth app created in the buyer's own Workspace, with a dedicated user's refresh token: an Internal app needs no Google review, and its tokens don't expire after 7 days as a "Testing" app's do ([Q101](grilling-log.md), G3). `doctor` says which is in use and explains the sharing-blocked and key-blocked errors in plain words.
 
 ## Failures and their class
 
