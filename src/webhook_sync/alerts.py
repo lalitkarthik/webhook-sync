@@ -127,6 +127,24 @@ class Alerter:
                 log.exception("dead-jobs check failed")
             await asyncio.sleep(DEAD_JOBS_CHECK_EVERY)
 
+    async def verify_differences(self, unrepaired: Mapping[str, int]) -> None:
+        """The `verify_differences` alert: a full verify's findings left unrepaired, counted
+        by kind. Never raises."""
+        kinds = ", ".join(f"{kind} {n}" for kind, n in sorted(unrepaired.items()))
+        total = sum(unrepaired.values())
+        await self._never_raise(
+            "verify_differences", f"{total} difference(s) verify left unrepaired ({kinds})"
+        )
+
+    async def stale_twice(self, payment_ids: Sequence[str]) -> None:
+        """The `stale_twice` alert: payments stale on two full verify runs in a row. Never
+        raises."""
+        await self._never_raise(
+            "stale_twice",
+            f"{len(payment_ids)} payment(s) stale on two full verify runs in a row:"
+            f" {', '.join(payment_ids)}",
+        )
+
     async def _never_raise(self, kind: AlertKind, text: str) -> None:
         try:
             await self.send(kind, text)

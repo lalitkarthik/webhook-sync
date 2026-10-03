@@ -2,8 +2,8 @@
 
 Built from a config object and a data directory. Its lifespan opens the writer and applies
 pending migrations before the first request, starts the stage runners, the sweeper, the hourly
-verify and the reaper, and closes the writer at the end. `shut_down` runs the shutdown's steps
-while the app still answers.
+verify, the nightly full verify and the reaper, and closes the writer at the end. `shut_down`
+runs the shutdown's steps while the app still answers.
 """
 
 import asyncio
@@ -47,7 +47,7 @@ from webhook_sync.sinks.sheets_client import ServiceAccountTokens, SheetsClient
 from webhook_sync.sources.base import EventDescription, Rejection, SourceAdapter, VerifiedDelivery
 from webhook_sync.sources.razorpay import EVENT_ID_HEADER, RazorpayAdapter, api_client
 from webhook_sync.sweeper import Sweeper
-from webhook_sync.verify import SheetVerify
+from webhook_sync.verify import FullVerify, SheetVerify
 
 log = logging.getLogger("webhook_sync.receiver")
 
@@ -146,6 +146,10 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
             loops = [asyncio.create_task(Sweeper(writer, razorpay, config, pauses=pauses).run())]
             if sheet_verify is not None:
                 loops.append(asyncio.create_task(sheet_verify.run_hourly()))
+            full_verify = FullVerify(
+                writer, razorpay, config, pauses=pauses, alerter=alerter, sheet=sheet_verify
+            )
+            loops.append(asyncio.create_task(full_verify.run_nightly()))
             app.state.loops = loops
             minutely = asyncio.create_task(_write_rejection_counts_every_minute(receiver))
             dead_jobs_check = asyncio.create_task(alerter.run_dead_jobs_check())  # A17

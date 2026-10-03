@@ -147,6 +147,10 @@ class SheetVerify:
         )
         return recorded.run_id
 
+    def request_flush(self) -> None:
+        """Ask the flusher for a status-only flush, so Sync status shows the latest line."""
+        self._request_flush()
+
     async def check(self, started: datetime) -> SheetCheck | None:
         """The sheet against the ledger, for a run started at `started`; None when there was
         nothing to check (the sheet paused, or never written) or the read failed."""
