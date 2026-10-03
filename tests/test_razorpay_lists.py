@@ -7,7 +7,7 @@ from the recorded list answers (`tests/recordings/razorpay/api/list/`): newest f
 
 import json
 from collections.abc import AsyncIterator, Iterator, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 import httpx
@@ -221,3 +221,24 @@ async def test_a_refused_list_pauses_the_razorpay_source_in_sinks_and_raises_one
     assert alert["text"] == (
         f"webhook-sync paused: source razorpay paused: Razorpay answered HTTP {status}"
     )
+
+
+async def test_a_list_failing_on_a_later_page_retries_as_the_fetch_does_and_pauses_nothing(
+    adapter: RazorpayAdapter, razorpay: respx.MockRouter, writer: Writer, read_rows: ReadRows
+) -> None:
+    full_page = payments_in_one_second(100, 1790970000)
+    razorpay.get("/v1/payments").mock(
+        side_effect=[
+            httpx.Response(200, json={"items": full_page}, headers={"date": DATE}),
+            httpx.Response(503, headers={"retry-after": "30"}),
+        ]
+    )
+    pauses = Pauses()
+
+    failed = await adapter.list_payments(1790960000, 1790980000, writer=writer, pauses=pauses)
+
+    assert failed == Failure(
+        "Razorpay answered HTTP 503", "retry", retry_after=timedelta(seconds=30), http_status=503
+    )
+    assert pauses.sources == frozenset()
+    assert await read_rows("SELECT name FROM sinks WHERE state = 'paused'") == []
