@@ -511,3 +511,54 @@ async def test_a_changed_state_re_read_in_the_overlap_is_a_new_event_and_the_sam
         )
 
     assert await read_rows("SELECT count(*) AS n FROM events") == [{"n": 2}]
+
+
+# The hourly re-list (#40): later changes to payments the slices have already passed.
+
+AUTHORIZED = recorded_api_answer("20261003T010947-pay_Tj9rKBOXWcsMeE-authorized")
+CAPTURED = recorded_api_answer("20261003T010957-pay_Tj9rKBOXWcsMeE-captured")
+AN_HOUR_ON = NOW + timedelta(hours=1, minutes=1)
+
+
+async def an_hour_later(clock: TimeMachineFixture, fake: FakeRazorpay) -> None:
+    """Both clocks an hour on: the next sweep's slices are past every item, its re-list due."""
+    clock.move_to(AN_HOUR_ON, tick=True)
+    fake.now = AN_HOUR_ON
+
+
+@pytest.fixture
+def frequent_sweeps(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sweeper_module, "SWEEP_EVERY", timedelta(milliseconds=300))
+
+
+@pytest.mark.usefixtures("frequent_sweeps")
+async def test_a_payment_captured_after_it_was_swept_is_re_listed_and_its_row_succeeds_with_the_fee(
+    swept_config: Config,
+    data_dir: Path,
+    outside: Outside,
+    read_rows: ReadRows,
+    clock: TimeMachineFixture,
+) -> None:
+    fake = outside.razorpay
+    fake.payments["pay_Tj9rKBOXWcsMeE"] = AUTHORIZED  # created 21 minutes before NOW
+    fake.fetches["pay_Tj9rKBOXWcsMeE"] = AUTHORIZED
+    row = "SELECT status, fee_minor FROM payments WHERE payment_id = 'pay_Tj9rKBOXWcsMeE'"
+
+    async with running(swept_config, data_dir):
+        await wait_for(read_rows, row, [{"status": "authorized", "fee_minor": None}])
+        fake.payments["pay_Tj9rKBOXWcsMeE"] = CAPTURED
+        fake.fetches["pay_Tj9rKBOXWcsMeE"] = CAPTURED
+        await an_hour_later(clock, fake)
+        await wait_for(read_rows, row, [{"status": "succeeded", "fee_minor": 1180}])
+
+    assert await read_rows("SELECT type, origin FROM events ORDER BY received_at") == [
+        {"type": "payment.authorized", "origin": "sweep"},
+        {"type": "payment.captured", "origin": "sweep"},
+    ]
+    # The re-list read the last 7 days of payments, up to Razorpay's now.
+    relists = [
+        q
+        for q in fake.calls_to("/v1/payments")
+        if int(q["from"]) == at(AN_HOUR_ON - timedelta(days=7))
+    ]
+    assert relists and {int(q["to"]) for q in relists} == {at(AN_HOUR_ON)}

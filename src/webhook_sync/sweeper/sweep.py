@@ -34,7 +34,7 @@ from webhook_sync.db.schema import checkpoints
 from webhook_sync.db.writer import Writer
 from webhook_sync.queue import Failure, Pauses
 from webhook_sync.receiver.store import store_event
-from webhook_sync.sources.razorpay import Listed, ListedEntity, RazorpayAdapter
+from webhook_sync.sources.razorpay import Listed, ListedEntity, RazorpayAdapter, SweptOrigin
 
 log = logging.getLogger("webhook_sync.sweeper")
 
@@ -54,6 +54,13 @@ START_DELAY = timedelta(seconds=30)
 """The first sweep waits a random time up to this after start."""
 SWEEP_EVERY = timedelta(minutes=10)
 """The wait between sweeps."""
+RELIST_EVERY = timedelta(hours=1)
+"""How often each list is re-listed whole over its re-list window."""
+RELIST_WINDOW: dict[ListName, timedelta] = {
+    "payments": timedelta(days=7),
+    "refunds": timedelta(days=21),
+}
+"""How far back the re-list reads each list, by creation time (Q108)."""
 
 type Sleep = Callable[[float], Awaitable[None]]
 
@@ -90,22 +97,27 @@ class Sweeper:
             await self._sleep(SWEEP_EVERY.total_seconds())
 
     async def sweep(self) -> bool:
-        """One sweep of both lists; True when every due slice of each was stored. Nothing is
-        listed while Razorpay is paused."""
+        """One sweep of both lists; True when every due slice of each was stored, and its
+        re-list when due. Nothing is listed while Razorpay is paused."""
         finished = True
         for list_name, entity in LISTS:
             if self._razorpay.name in self._pauses.sources:
                 log.info("sweep skipped: Razorpay is paused", extra={"list": list_name})
                 return False
-            finished = await self._walk(list_name, entity) and finished
+            source_now = await self._walk(list_name, entity)
+            if source_now is None:
+                finished = False
+            elif await self._relist_due(list_name):
+                finished = await self._relist(list_name, entity, source_now) and finished
         return finished
 
-    async def _walk(self, list_name: ListName, entity: ListedEntity) -> bool:
+    async def _walk(self, list_name: ListName, entity: ListedEntity) -> int | None:
         """Walk one list's slices from its checkpoint up to Razorpay's now - 60 s.
 
         Razorpay's now is read first, from a one-second list call, then from each slice's
         answer: every slice is requested up to its own end, never past Razorpay's now - 60 s,
-        so payments created during the walk can't shift its pages (razorpay-list-facts.md)."""
+        so payments created during the walk can't shift its pages (razorpay-list-facts.md).
+        Razorpay's now at the end of the walk; None when a list call failed."""
         probe = await self._source_now(list_name)
         if isinstance(probe, Failure):
             return _stopped(list_name, probe)
@@ -123,7 +135,7 @@ class Sweeper:
                 return _stopped(list_name, listed)
             source_now = _seconds_of(listed.source_now)
             kept = [item for item in listed.items if floor <= item["created_at"] < end]
-            new = await self._store(entity, kept)
+            new = await self._store(entity, kept, origin="sweep")
             await self._advance(list_name, end)
             log.info(
                 "sweep slice",
@@ -140,6 +152,32 @@ class Sweeper:
                 break  # caught up with Razorpay's now
             start, first = end, False
         await self._swept(list_name, stored)
+        return source_now
+
+    async def _relist_due(self, list_name: ListName) -> bool:
+        """Whether the list was last re-listed an hour ago or more (our clock)."""
+        async with self._writer.transaction() as tx:
+            rows = await tx.execute(
+                sa.select(checkpoints.c.last_relist_at).where(*_matching(self._key(list_name)))
+            )
+        last = rows[0]["last_relist_at"] if rows else None
+        return last is None or last <= to_db_text(utc_now() - RELIST_EVERY)
+
+    async def _relist(self, list_name: ListName, entity: ListedEntity, source_now: int) -> bool:
+        """Re-list every item created in the list's re-list window up to Razorpay's now; an
+        item whose state hash is new is a new synthetic event with its ledger job (Q108)."""
+        start = source_now - _seconds(RELIST_WINDOW[list_name])
+        listed = await self._list(list_name, start, source_now)
+        if isinstance(listed, Failure):
+            return _stopped(list_name, listed)
+        new = await self._store(entity, listed.items, origin="sweep")
+        async with self._writer.transaction() as tx:
+            await tx.execute(
+                sa.update(checkpoints)
+                .where(*_matching(self._key(list_name)))
+                .values(last_relist_at=to_db_text(utc_now()))
+            )
+        log.info("re-list", extra={"list": list_name, "listed": len(listed.items), "stored": new})
         return True
 
     async def _source_now(self, list_name: ListName) -> int | Failure:
@@ -154,7 +192,9 @@ class Sweeper:
         )
         return await lister(start, end, writer=self._writer, pauses=self._pauses)
 
-    async def _store(self, entity: ListedEntity, items: Sequence[Mapping[str, Any]]) -> int:
+    async def _store(
+        self, entity: ListedEntity, items: Sequence[Mapping[str, Any]], *, origin: SweptOrigin
+    ) -> int:
         """Store each item's synthetic event if absent, all in one transaction; the count of
         new events."""
         configured = self._config.razorpay
@@ -162,7 +202,7 @@ class Sweeper:
         now = utc_now()
         async with self._writer.transaction() as tx:
             for item in items:
-                described = self._razorpay.describe_listed(entity, item, origin="sweep")
+                described = self._razorpay.describe_listed(entity, item, origin=origin)
                 if described is None:
                     continue  # a `created` payment: nothing attempted yet
                 event_id, description = described
@@ -174,7 +214,7 @@ class Sweeper:
                     retry_profile=self._config.service.retry_profile,
                     event_id=event_id,
                     description=description,
-                    origin="sweep",
+                    origin=origin,
                     body_sha256=None,
                     received_at=now,
                 )
@@ -184,14 +224,20 @@ class Sweeper:
     async def _checkpoint(self, list_name: ListName, source_now: int) -> tuple[int, bool]:
         """The list's checkpoint in Unix seconds, and whether it is still the first start's (no
         slice stored yet). With none, one is stored at once, `initial_lookback_days` before
-        Razorpay's now, so a restart doesn't move it."""
+        Razorpay's now, so a restart doesn't move it. Its re-list is first due an hour on, so the
+        first start reads only its lookback."""
         key = self._key(list_name)
         lookback = timedelta(days=self._config.sweeper.initial_lookback_days)
         first = _moment(source_now - _seconds(lookback))
         async with self._writer.transaction() as tx:
             await tx.execute(
                 sqlite.insert(checkpoints)
-                .values(**key, checkpoint_at=to_db_text(first), last_sweep_stored=0)
+                .values(
+                    **key,
+                    checkpoint_at=to_db_text(first),
+                    last_sweep_stored=0,
+                    last_relist_at=to_db_text(utc_now()),
+                )
                 .on_conflict_do_nothing()
             )
         stored = await self._stored_checkpoint(key)
