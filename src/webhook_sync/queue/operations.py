@@ -314,9 +314,7 @@ async def fail(
             tx, failure.pause_target or "sink", paused, failure.error, now=now
         )
     if paused is not None:
-        pauses.pause(failure.pause_target or "sink", paused)
-        if newly_paused and pauses.on_pause is not None:
-            await pauses.on_pause(failure.pause_target or "sink", paused, failure.error)
+        await pauses.stored(failure.pause_target or "sink", paused, failure.error, new=newly_paused)
     return status
 
 

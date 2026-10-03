@@ -30,7 +30,8 @@ from razorpay.errors import SignatureVerificationError  # pyright: ignore[report
 
 from webhook_sync.clock import utc_now
 from webhook_sync.config import Mode
-from webhook_sync.queue import Failure
+from webhook_sync.db.writer import Writer
+from webhook_sync.queue import Failure, Pauses, pause
 from webhook_sync.receiver.rate_cap import RateCap
 from webhook_sync.sources.base import (
     BusinessRow,
@@ -255,14 +256,31 @@ class RazorpayAdapter:
             if len(page) < REFUNDS_PAGE:
                 return refunds
 
-    async def list_payments(self, start: int, end: int) -> Listed | Failure:
-        """Every payment created from `start` to `end`, both inclusive, newest first."""
-        return await self._list("/v1/payments", start, end)
+    async def list_payments(
+        self, start: int, end: int, *, writer: Writer, pauses: Pauses
+    ) -> Listed | Failure:
+        """Every payment created from `start` to `end`, both inclusive, newest first. A 401 or
+        403 pauses the source in `sinks` and `pauses`, with the `paused` alert."""
+        return await self._paused_on_refusal(
+            await self._list("/v1/payments", start, end), writer, pauses
+        )
 
-    async def list_refunds(self, start: int, end: int) -> Listed | Failure:
-        """Every refund created from `start` to `end`, both inclusive, newest first. The
-        `status` filter is never sent: Razorpay accepts it and doesn't filter (G73)."""
-        return await self._list("/v1/refunds", start, end)
+    async def list_refunds(
+        self, start: int, end: int, *, writer: Writer, pauses: Pauses
+    ) -> Listed | Failure:
+        """Every refund created from `start` to `end`, as `list_payments`. The `status` filter
+        is never sent: Razorpay accepts it and doesn't filter (G73)."""
+        return await self._paused_on_refusal(
+            await self._list("/v1/refunds", start, end), writer, pauses
+        )
+
+    async def _paused_on_refusal(
+        self, answer: Listed | Failure, writer: Writer, pauses: Pauses
+    ) -> Listed | Failure:
+        """A list runs in no job, so a `pause` failure pauses the source here (A12)."""
+        if isinstance(answer, Failure) and answer.error_class == "pause":
+            await pause(writer, pauses, "source", self.name, answer.error, now=utc_now())
+        return answer
 
     async def _list(self, path: str, start: int, end: int) -> Listed | Failure:
         """Page a list by creation time (sweeper.md, "Razorpay: polling").
