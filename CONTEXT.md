@@ -231,7 +231,11 @@ _Avoid_: audit, reconcile (reconcile is demo 1's word for balance checks)
 Fixing what verify found by enqueuing ordinary jobs, never by editing rows directly.
 
 **Admin action**:
-Anything a person does from the admin port or the CLI (replay, backfill, rebuild, retry, resolve, resume), logged with which token and when.
+Anything a person does from the admin listener or the CLI (replay, backfill, rebuild, retry, resolve, resume), logged with who asked (`cli` or `admin`) and when.
+
+**Admin listener**:
+The second, loopback-only listener the server runs beside the public one; it serves `POST /admin/resume/{name}` and `GET /admin/status` for `wsync resume` and `wsync status`.
+_Avoid_: admin port, admin page
 
 **Heartbeat URL**:
 An outside service the sweeper pings after every sweep; when the pings stop, it tells a person the service is down. Also called a dead-man's switch.
