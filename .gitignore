@@ -25,3 +25,11 @@ out/
 
 # Research scratch
 .firecrawl/
+
+# feature-loop gates
+.fl-ticket.json
+.fl-stop-count.json
+.verify/
+verification/
+.playwright-cli/
+mutants/

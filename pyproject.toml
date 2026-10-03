@@ -22,6 +22,9 @@ wsync = "webhook_sync.cli.main:main"
 
 [dependency-groups]
 dev = [
+    "import-linter>=2.15",
+    "mutmut>=3.8.0",
+    "pre-commit>=4.6.2",
     "pyright>=1.1.405",
     "pytest>=8.4",
     "pytest-asyncio>=1.2",
@@ -46,6 +49,7 @@ select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF", "ASYNC", "PT"]
 [tool.pyright]
 include = ["src", "tests"]
 pythonVersion = "3.14"
+pythonPlatform = "Linux"
 extraPaths = ["src", "tests"]
 typeCheckingMode = "strict"
 
@@ -55,6 +59,7 @@ addopts = ["--import-mode=importlib", "--strict-markers"]
 pythonpath = ["tests"]
 markers = [
     "unrecorded: uses Razorpay's documented samples, not recorded deliveries (Q113)",
+    "posix: needs POSIX signals and a direct child process; skipped on Windows (deploys run Linux)",
 ]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
