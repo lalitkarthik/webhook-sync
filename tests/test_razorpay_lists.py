@@ -20,6 +20,7 @@ from webhook_sync.sources.razorpay import Listed, RazorpayAdapter, api_client
 
 RAZORPAY_API = "https://api.razorpay.test"
 LISTS = RAZORPAY_RECORDINGS / "api" / "list"
+DATE = "Sat, 03 Oct 2026 08:00:00 GMT"
 
 
 def recorded_list(name: str) -> tuple[list[dict[str, Any]], str]:
@@ -106,3 +107,30 @@ async def test_a_range_returns_the_recorded_refunds_newest_first_with_both_bound
     assert ids(older) == ["rfnd_Tj9tB2hm5WLvww"]
     assert both.source_now == datetime(2026, 10, 3, 7, 52, 50, tzinfo=UTC)
     assert all("status" not in query for query in calls)  # accepted but ignored (G73)
+
+
+def payments_in_one_second(count: int, created_at: int) -> list[dict[str, Any]]:
+    return [
+        {"id": f"pay_same{n:06d}", "entity": "payment", "created_at": created_at}
+        for n in range(count)
+    ]
+
+
+async def test_150_payments_created_in_one_second_all_come_back_each_once(
+    adapter: RazorpayAdapter, razorpay: respx.MockRouter
+) -> None:
+    same_second = payments_in_one_second(150, 1790970000)
+    older = [{"id": "pay_older", "entity": "payment", "created_at": 1790969000}]
+    calls: list[dict[str, str]] = []
+    razorpay.get("/v1/payments").mock(
+        side_effect=answers_like_razorpay([*same_second, *older], DATE, calls)
+    )
+
+    listed = ok(await adapter.list_payments(1790960000, 1790980000))
+
+    assert ids(listed) == [item["id"] for item in [*same_second, *older]]
+    assert [(call["to"], call.get("skip")) for call in calls] == [
+        ("1790980000", None),
+        ("1790970001", None),  # to = the oldest created_at seen + 1: nothing new
+        ("1790970001", "100"),  # so that two-second window is paged with skip
+    ]
