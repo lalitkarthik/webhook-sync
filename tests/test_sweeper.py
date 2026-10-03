@@ -200,6 +200,7 @@ def sheet_rows(sheets: FakeSheets) -> dict[str, dict[str, Any]]:
 
 ALL_ROWS = "SELECT payment_id, via FROM payments ORDER BY payment_id"
 MIRRORED = "SELECT payment_key FROM jobs WHERE stage = 'mirror' AND status = 'done'"
+BOTH_LISTS_SWEPT = "SELECT count(*) AS n FROM checkpoints WHERE last_sweep_at IS NOT NULL"
 
 
 async def test_payments_made_while_the_server_was_down_reach_the_ledger_and_the_sheet(
@@ -353,11 +354,7 @@ async def test_with_no_lookback_the_first_sweep_starts_from_now_and_stores_nothi
         fake.payments[payment_id] = listed[payment_id]
 
     async with running(config, data_dir):
-        await wait_for(
-            read_rows,
-            "SELECT count(*) AS n FROM checkpoints WHERE last_sweep_at IS NOT NULL",
-            [{"n": 2}],
-        )
+        await wait_for(read_rows, BOTH_LISTS_SWEPT, [{"n": 2}])
         started_at = await checkpoint(read_rows, "payments")
         assert await read_rows("SELECT * FROM events") == []
         # Ten minutes on, a payment made after the start is swept; the older ones still aren't.
@@ -412,6 +409,7 @@ async def test_each_listed_payment_and_refund_is_stored_as_a_synthetic_event_lik
     outside.razorpay.refunds.extend(recorded_listed_refunds())  # 2, of pay_Tj9gmEfed6kRqO
 
     async with running(swept_config, data_dir):
+        await wait_for(read_rows, BOTH_LISTS_SWEPT, [{"n": 2}])
         await wait_for(
             read_rows,
             "SELECT payment_id, status FROM payments ORDER BY payment_id",
