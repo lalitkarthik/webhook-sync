@@ -7,6 +7,8 @@ to a Google Sheet, and proves nothing was lost or written twice. Designed, not y
   (grilling round 11, Q103-Q114); `docs/design/razorpay-first-brief.md` is superseded.
 - **Words:** `CONTEXT.md`. Use its terms exactly.
 - **Cloud sessions:** when `CLAUDE_CODE_REMOTE` is `true`, read `docs/agents/cloud.md` first.
+- **Local sessions:** otherwise, read `docs/agents/local.md` first: setup, the smoke test and the
+  plan → build → merge → clean-up cycle.
 - **Secrets:** environment variables named in `.env.example`; test-mode keys only; never in a
   file in the repo, a commit, an issue or a log.
 - **Commits and PRs** carry no attribution lines of any kind.
