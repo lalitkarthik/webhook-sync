@@ -26,6 +26,10 @@ do, it claims up to 200 and makes one flush of them all:
    and a clean flush resets the count (Q63, Q143, A14);
 7. complete every job and update `sheet_state` in one transaction.
 
+Sync status's Last verify is the latest verify run's line (A17). A verify run asks for a
+status-only flush (`BatchStageRunner.request`): the same flush with no jobs, so the line appears
+without a mirror job.
+
 A payment in an unknown currency is held back: its job alone goes dead, with one
 `unknown_currency` alert naming the code and payment ids; the rest are written.
 
@@ -49,7 +53,7 @@ from sqlalchemy.dialects import sqlite
 from webhook_sync.alerts import Alerter
 from webhook_sync.clock import to_db_text, utc_now
 from webhook_sync.config import Config, RetryProfile
-from webhook_sync.db.schema import jobs, payments, sheet_state, sinks
+from webhook_sync.db.schema import jobs, payments, sheet_state, sinks, verify_runs
 from webhook_sync.db.writer import Transaction, Writer
 from webhook_sync.queue import ClaimedJob, Done, Failure, Pauses, StageFailed, enqueue
 from webhook_sync.queue.runner import BatchStageRunner, BatchWork, Sleep
@@ -411,6 +415,12 @@ class Flusher:
                     sinks.c.name.in_([SINK, RAZORPAY])
                 )
             )
+            verified = await tx.execute(
+                sa.select(verify_runs.c.status_line)
+                .where(verify_runs.c.status_line.is_not(None))
+                .order_by(verify_runs.c.id.desc())
+                .limit(1)
+            )
         by_name = {r["name"]: state_text(r["state"], r["reason"]) for r in states}
         newly_dead = sum(1 for f in failed.values() if f.error_class == "dead")
         return SyncStatus(
@@ -422,6 +432,7 @@ class Flusher:
             sheet_state=by_name.get(SINK, "active"),
             razorpay_state=by_name.get(RAZORPAY, "active"),
             deployment_id=state.deployment_id,
+            last_verify=verified[0]["status_line"] if verified else None,
         )
 
     # -- tabs ----------------------------------------------------------------------------------
