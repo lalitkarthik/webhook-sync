@@ -336,14 +336,15 @@ async def test_a_quiet_accounts_checkpoints_still_advance_to_razorpays_now_less_
 
     assert await read_rows("SELECT * FROM events") == []
     # One call for Razorpay's now, then a day back from it in four slices of up to 6 h: the
-    # first read from its start, each later one from 10 minutes before its start.
-    froms = [int(query["from"]) for query in outside.razorpay.calls_to("/v1/payments")]
+    # first read from its start, each later one from 10 minutes before its start, and each up
+    # to its end, the last at Razorpay's now less a minute, never a time still to come.
+    calls = outside.razorpay.calls_to("/v1/payments")
     first = at(outside.razorpay.now - timedelta(days=1))
-    assert froms[1:] == [
-        first,
-        first + 6 * 3600 - 600,
-        first + 12 * 3600 - 600,
-        first + 18 * 3600 - 600,
+    assert [(int(q["from"]), int(q["to"])) for q in calls[1:]] == [
+        (first, first + 6 * 3600),
+        (first + 6 * 3600 - 600, first + 12 * 3600),
+        (first + 12 * 3600 - 600, first + 18 * 3600),
+        (first + 18 * 3600 - 600, at(outside.razorpay.now) - 60),
     ]
 
 
@@ -395,6 +396,9 @@ async def test_with_no_lookback_the_first_sweep_starts_from_now_and_stores_nothi
         {"payment_key": "pay_Tj64grZUMO3PEj"}
     ]
     assert await checkpoint(read_rows, "payments") == "2026-10-02T20:09:00.000000Z"
+    # Caught up, a slice is requested up to Razorpay's now less a minute, not 6 h ahead.
+    slices = [q for q in fake.calls_to("/v1/payments") if q["from"] != q["to"]]
+    assert max(int(q["to"]) for q in slices) == at(NOW + timedelta(minutes=9))
 
 
 async def test_while_razorpay_is_paused_the_sweeper_makes_no_list_calls(

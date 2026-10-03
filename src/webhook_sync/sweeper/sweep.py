@@ -1,17 +1,18 @@
 """The sweeper: Razorpay's payments and refunds lists walked in time slices (sweeper.md).
 
 Each list has its own checkpoint, on Razorpay's clock (A16): every item created before it has
-been listed and stored at least once. A list with no checkpoint gets one at once,
-`initial_lookback_days` before Razorpay's now (Q157), read from the `Date` of a one-second list
-call; `last_sweep_at` stays NULL until its first slice is stored. A slice runs from the checkpoint
-to at most 6 h later, and never past Razorpay's now - 60 s, read from the answer's `Date` header;
-it is requested from 10 minutes before its start, so the overlap re-reads the edge, and only items
-created before its end are kept. A list's first slice has no edge to re-read: it is requested
-from its start and keeps nothing older, so a lookback of 0 starts empty. Each
-kept item is stored as a synthetic event if absent (`sweep:<entity id>:<state hash>`), a new one
-with its ledger job; then, in its own transaction, the checkpoint moves to the slice's end. An
-empty slice moves it too, so a quiet account's checkpoint keeps up. A sweep stopped mid-slice
-re-reads that slice next time, and insert-if-absent stores nothing twice.
+been listed and stored at least once. Each walk first reads Razorpay's now from the `Date` of a
+one-second list call, then from each slice's answer. A list with no checkpoint gets one at once,
+`initial_lookback_days` before that now (Q157); `last_sweep_at` stays NULL until its first slice
+is stored. A slice runs from the checkpoint to at most 6 h later, never past Razorpay's now -
+60 s, and is requested up to its end, so payments created meanwhile can't shift its pages. It is
+requested from 10 minutes before its start, so the overlap re-reads the edge; a list's first
+slice has no edge to re-read and keeps nothing older than its start, so a lookback of 0 starts
+empty. Only items created before a slice's end are kept. Each kept item is stored as a
+synthetic event if absent (`sweep:<entity id>:<state hash>`), a new one with its ledger job;
+then, in its own transaction, the checkpoint moves to the slice's end. An empty slice moves it
+too, so a quiet account's checkpoint keeps up. A sweep stopped mid-slice re-reads that slice
+next time, and insert-if-absent stores nothing twice.
 
 The app's lifespan runs `run`: one sweep after a random 0-30 s delay, then one every 10 minutes,
 skipped while Razorpay is paused.
@@ -100,21 +101,27 @@ class Sweeper:
         return finished
 
     async def _walk(self, list_name: ListName, entity: ListedEntity) -> bool:
-        """Walk one list's slices from its checkpoint up to Razorpay's now - 60 s."""
-        checkpoint = await self._checkpoint(list_name)
-        if isinstance(checkpoint, Failure):
-            return _stopped(list_name, checkpoint)
-        start, first = checkpoint
+        """Walk one list's slices from its checkpoint up to Razorpay's now - 60 s.
+
+        Razorpay's now is read first, from a one-second list call, then from each slice's
+        answer: every slice is requested up to its own end, never past Razorpay's now - 60 s,
+        so payments created during the walk can't shift its pages (razorpay-list-facts.md)."""
+        probe = await self._source_now(list_name)
+        if isinstance(probe, Failure):
+            return _stopped(list_name, probe)
+        source_now = probe
+        start, first = await self._checkpoint(list_name, source_now)
         stored = 0
         while True:
             upper = start + _seconds(SLICE)
-            floor = start if first else start - _seconds(OVERLAP)
-            listed = await self._list(list_name, floor, upper)
-            if isinstance(listed, Failure):
-                return _stopped(list_name, listed)
-            end = min(upper, _seconds_of(listed.source_now) - _seconds(SETTLE))
+            end = min(upper, source_now - _seconds(SETTLE))
             if end <= start:
                 break  # the checkpoint is already at Razorpay's now - 60 s
+            floor = start if first else start - _seconds(OVERLAP)
+            listed = await self._list(list_name, floor, end)
+            if isinstance(listed, Failure):
+                return _stopped(list_name, listed)
+            source_now = _seconds_of(listed.source_now)
             kept = [item for item in listed.items if floor <= item["created_at"] < end]
             new = await self._store(entity, kept)
             await self._advance(list_name, end)
@@ -134,6 +141,12 @@ class Sweeper:
             start, first = end, False
         await self._swept(list_name, stored)
         return True
+
+    async def _source_now(self, list_name: ListName) -> int | Failure:
+        """Razorpay's now in Unix seconds, from the `Date` of a one-second list call."""
+        now = _seconds_of(utc_now())
+        listed = await self._list(list_name, now, now)
+        return listed if isinstance(listed, Failure) else _seconds_of(listed.source_now)
 
     async def _list(self, list_name: ListName, start: int, end: int) -> Listed | Failure:
         lister = (
@@ -168,20 +181,13 @@ class Sweeper:
                 new += stored is not None
         return new
 
-    async def _checkpoint(self, list_name: ListName) -> tuple[int, bool] | Failure:
+    async def _checkpoint(self, list_name: ListName, source_now: int) -> tuple[int, bool]:
         """The list's checkpoint in Unix seconds, and whether it is still the first start's (no
         slice stored yet). With none, one is stored at once, `initial_lookback_days` before
         Razorpay's now, so a restart doesn't move it."""
         key = self._key(list_name)
-        stored = await self._stored_checkpoint(key)
-        if stored is not None:
-            return stored
-        now = int(utc_now().timestamp())
-        listed = await self._list(list_name, now, now)  # only its `Date` is wanted
-        if isinstance(listed, Failure):
-            return listed
         lookback = timedelta(days=self._config.sweeper.initial_lookback_days)
-        first = _moment(_seconds_of(listed.source_now) - _seconds(lookback))
+        first = _moment(source_now - _seconds(lookback))
         async with self._writer.transaction() as tx:
             await tx.execute(
                 sqlite.insert(checkpoints)
