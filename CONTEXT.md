@@ -237,6 +237,9 @@ Anything a person does from the admin listener or the CLI (replay, backfill, reb
 The second, loopback-only listener the server runs beside the public one; it serves `POST /admin/resume/{name}` and `GET /admin/status` for `wsync resume` and `wsync status`.
 _Avoid_: admin port, admin page
 
+**Alert**:
+A short message posted to the `[alerts] url` Slack or Discord webhook when a source or sink pauses, jobs go dead, the sheet changed during a write or a currency is unknown; at most one per kind an hour, the suppressed repeats counted in the next, ids and counts only.
+
 **Heartbeat URL**:
 An outside service the sweeper pings after every sweep; when the pings stop, it tells a person the service is down. Also called a dead-man's switch.
 _Avoid_: health check (that is the `/health` endpoint an outside monitor calls)
