@@ -33,6 +33,10 @@ LOGGED_FIELDS = (
     "by",
     "alert",
     "suppressed",
+    "jobs",
+    "rows_updated",
+    "rows_appended",
+    "duration_ms",
 )
 
 

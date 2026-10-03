@@ -366,7 +366,7 @@ class FakeSheets:
     It starts as Google makes a new spreadsheet: one tab, `Sheet1` (sheetId 0, 1000 x 26).
     `mount(router)` serves it; `apply(requests)` edits it as a person would (no HTTP, no quota).
     Fault switches: `access` ("edit", "view" or "none": unshared), `deleted`,
-    `exhaust_quota`, `fail_next`, `refuse_tokens`, `revoke_tokens`.
+    `exhaust_quota`, `fail_next`, `lose_next_write_reply`, `refuse_tokens`, `revoke_tokens`.
     """
 
     def __init__(
@@ -401,6 +401,7 @@ class FakeSheets:
         self._token_serial = itertools.count(1)
         self._quota: dict[QuotaKind, datetime] = {}
         self._failures: list[int] = []
+        self._lose_write_replies = 0
         if first_tab:
             self.apply([{"addSheet": {"properties": {"title": "Sheet1", "sheetId": 0}}}])
 
@@ -442,6 +443,10 @@ class FakeSheets:
     def fail_next(self, *statuses: int) -> None:
         """The next calls answer these 5xx statuses, one each, in order."""
         self._failures.extend(statuses)
+
+    def lose_next_write_reply(self) -> None:
+        """The next `batchUpdate` is applied, then its reply lost: the caller times out."""
+        self._lose_write_replies += 1
 
     def cell_count(self, tabs: Iterable[Tab] | None = None) -> int:
         return sum(tab.row_count * tab.column_count for tab in (tabs or self.tabs))
@@ -528,7 +533,11 @@ class FakeSheets:
             out["commentUpdateState"] = "NO_UPDATES_REQUESTED"
             return copy.deepcopy(out)
 
-        return self._answer("batchUpdate", "write", request, sid, answer)
+        response = self._answer("batchUpdate", "write", request, sid, answer)
+        if response.is_success and self._lose_write_replies:
+            self._lose_write_replies -= 1
+            raise httpx.ReadTimeout("the reply was lost", request=request)
+        return response
 
     def _answer(
         self, name: str, kind: QuotaKind, request: httpx.Request, sid: str, answer: Any
