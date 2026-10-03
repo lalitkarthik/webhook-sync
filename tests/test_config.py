@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import pytest
-from support import TEST_ACCOUNT, TEST_SPREADSHEET_ID
+from support import TEST_ACCOUNT, TEST_SPREADSHEET_ID, fixture_service_account_b64
 
 from webhook_sync.config import ConfigError, load_config
 
@@ -21,10 +21,11 @@ account = "{TEST_ACCOUNT}"
 spreadsheet_id = "{TEST_SPREADSHEET_ID}"
 """
 
-DOTENV = """
+DOTENV = f"""
 RAZORPAY_KEY_ID=rzp_test_fromDotenv
 RAZORPAY_KEY_SECRET=secret-from-dotenv
 RAZORPAY_WEBHOOK_SECRET=webhook-secret-from-dotenv
+GOOGLE_SERVICE_ACCOUNT_B64={fixture_service_account_b64()}
 """
 
 

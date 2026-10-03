@@ -8,6 +8,10 @@ whose prefix doesn't match the mode, a bad timezone, `[sources.stripe]` while St
 The sections P2-P4 own are accepted and checked for type only (A29).
 """
 
+import base64
+import binascii
+import ipaddress
+import json
 import os
 import re
 import tomllib
@@ -18,6 +22,7 @@ from typing import Any, Literal, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import dotenv_values
+from google.oauth2 import service_account
 
 type Mode = Literal["test", "live"]
 type RetryProfile = Literal["production", "demo"]
@@ -55,9 +60,41 @@ class RazorpayConfig:
     """Where the fetch calls Razorpay's API. Only tests and fakes point it elsewhere."""
 
 
+DEFAULT_COLUMNS: tuple[str, ...] = (
+    "payment_id",
+    "source",
+    "created",
+    "status",
+    "amount",
+    "currency",
+    "refunded",
+    "fee",
+    "gst_on_fee",
+    "net",
+    "fee_currency",
+    "method",
+    "customer_email",
+    "description",
+    "metadata",
+    "via",
+    "note",
+    "updated",
+)
+"""The Payments tab's columns by key, in order (Q136). `metadata` expands to one column per
+`[sources.razorpay] metadata_keys` entry. These are also every key `columns` may name."""
+
+
 @dataclass(frozen=True)
 class SheetsConfig:
     spreadsheet_id: str
+    columns: tuple[str, ...] = DEFAULT_COLUMNS
+    mask_email: bool = True
+
+
+@dataclass(frozen=True)
+class AlertsConfig:
+    url: str = ""
+    """A Slack or Discord incoming-webhook URL; empty means a warning log line instead (Q139)."""
 
 
 @dataclass(frozen=True)
@@ -75,18 +112,32 @@ class RazorpaySecrets:
 
 
 @dataclass(frozen=True)
+class GoogleSecrets:
+    """The decoded service-account key (A4). Kept out of `repr`, so it never reaches a log."""
+
+    service_account: Mapping[str, Any] = field(repr=False)
+
+
+@dataclass(frozen=True)
 class Config:
     service: ServiceConfig
     razorpay: RazorpayConfig
     razorpay_secrets: RazorpaySecrets
+    google_secrets: GoogleSecrets
     sheets: SheetsConfig
     sinks: tuple[str, ...]
     """The configured sinks' names, one per `[sinks.*]` section present (today `sheets`). Each
     real ledger change makes one mirror job per sink (A19)."""
+    alerts: AlertsConfig = AlertsConfig()
     demo: DemoConfig = DemoConfig()
 
 
-SECRET_NAMES = ("RAZORPAY_KEY_ID", "RAZORPAY_KEY_SECRET", "RAZORPAY_WEBHOOK_SECRET")
+SECRET_NAMES = (
+    "RAZORPAY_KEY_ID",
+    "RAZORPAY_KEY_SECRET",
+    "RAZORPAY_WEBHOOK_SECRET",
+    "GOOGLE_SERVICE_ACCOUNT_B64",
+)
 
 # --- The keys the TOML may hold, each with its type. A nested dict is a table. ---
 
@@ -176,6 +227,7 @@ def load_config(path: Path, environ: Mapping[str, str] | None = None) -> Config:
     service = _section(document, "service")
     razorpay = _section(_section(document, "sources"), "razorpay", "sources.", required=True)
     sheets = _section(_section(document, "sinks"), "sheets", "sinks.", required=True)
+    alerts = _section(document, "alerts")
     demo = _section(document, "demo")
 
     mode: Mode = _choice(razorpay, "mode", "sources.razorpay", MODES)
@@ -194,7 +246,7 @@ def load_config(path: Path, environ: Mapping[str, str] | None = None) -> Config:
     return Config(
         service=ServiceConfig(
             public_listen=_listen(service, "public_listen", DEFAULT_PUBLIC_LISTEN),
-            admin_listen=_listen(service, "admin_listen", DEFAULT_ADMIN_LISTEN),
+            admin_listen=_admin_listen(service),
             data_dir=locate_data_dir(path),
             timezone=_timezone(service),
             retry_profile=_choice(
@@ -212,8 +264,16 @@ def load_config(path: Path, environ: Mapping[str, str] | None = None) -> Config:
             key_secret=secrets["RAZORPAY_KEY_SECRET"],
             webhook_secrets=webhook_secrets,
         ),
-        sheets=SheetsConfig(spreadsheet_id=_string(sheets, "spreadsheet_id", "sinks.sheets")),
+        google_secrets=GoogleSecrets(
+            service_account=_service_account(secrets["GOOGLE_SERVICE_ACCOUNT_B64"])
+        ),
+        sheets=SheetsConfig(
+            spreadsheet_id=_string(sheets, "spreadsheet_id", "sinks.sheets"),
+            columns=_columns(sheets),
+            mask_email=sheets.get("mask_email", True),
+        ),
         sinks=tuple(_section(document, "sinks")),
+        alerts=AlertsConfig(url=_alerts_url(alerts)),
         demo=DemoConfig(spreadsheet_ids=tuple(demo.get("spreadsheet_ids", []))),
     )
 
@@ -329,6 +389,64 @@ def _listen(service: Mapping[str, Any], key: str, default: str) -> str:
     if not host.strip("[]") or not port.isdigit() or not 0 < int(port) < 65536:
         raise ConfigError(f'service.{key} must be "host:port", with a port from 1 to 65535')
     return listen
+
+
+def _admin_listen(service: Mapping[str, Any]) -> str:
+    """`admin_listen`, which must be a loopback address in the cut: no tokens guard it (Q133)."""
+    listen = _listen(service, "admin_listen", DEFAULT_ADMIN_LISTEN)
+    host = listen.rpartition(":")[0].strip("[]")
+    try:
+        loopback = host == "localhost" or ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        loopback = False
+    if not loopback:
+        raise ConfigError(
+            "service.admin_listen must be a loopback address (127.0.0.1, ::1 or localhost): "
+            "the admin listener has no tokens yet"
+        )
+    return listen
+
+
+def _columns(sheets: Mapping[str, Any]) -> tuple[str, ...]:
+    columns = tuple(sheets.get("columns", DEFAULT_COLUMNS))
+    for column in columns:
+        if column not in DEFAULT_COLUMNS:
+            known = ", ".join(DEFAULT_COLUMNS)
+            raise ConfigError(f"sinks.sheets.columns: unknown column {column!r}; known: {known}")
+        if columns.count(column) > 1:
+            raise ConfigError(f"sinks.sheets.columns: {column!r} is listed more than once")
+    if "payment_id" not in columns:
+        raise ConfigError("sinks.sheets.columns must include 'payment_id', the key column")
+    return columns
+
+
+def _alerts_url(alerts: Mapping[str, Any]) -> str:
+    url = alerts.get("url", "")
+    if url and not re.fullmatch(r"https?://\S+", url):
+        raise ConfigError('alerts.url must be empty or an "https://..." webhook URL')
+    return url
+
+
+_SERVICE_ACCOUNT_REFUSED = (
+    "GOOGLE_SERVICE_ACCOUNT_B64 is not a base64-encoded Google service-account key "
+    "(run: python scripts/set_env.py google <downloaded key file>)"
+)
+
+
+def _service_account(value: str) -> Mapping[str, Any]:
+    """The decoded key, refused (naming the variable, never its value) unless it is a
+    service-account key whose private key loads (A4, Q135)."""
+    try:
+        decoded: Any = json.loads(base64.b64decode(value, validate=True))
+        if not isinstance(decoded, dict):
+            raise ValueError("not a JSON object")
+        info = cast(dict[str, Any], decoded)
+        if info.get("type") != "service_account":
+            raise ValueError("not a service-account key")
+        service_account.Credentials.from_service_account_info(info)  # pyright: ignore[reportUnknownMemberType]
+    except binascii.Error, UnicodeDecodeError, ValueError, KeyError, TypeError:
+        raise ConfigError(_SERVICE_ACCOUNT_REFUSED) from None
+    return info
 
 
 def _timezone(service: Mapping[str, Any]) -> ZoneInfo:

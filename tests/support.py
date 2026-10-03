@@ -5,6 +5,8 @@ Fixture secrets only: never the real environment's values.
 """
 
 import asyncio
+import base64
+import functools
 import hashlib
 import hmac
 import json
@@ -62,12 +64,47 @@ TEST_SPREADSHEET_ID = "fixture-spreadsheet-id-0001"
 
 
 def fixture_secrets() -> dict[str, str]:
-    """The three Razorpay secret variables, set to the fixture secrets."""
+    """The secret variables, set to the fixture secrets: Razorpay's three and a made-up
+    service-account key."""
     return {
         "RAZORPAY_KEY_ID": TEST_KEY_ID,
         "RAZORPAY_KEY_SECRET": TEST_KEY_SECRET,
         "RAZORPAY_WEBHOOK_SECRET": TEST_WEBHOOK_SECRET,
+        "GOOGLE_SERVICE_ACCOUNT_B64": fixture_service_account_b64(),
     }
+
+
+@functools.cache
+def fixture_service_account() -> dict[str, str]:
+    """A service-account key shaped as Google issues one, with a private key made up here: it
+    authenticates nowhere."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pem = key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode()
+    return {
+        "type": "service_account",
+        "project_id": "fixture-project",
+        "private_key_id": "fixture0000000000000000000000000000000000",
+        "private_key": pem,
+        "client_email": "wsync-fixture@fixture-project.iam.gserviceaccount.com",
+        "client_id": "100000000000000000000",
+        "token_uri": "https://oauth2.googleapis.com/token",
+    }
+
+
+def fixture_service_account_b64(**changes: str | None) -> str:
+    """The fixture key as `GOOGLE_SERVICE_ACCOUNT_B64` holds it; `changes` replace (or, given
+    None, drop) its fields."""
+    info: dict[str, str] = {
+        k: v for k, v in (fixture_service_account() | changes).items() if v is not None
+    }
+    return base64.b64encode(json.dumps(info).encode()).decode()
 
 
 RAZORPAY_RECORDINGS = Path(__file__).parent / "recordings" / "razorpay"

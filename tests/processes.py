@@ -31,7 +31,7 @@ def free_port() -> int:
 
 def fixture_environment() -> dict[str, str]:
     """This process's environment with the fixture secrets in place of any real ones."""
-    environ = {k: v for k, v in os.environ.items() if not k.startswith("RAZORPAY_")}
+    environ = {k: v for k, v in os.environ.items() if not k.startswith(("RAZORPAY_", "GOOGLE_"))}
     return environ | fixture_secrets()
 
 
