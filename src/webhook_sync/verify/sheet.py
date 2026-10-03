@@ -197,7 +197,7 @@ class SheetVerify:
                 continue
             if len(rows) > 1:
                 findings.append(
-                    Finding("sheet_duplicate", payment_id, "rows " + _row_numbers(rows))
+                    Finding("sheet_duplicate", payment_id, _rows_named(rows))
                 )
             cells = rows[0][1]
             differs = [
@@ -210,7 +210,7 @@ class SheetVerify:
                     Finding("sheet_differs", payment_id, ", ".join(differs), repair=payment_id)
                 )
         for payment_id, rows in sorted(found.items()):
-            findings.append(Finding("sheet_foreign", payment_id, "rows " + _row_numbers(rows)))
+            findings.append(Finding("sheet_foreign", payment_id, _rows_named(rows)))
         return checked, findings
 
     def _summary(
@@ -410,9 +410,11 @@ def _text(cell: Json) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def _row_numbers(rows: Sequence[tuple[int, list[Json]]]) -> str:
-    """Rows as a person reads them: numbered from 1, the header row being 1."""
-    return ", ".join(str(at + 1) for at, _ in rows)
+def _rows_named(rows: Sequence[tuple[int, list[Json]]]) -> str:
+    """Rows as a person reads them, numbered from 1, the header row being 1: `row 5`,
+    `rows 2, 4`."""
+    numbers = ", ".join(str(at + 1) for at, _ in rows)
+    return f"row {numbers}" if len(rows) == 1 else f"rows {numbers}"
 
 
 def _summary_detail(key: SummaryKey) -> str:

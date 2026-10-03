@@ -27,13 +27,13 @@ from time_machine import TimeMachineFixture
 
 from webhook_sync.clock import to_db_text, utc_now
 from webhook_sync.config import Config
-from webhook_sync.db.schema import payments
+from webhook_sync.db.schema import jobs, payments
 from webhook_sync.db.writer import Writer
 from webhook_sync.queue import enqueue
 from webhook_sync.queue import runner as runner_module
 from webhook_sync.receiver.app import create_app
 from webhook_sync.sinks import sheets as sheets_module
-from webhook_sync.sinks.sheets import PAYMENTS, SYNC_STATUS
+from webhook_sync.sinks.sheets import DAILY_SUMMARY, PAYMENTS, SYNC_STATUS
 
 RAZORPAY_API = "https://api.razorpay.test"
 FLUSHED_AT = datetime(2026, 10, 2, 15, 0, tzinfo=UTC)  # 20:30 IST: half an hour from the hour
@@ -340,3 +340,172 @@ async def test_an_edited_amount_is_reported_differs_and_rewritten(
     assert outside.payments.cell(at_row(outside.payments, "pay_A"), amount)[
         "userEnteredFormat"
     ] == {"numberFormat": {"type": "NUMBER", "pattern": "0.00"}}
+
+
+async def test_a_duplicated_row_and_a_row_for_an_unknown_payment_are_reported_and_left_alone(
+    checked_config: Config,
+    data_dir: Path,
+    writer: Writer,
+    outside: Outside,
+    read_rows: ReadRows,
+    clock: TimeMachineFixture,
+) -> None:
+    await flushed(checked_config, data_dir, writer, read_rows, captured("pay_A"), captured("pay_B"))
+    tab = outside.payments
+    width = len(tab.values()[0])
+    copied = [tab.cell(at_row(tab, "pay_A"), column) for column in range(width)]
+    foreign = [{"userEnteredValue": {"stringValue": "pay_NotOurs"}}]
+    outside.sheets.apply(
+        [
+            {
+                "appendCells": {
+                    "sheetId": tab.sheet_id,
+                    "rows": [{"values": copied}, {"values": foreign}],
+                    "fields": "*",
+                }
+            }
+        ]
+    )
+    before = outside.payments.values()
+
+    async with checked(checked_config, data_dir, read_rows, clock):
+        line = "Sheet checked 02 Oct 21:00 IST: 2 payments, 2 differences"
+        for _ in range(500):
+            if last_verify(outside.sheets) == line:
+                break
+            await asyncio.sleep(0.01)
+
+    assert await read_rows(
+        "SELECT kind, payment_id, detail, repair_job_id FROM verify_findings ORDER BY kind"
+    ) == [
+        {
+            "kind": "sheet_duplicate",
+            "payment_id": "pay_A",
+            "detail": "rows 2, 4",
+            "repair_job_id": None,
+        },
+        {
+            "kind": "sheet_foreign",
+            "payment_id": "pay_NotOurs",
+            "detail": "row 5",
+            "repair_job_id": None,
+        },
+    ]
+    assert last_verify(outside.sheets) == line
+    assert outside.payments.values() == before
+    assert await read_rows("SELECT count(*) AS n FROM jobs WHERE stage = 'mirror'") == [{"n": 2}]
+
+
+async def test_payments_with_work_in_progress_are_skipped_by_the_check(
+    checked_config: Config,
+    data_dir: Path,
+    writer: Writer,
+    outside: Outside,
+    read_rows: ReadRows,
+    clock: TimeMachineFixture,
+) -> None:
+    fee_pending = captured(
+        "pay_C",
+        fee_minor=None,
+        fee_tax_minor=None,
+        net_minor=None,
+        source_created_at=to_db_text(CHECKED_AT - timedelta(minutes=40)),
+    )
+    await flushed(
+        checked_config,
+        data_dir,
+        writer,
+        read_rows,
+        captured("pay_A"),
+        captured("pay_B"),
+        fee_pending,
+    )
+    # pay_A has a live ledger job, in backoff till tomorrow; pay_C is 40 minutes old, its fee
+    # pending. Both of their rows differ from the ledger.
+    async with writer.transaction() as tx:
+        job_id = await enqueue(
+            tx,
+            stage="ledger",
+            sink="ledger",
+            source="razorpay",
+            account=TEST_ACCOUNT,
+            payment_key="pay_A",
+            event_id=None,
+            retry_profile="production",
+            now=utc_now(),
+        )
+        await tx.execute(
+            jobs.update()
+            .where(jobs.c.id == job_id)
+            .values(run_after=to_db_text(CHECKED_AT + timedelta(days=1)))
+        )
+    tab = outside.payments
+    description = list(tab.values()[0]).index("Description")
+    outside.sheets.apply(
+        [
+            {
+                "updateCells": {
+                    "start": {
+                        "sheetId": tab.sheet_id,
+                        "rowIndex": at_row(tab, payment_id),
+                        "columnIndex": description,
+                    },
+                    "rows": [{"values": [{"userEnteredValue": {"stringValue": "edited"}}]}],
+                    "fields": "userEnteredValue",
+                }
+            }
+            for payment_id in ("pay_A", "pay_C")
+        ]
+    )
+
+    async with checked(checked_config, data_dir, read_rows, clock):
+        pass
+
+    assert await read_rows(FINDINGS) == []
+    assert await read_rows("SELECT payments_checked, status_line FROM verify_runs") == [
+        {
+            "payments_checked": 1,
+            "status_line": "Sheet checked 02 Oct 21:00 IST: 1 payment, 0 differences",
+        }
+    ]
+
+
+async def test_an_edited_daily_summary_total_is_reported_and_recomputed(
+    checked_config: Config,
+    data_dir: Path,
+    writer: Writer,
+    outside: Outside,
+    read_rows: ReadRows,
+    clock: TimeMachineFixture,
+) -> None:
+    await flushed(checked_config, data_dir, writer, read_rows, captured("pay_A"), captured("pay_B"))
+    summary = outside.sheets.tab(DAILY_SUMMARY)
+    gross = list(summary.values()[0]).index("Gross")
+    assert summary.values()[1][gross] == 1000.0
+    outside.sheets.apply(
+        [
+            {
+                "updateCells": {
+                    "start": {"sheetId": summary.sheet_id, "rowIndex": 1, "columnIndex": gross},
+                    "rows": [{"values": [{"userEnteredValue": {"numberValue": 1}}]}],
+                    "fields": "userEnteredValue",
+                }
+            }
+        ]
+    )
+
+    async with checked(checked_config, data_dir, read_rows, clock):
+        await wait_for(read_rows, MIRRORED, [{"n": 3}])
+
+    assert await read_rows(
+        "SELECT kind, payment_id, detail, repair_job_id IS NOT NULL AS repaired"
+        " FROM verify_findings"
+    ) == [
+        {
+            "kind": "summary_differs",
+            "payment_id": None,
+            "detail": "2026-10-02 INR/INR",
+            "repaired": 1,
+        }
+    ]
+    assert outside.sheets.tab(DAILY_SUMMARY).values()[1][gross] == 1000.0
