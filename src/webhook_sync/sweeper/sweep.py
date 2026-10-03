@@ -145,7 +145,7 @@ class Sweeper:
     async def _store(self, entity: ListedEntity, items: Sequence[Mapping[str, Any]]) -> int:
         """Store each item's synthetic event if absent, all in one transaction; the count of
         new events."""
-        source = self._config.razorpay
+        configured = self._config.razorpay
         new = 0
         now = utc_now()
         async with self._writer.transaction() as tx:
@@ -157,8 +157,8 @@ class Sweeper:
                 stored = await store_event(
                     tx,
                     source=self._razorpay.name,
-                    account=source.account,
-                    mode=source.mode,
+                    account=configured.account,
+                    mode=configured.mode,
                     retry_profile=self._config.service.retry_profile,
                     event_id=event_id,
                     description=description,
