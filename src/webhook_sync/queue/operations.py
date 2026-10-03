@@ -310,10 +310,13 @@ async def fail(
         if not await tx.execute(statement):
             raise LeaseLost(job.id)
         await _record_attempt(tx, job, outcome=failure.error_class, error=failure.error, now=now)
-        if paused is not None:
-            await record_pause(tx, failure.pause_target or "sink", paused, failure.error, now=now)
+        newly_paused = paused is not None and await record_pause(
+            tx, failure.pause_target or "sink", paused, failure.error, now=now
+        )
     if paused is not None:
         pauses.pause(failure.pause_target or "sink", paused)
+        if newly_paused and pauses.on_pause is not None:
+            await pauses.on_pause(failure.pause_target or "sink", paused, failure.error)
     return status
 
 

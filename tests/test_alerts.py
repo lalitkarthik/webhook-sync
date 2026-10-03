@@ -30,7 +30,17 @@ from time_machine import TimeMachineFixture
 from webhook_sync.alerts import Alerter
 from webhook_sync.clock import to_db_text, utc_now
 from webhook_sync.db.writer import Writer
-from webhook_sync.queue import enqueue
+from webhook_sync.queue import (
+    ClaimedJob,
+    Done,
+    Failure,
+    Pauses,
+    PauseTarget,
+    StageFailed,
+    StageRunner,
+    enqueue,
+    resume,
+)
 
 HOOK = "https://hooks.example.test/services/T000/B000/fixture"
 NINE = datetime(2026, 10, 2, 20, 30, tzinfo=UTC)
@@ -220,3 +230,70 @@ async def test_jobs_dying_within_the_hour_wait_for_the_next_due_check(
 
     assert (within_the_hour, due) == (None, "sent")
     assert bodies(hook)[1]["text"] == "webhook-sync dead_jobs: 1 new dead job (ledger 1)"
+
+
+async def mirror_job(writer: Writer, payment_key: str) -> None:
+    async with writer.transaction() as tx:
+        await enqueue(
+            tx,
+            stage="mirror",
+            sink="sheets",
+            source="razorpay",
+            account="acc_fixture",
+            payment_key=payment_key,
+            event_id=None,
+            retry_profile="production",
+            now=utc_now(),
+        )
+
+
+def pausing_runner(writer: Writer, pauses: Pauses, target: PauseTarget) -> StageRunner:
+    """The mirror stage for `sheets`, whose every attempt pauses `target` with a reason."""
+
+    async def work(job: ClaimedJob) -> Done:
+        raise StageFailed(Failure("spreadsheet missing", "pause", pause_target=target))
+
+    return StageRunner(
+        writer,
+        stage="mirror",
+        sink="sheets",
+        limit=10,
+        work=work,
+        claimed_by="wsync-test",
+        pauses=pauses,
+        retry_profile="production",
+    )
+
+
+async def test_a_pause_sends_one_alert_and_a_second_within_the_hour_is_suppressed_and_counted(
+    alerter: Alerter,
+    writer: Writer,
+    hook: Route,
+    read_rows: ReadRows,
+    time_machine: TimeMachineFixture,
+) -> None:
+    pauses = Pauses(on_pause=alerter.paused)
+    runner = pausing_runner(writer, pauses, "sink")
+    await mirror_job(writer, "pay_A")
+    await mirror_job(writer, "pay_B")
+    await runner.run_once()  # both jobs fail in one batch: one pause, one alert
+    await resume(writer, "sheets", pauses=pauses, now=utc_now())
+    time_machine.shift(10 * 60)
+    await runner.run_once()  # paused again within the hour
+
+    [body] = bodies(hook)
+    assert body["text"] == "webhook-sync paused: sink sheets paused: spreadsheet missing"
+    assert await read_rows(ALERTS) == [
+        {"kind": "paused", "last_sent_at": "2026-10-02T20:30:00.000000Z", "suppressed_count": 1}
+    ]
+
+
+async def test_a_source_pause_names_the_source(
+    alerter: Alerter, writer: Writer, hook: Route
+) -> None:
+    await mirror_job(writer, "pay_A")
+
+    await pausing_runner(writer, Pauses(on_pause=alerter.paused), "source").run_once()
+
+    [body] = bodies(hook)
+    assert body["text"] == "webhook-sync paused: source razorpay paused: spreadsheet missing"

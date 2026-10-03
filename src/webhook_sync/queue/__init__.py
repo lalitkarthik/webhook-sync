@@ -19,6 +19,7 @@ from webhook_sync.queue.operations import (
     release,
 )
 from webhook_sync.queue.pause import (
+    PauseAlert,
     Pauses,
     PauseTarget,
     Resumed,
@@ -36,6 +37,7 @@ __all__ = [
     "ErrorClass",
     "Failure",
     "LeaseLost",
+    "PauseAlert",
     "PauseTarget",
     "Pauses",
     "Resumed",
