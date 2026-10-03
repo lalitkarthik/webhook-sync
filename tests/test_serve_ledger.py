@@ -37,6 +37,7 @@ def ledger_job(database: Path) -> dict[str, Any] | None:
     return dict(rows[0]) if rows else None
 
 
+@pytest.mark.posix
 def test_serve_runs_the_ledger_stage_and_a_fetch_that_cannot_connect_retries(
     tmp_path: Path,
 ) -> None:

@@ -6,6 +6,7 @@ one fixture per block, so parallel tickets append rather than edit the same line
 Plain helpers (fixture secrets, Razorpay samples, signing) live in `support.py`.
 """
 
+import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -98,3 +99,14 @@ async def writer(data_dir: Path) -> AsyncIterator[Writer]:
         yield opened
     finally:
         await opened.close()
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Skip `posix` tests on Windows: there `send_signal` kills outright and `uv run` sits
+    between the test and the server, so graceful stops and the server's pid can't be seen."""
+    if sys.platform != "win32":
+        return
+    skip = pytest.mark.skip(reason="needs POSIX signals; the server deploys on Linux")
+    for item in items:
+        if "posix" in item.keywords:
+            item.add_marker(skip)
