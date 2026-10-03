@@ -11,6 +11,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
+import pytest
 from processes import (
     fixture_environment,
     free_port,
@@ -63,6 +64,7 @@ def running_server(config_path: Path, port: int) -> Generator[subprocess.Popen[b
                 process.wait()
 
 
+@pytest.mark.posix
 def test_a_second_server_is_refused_while_the_first_runs_and_starts_once_it_is_killed(
     tmp_path: Path,
 ) -> None:
@@ -99,6 +101,7 @@ def test_a_database_with_a_newer_schema_is_refused_and_left_untouched(tmp_path: 
     assert tables == [("schema_version",)]
 
 
+@pytest.mark.posix
 def test_migrations_apply_once_across_two_starts(tmp_path: Path) -> None:
     port = free_port()
     config_path = write_serve_config(tmp_path / "conf", port)

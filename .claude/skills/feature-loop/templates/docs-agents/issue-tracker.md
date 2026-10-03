@@ -47,11 +47,12 @@ gh api --method POST "repos/$OWNER_REPO/issues/<blocked>/dependencies/blocked_by
 Keep a `## Blocked by` section in the ticket body too: `#<n>` per blocker, or
 "None — can start immediately". A ticket is unblocked once every blocker is **closed**.
 
-**Frontier query** — open tickets of the feature with no open blocker and no `in-progress`:
+**Frontier query** — open tickets of the feature with no open blocker, not `in-progress` and not
+parked (`ready-for-human`, `needs-info`):
 
 ```bash
 gh api "repos/$OWNER_REPO/issues/<feature>/sub_issues" \
-  --jq '.[] | select(.state=="open") | select((.issue_dependencies_summary.blocked_by // 0)==0) | select([.labels[].name] | index("in-progress") | not) | "#\(.number) \(.title)"'
+  --jq '.[] | select(.state=="open") | select((.issue_dependencies_summary.blocked_by // 0)==0) | select([.labels[].name] | any(. == "in-progress" or . == "ready-for-human" or . == "needs-info") | not) | "#\(.number) \(.title)"'
 ```
 
 ## Pull requests as a triage surface

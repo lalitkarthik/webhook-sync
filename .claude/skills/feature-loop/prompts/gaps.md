@@ -9,7 +9,7 @@ merge.
 
 Read `docs/design/`: every page, `decisions/`, `grilling-log.md`, `audit/`, and every research
 note the design links to (usually `docs/research/`). When the design is too large to read within
-the context budget, give each of several `model: "opus"` subagents a share of the files and have
+the context budget, give each of several `fl-opus-high` subagents a share of the files and have
 them return candidate gaps in the table format below; merge and de-duplicate their lists.
 
 ## 2. Find the gaps
@@ -44,6 +44,14 @@ Rank architecture-breaking gaps first, then by earliest first slice.
 # Research gaps
 
 Scanned: Q1–Q47, decisions 0001–0012. Updated: <yyyy-mm-dd>.
+
+**What this page contains.** Every design decision that holds only if a fact about an outside
+system is true, and whether that fact has been checked.
+
+**How to read it.** Gaps that would break the architecture come first, then the rest by the
+earliest build-order step that depends on them. **Check:** `OK` names the source that confirms
+the fact, `RESEARCH` can be settled from documentation, `SPIKE` needs code run against the real
+system.
 
 | # | Decision | Fact assumed | Breaks if wrong | Arch | First slice | Check | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- |

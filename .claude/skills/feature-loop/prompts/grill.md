@@ -55,10 +55,12 @@ This list goes into the spec unchanged (the **Spec** step).
 
 The design is the source of truth; this grill covers only what it leaves open for one slice.
 
-1. **Read the design**: `docs/design/00-overview.md` (or `overview.md`), `build-order.md`, `grilling-log.md`, the
-   design's `decisions/`, and `research-gaps.md` if present.
+1. **Read the design**: `docs/design/00-overview.md` (or `overview.md`; either name is the
+   overview), `build-order.md`, `grilling-log.md`, the design's `decisions/`, and
+   `research-gaps.md` if present.
 2. **Pick the slice.** Ask which build-order step or slice this feature is. Recommend the
-   earliest step that has no spec in `docs/specs/` and no `feature` issue yet.
+   earliest step that is not ticked as built and has no spec in `docs/specs/` and no `feature`
+   issue yet.
 3. **Check open gaps.** If `research-gaps.md` lists an open RESEARCH or SPIKE gap whose first
    slice is this one or earlier, name it and recommend `/feature-loop gaps` before going on.
 4. **Grill the gaps.** List what this slice needs decided that the design does not settle:

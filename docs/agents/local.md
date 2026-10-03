@@ -16,7 +16,8 @@ equivalent is [cloud.md](cloud.md).
 | Bash for the hooks | on Windows, Git for Windows provides it; Claude Code runs hooks with it | `bash --version` |
 | Dependencies | `uv sync` in the repo root | `uv run python -V` prints 3.14.x |
 | Secrets in `.env` | copy the names from `.env.example`; `python scripts/set_env.py google <service-account.json>` writes `GOOGLE_SERVICE_ACCOUNT_B64`; add the three `RAZORPAY_*` test-mode values; `.env` is git-ignored | `python scripts/set_env.py show` lists the names, never values |
-| Optional: extra Claude accounts | `~/.claude/accounts/cx.mjs` (Node), used by the orchestrator's Accounts route | `node ~/.claude/accounts/cx.mjs pick` |
+| Claude accounts runner | `~/.claude/accounts/cx.mjs` (Node): the loop starts the orchestrator, every implementer and the flow checker with it | `node ~/.claude/accounts/cx.mjs pick` prints an account |
+| Reviewer and auditor definitions | `~/.claude/agents/fl-opus-medium.md` and `fl-opus-high.md` | both files exist |
 | Optional: Herdr | `HERDR_ENV=1` switches the loop to Herdr tabs (`.claude/skills/feature-loop/herdr.md`) | — |
 
 Only `wsync serve` and the live research checks need the secrets; the test suite never calls
@@ -58,11 +59,14 @@ Run once per new machine or after a long break, and report each line:
 One step of `docs/design/build-order.md` at a time, each in its own sessions:
 
 1. **Plan** (one session): `/feature-loop plan <step>`; ends with the feature issue, its tickets
-   and waves, and an orchestrator hand-off comment on the feature issue.
-2. **Build** (a fresh session): `/feature-loop orchestrate #<feature issue>`; ends with one PR.
-3. **Merge**: the owner merges the PR, or tells a session to merge it once CI is green and it
-   merges cleanly.
-4. **Clean up**: tell the session "the PR is merged" (Phase C), then plan the next step.
-
-A planning session's last message gives the owner the exact prompt for step 2, and its
-hand-off for the next planning session is a comment on the feature issue it just planned.
+   and waves, and one approval from the owner. On approval it starts the build itself
+   (`cx run --detach yes --name orch-<slug>`) and posts the orchestrator hand-off on the issue.
+2. **Build** (unattended): the orchestrator starts a worker per ticket, tests and reviews each,
+   walks the feature's user flows once, opens one PR and merges it when every ticket is closed,
+   the suite is green and the flow check passed. Progress shows on the feature issue and in
+   `~/.claude/accounts/runs/orch-<slug>.json`. To resume a stopped build:
+   `/feature-loop orchestrate #<feature issue>`.
+3. **Merge**: a PR the orchestrator left open (it says why) is merged by the owner.
+4. **Clean up**: the orchestrator runs Phase C after its own merge; after an owner merge, tell a
+   session "the PR is merged". Then plan the next step. `/feature-loop audit` checks a merged
+   feature or the whole product.

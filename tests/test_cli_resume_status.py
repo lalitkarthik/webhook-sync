@@ -154,6 +154,7 @@ def test_status_before_any_start_says_there_is_no_database(tmp_path: Path) -> No
     assert "no database" in error
 
 
+@pytest.mark.posix
 def test_with_a_server_running_the_pause_holds_until_resume_through_the_admin_listener(
     tmp_path: Path,
 ) -> None:
