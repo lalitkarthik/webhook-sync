@@ -73,11 +73,11 @@ type = "layers"
 # `|` siblings may not import each other; `:` siblings may.
 # receiver, ledger, sources and sweeper share a layer because sources.razorpay imports
 # receiver.rate_cap while receiver imports ledger and sources (a cycle today), and the sweeper
-# stores through receiver.store while the receiver's lifespan starts the sweeper.
+# stores through receiver.store while the receiver's lifespan starts the sweeper (and verify).
 layers = [
     "webhook_sync.cli",
     "webhook_sync.admin",
-    "webhook_sync.receiver : webhook_sync.ledger : webhook_sync.sources : webhook_sync.sweeper",
+    "webhook_sync.receiver : webhook_sync.ledger : webhook_sync.sources : webhook_sync.sweeper : webhook_sync.verify",
     "webhook_sync.sinks",
     "webhook_sync.alerts",
     "webhook_sync.queue",

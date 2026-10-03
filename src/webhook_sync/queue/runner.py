@@ -175,7 +175,8 @@ class BatchStageRunner:
     all of them, then complete them all in one transaction or fail them all.
 
     It claims again at once after a full batch; otherwise it waits `every` before the next
-    claim, checking each second and claiming at once when `limit` jobs are due."""
+    claim, checking each second and claiming at once when `limit` jobs are due, or when
+    `request` asked for a batch even with none due."""
 
     def __init__(
         self,
@@ -204,6 +205,7 @@ class BatchStageRunner:
         self._rng = rng or random.Random()
         self._sleep = sleep
         self._stopping = False
+        self._requested = False
 
     async def run(self) -> None:
         """Run batches until `stop`. A pass that raises is logged and the next one tried; jobs
@@ -221,12 +223,20 @@ class BatchStageRunner:
         """Stop claiming: `run` returns once the batch it holds is finished."""
         self._stopping = True
 
+    def request(self) -> None:
+        """Run the work once soon even when no job is due, with an empty batch: the flusher's
+        status-only flush (A17). Skipped while the sink is paused."""
+        self._requested = True
+
     async def _wait(self) -> None:
-        """Wait `every`, a second at a time, ending early when a full batch is due."""
+        """Wait `every`, a second at a time, ending early when a full batch is due or a batch
+        was requested."""
         waited = timedelta(0)
         while waited < self._every and not self._stopping:
             await self._sleep(IDLE_WAIT.total_seconds())
             waited += IDLE_WAIT
+            if self._requested:
+                return
             try:
                 if await self._due() >= self._limit:
                     return
@@ -249,7 +259,9 @@ class BatchStageRunner:
         return int(row[0])
 
     async def run_once(self) -> int:
-        """Claim up to `limit` due jobs and run the batch; returns how many were claimed."""
+        """Claim up to `limit` due jobs and run the batch; returns how many were claimed. With
+        none claimed, a requested batch runs empty."""
+        requested, self._requested = self._requested, False
         claimed = await claim(
             self._writer,
             stage=self._stage,
@@ -260,6 +272,8 @@ class BatchStageRunner:
             now=utc_now(),
         )
         if not claimed:
+            if requested and self._sink not in self._pauses.sinks:
+                await self._attempt([])
             return 0
         leases = _Leases(self._writer, claimed, self._sleep)
         beating = asyncio.create_task(leases.keep_alive())

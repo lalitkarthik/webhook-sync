@@ -3,7 +3,8 @@
 It implements exactly the calls the flusher makes, `spreadsheets.get`, `getByDataFilter` and
 `batchUpdate`, with the request kinds it uses (`addSheet`, `updateCells` with values, formats
 and notes, `appendDimension`, `updateSheetProperties` for titles and frozen rows), plus the
-ones a person's edits need (`deleteSheet`, `sortRange`, `appendCells`). Errors are answered
+ones a person's edits need (`deleteSheet`, `deleteDimension` of rows, `sortRange`,
+`appendCells`). Errors are answered
 with the bodies recorded live in `tests/recordings/sheets/`, and `test_fake_sheets_contract.py`
 replays those recordings against it so it can't drift from Google.
 
@@ -24,7 +25,7 @@ import itertools
 import json
 import random
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Literal, cast
@@ -368,7 +369,8 @@ class FakeSheets:
     Fault switches: `access` ("edit", "view" or "none": unshared), `deleted`,
     `exhaust_quota`, `fail_next`, `lose_next_write_reply`, `refuse_tokens`, `revoke_tokens`,
     `cell_characters` (a lower per-cell limit, to make one cell bad); `after_next` makes a
-    person's edits straight after a call is answered, between the flusher's read and write.
+    person's edits straight after a call is answered, between the flusher's read and write;
+    `hold_read` answers a read late, with the sheet as it stood when the read came.
     """
 
     def __init__(
@@ -406,6 +408,9 @@ class FakeSheets:
         self._lose_write_replies = 0
         self.cell_characters = CELL_CHARACTERS
         self._after: list[tuple[str, list[Json]]] = []
+        self._holds: list[
+            tuple[Callable[[httpx.Request], bool], Callable[[], Awaitable[None]]]
+        ] = []
         if first_tab:
             self.apply([{"addSheet": {"properties": {"title": "Sheet1", "sheetId": 0}}}])
 
@@ -457,6 +462,14 @@ class FakeSheets:
         (`get`, `getByDataFilter`, `batchUpdate`) is answered."""
         self._after.append((name, list(requests)))
 
+    def hold_read(
+        self, matching: Callable[[httpx.Request], bool], until: Callable[[], Awaitable[None]]
+    ) -> None:
+        """Answer the next `getByDataFilter` call `matching` accepts with the spreadsheet as it
+        stood when the call came, but only once `until` returns: a slow answer, while other
+        calls change the sheet."""
+        self._holds.append((matching, until))
+
     def cell_count(self, tabs: Iterable[Tab] | None = None) -> int:
         return sum(tab.row_count * tab.column_count for tab in (tabs or self.tabs))
 
@@ -469,7 +482,7 @@ class FakeSheets:
         base = r"^/v4/spreadsheets/(?P<sid>[^/:]+)"
         router.get(host=SHEETS_HOST, path__regex=base + "$").mock(side_effect=self._get)
         router.post(host=SHEETS_HOST, path__regex=base + ":getByDataFilter$").mock(
-            side_effect=self._get_by_data_filter
+            side_effect=self._held_get_by_data_filter
         )
         router.post(host=SHEETS_HOST, path__regex=base + ":batchUpdate$").mock(
             side_effect=self._batch_update
@@ -499,6 +512,13 @@ class FakeSheets:
             return _masked(whole, request.url.params.get("fields"))
 
         return self._answer("get", "read", request, sid, answer)
+
+    async def _held_get_by_data_filter(self, request: httpx.Request, sid: str) -> httpx.Response:
+        response = self._get_by_data_filter(request, sid)
+        for hold in [h for h in self._holds if h[0](request)][:1]:
+            self._holds.remove(hold)
+            await hold[1]()
+        return response
 
     def _get_by_data_filter(self, request: httpx.Request, sid: str) -> httpx.Response:
         def answer() -> Json:
@@ -593,6 +613,7 @@ class FakeSheets:
             "appendDimension": self._append_dimension,
             "updateSheetProperties": self._update_sheet_properties,
             "deleteSheet": self._delete_sheet,
+            "deleteDimension": self._delete_dimension,
             "sortRange": self._sort_range,
         }.get(kind)
         if handler is None:
@@ -649,6 +670,24 @@ class FakeSheets:
         tabs.remove(self._grid(tabs, spec.get("sheetId", 0)))
         for index, tab in enumerate(tabs):
             tab.properties["index"] = index
+        return {}
+
+    def _delete_dimension(self, spec: Json, tabs: list[Tab]) -> Json:
+        """Rows deleted: those below move up, and the grid shrinks by as many."""
+        span: Json = spec["range"]
+        if span.get("dimension") != "ROWS":
+            raise NotImplementedError("FakeSheets deletes rows only")
+        tab = self._grid(tabs, span.get("sheetId", 0))
+        start, end = span["startIndex"], min(span["endIndex"], tab.row_count)
+        removed = end - start
+        moved: dict[tuple[int, int], Json] = {}
+        for (row, column), cell in tab.cells.items():
+            if row < start:
+                moved[(row, column)] = cell
+            elif row >= end:
+                moved[(row - removed, column)] = cell
+        tab.cells = moved
+        tab.properties["gridProperties"]["rowCount"] -= removed
         return {}
 
     def _update_sheet_properties(self, spec: Json, tabs: list[Tab]) -> Json:
