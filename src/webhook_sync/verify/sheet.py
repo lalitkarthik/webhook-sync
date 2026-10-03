@@ -27,19 +27,18 @@ import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from typing import Any, Literal
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import sqlalchemy as sa
 
-from webhook_sync.clock import to_db_text, utc_now
+from webhook_sync.clock import utc_now
 from webhook_sync.config import Config
-from webhook_sync.db.schema import jobs, payments, sheet_state, verify_findings, verify_runs
+from webhook_sync.db.schema import payments, sheet_state
 from webhook_sync.db.writer import Writer
-from webhook_sync.queue import Pauses, enqueue
-from webhook_sync.queue.operations import LIVE_STATUSES
-from webhook_sync.sinks.encoding import UnknownCurrency, payment_columns, zone_label
-from webhook_sync.sinks.sheets import DAILY_SUMMARY_HEADER, RAZORPAY, SINK, STAGE
+from webhook_sync.queue import Pauses
+from webhook_sync.sinks.encoding import UnknownCurrency, payment_columns
+from webhook_sync.sinks.sheets import DAILY_SUMMARY_HEADER, SINK
 from webhook_sync.sinks.sheets_client import Json, SheetsClient, SheetsFailure
 from webhook_sync.sinks.summary import (
     SummaryKey,
@@ -49,18 +48,20 @@ from webhook_sync.sinks.summary import (
     summarise,
     summary_cells,
 )
+from webhook_sync.verify.runs import (
+    Finding,
+    PaymentKey,
+    counted,
+    in_progress,
+    live_payments,
+    local_time,
+    record_run,
+)
 
 log = logging.getLogger("webhook_sync.verify")
 
-type FindingKind = Literal[
-    "sheet_missing", "sheet_differs", "sheet_duplicate", "sheet_foreign", "summary_differs"
-]
-
 CHECK_EVERY = timedelta(hours=1)
 """The quick run's period, on its multiples from local midnight: on the hour."""
-
-FEE_SETTLES = timedelta(hours=1)
-"""A payment younger than this whose fee is pending is skipped: the fee is on its way (Q97)."""
 
 VALUES_FIELDS = (
     "sheets(properties(sheetId),data(startRow,rowData(values("
@@ -68,18 +69,16 @@ VALUES_FIELDS = (
 )
 
 type Sleep = Callable[[float], Awaitable[None]]
-type PaymentKey = tuple[str, str, str]
 type Rows = list[tuple[int, list[Json]]]
 """A tab's rows below the header, as read: each row's index and cells."""
 
 
 @dataclass(frozen=True)
-class Finding:
-    kind: FindingKind
-    payment_id: str | None
-    detail: str | None = None
-    repair: str | None = None
-    """The payment whose mirror job repairs it, when one can."""
+class SheetCheck:
+    """What one check of the sheet found: the payments compared and the differences."""
+
+    checked: int
+    findings: list[Finding]
 
 
 class SheetVerify:
@@ -120,6 +119,37 @@ class SheetVerify:
         sheet paused, or never written) or the read failed."""
         started = utc_now()
         clock = time.perf_counter()
+        found = await self.check(started)
+        if found is None:
+            return None
+        recorded = await record_run(
+            self._writer,
+            self._config,
+            kind="quick",
+            started=started,
+            local_date=started.astimezone(self._zone).date(),
+            window_days=0,
+            checked=found.checked,
+            findings=found.findings,
+            line=status_line(started, self._zone, found.checked, len(found.findings)),
+            repair=True,
+        )
+        self._request_flush()
+        log.info(
+            "verify run",
+            extra={
+                "kind": "quick",
+                "payments_checked": found.checked,
+                "findings": len(found.findings),
+                "repaired": recorded.repaired,
+                "duration_ms": round((time.perf_counter() - clock) * 1000),
+            },
+        )
+        return recorded.run_id
+
+    async def check(self, started: datetime) -> SheetCheck | None:
+        """The sheet against the ledger, for a run started at `started`; None when there was
+        nothing to check (the sheet paused, or never written) or the read failed."""
         if SINK in self._pauses.sinks:
             log.info("verify skipped: the sheet is paused")
             return None
@@ -129,7 +159,7 @@ class SheetVerify:
             return None
         # Live before the read and after it: a job that finishes in between wrote a row the read
         # may not have seen.
-        live = await self._live()
+        live = await live_payments(self._writer)
         answer = await self._client.get_by_data_filter(
             [
                 _rows(tabs[0], len(self._columns)),
@@ -145,35 +175,13 @@ class SheetVerify:
             return None
         read = _by_tab(answer)
         ledger = await self._ledger()
-        live |= await self._live()
-        skipped = {
-            key for key, row in ledger.items() if key in live or self._in_progress(row, started)
-        }
+        live |= await live_payments(self._writer)
+        skipped = {key for key, row in ledger.items() if key in live or in_progress(row, started)}
         checked, findings = self._payments(ledger, skipped, read.get(tabs[0], []))
         findings += self._summary(ledger, skipped, read.get(tabs[1], []))
-        run_id, repaired = await self._record(started, checked, findings)
-        self._request_flush()
-        log.info(
-            "verify run",
-            extra={
-                "kind": "quick",
-                "payments_checked": checked,
-                "findings": len(findings),
-                "repaired": repaired,
-                "duration_ms": round((time.perf_counter() - clock) * 1000),
-            },
-        )
-        return run_id
+        return SheetCheck(checked, findings)
 
     # -- what is compared ---------------------------------------------------------------------
-
-    def _in_progress(self, row: Mapping[str, Any], started: datetime) -> bool:
-        """Changed since the run started, or under an hour old with the fee pending."""
-        if row["updated_at"] >= to_db_text(started):
-            return True
-        created = row["source_created_at"]
-        young = created is not None and created > to_db_text(started - FEE_SETTLES)
-        return young and row["fee_minor"] is None
 
     def _payments(
         self, ledger: Mapping[PaymentKey, Mapping[str, Any]], skipped: set[PaymentKey], tab: Rows
@@ -279,79 +287,12 @@ class SheetVerify:
             rows = await tx.execute(sa.select(payments))
         return {(r["source"], r["account"], r["payment_id"]): dict(r) for r in rows}
 
-    async def _live(self) -> set[PaymentKey]:
-        """The keys of the payments with a live job of any stage."""
-        async with self._writer.transaction() as tx:
-            live = await tx.execute(
-                sa.select(jobs.c.source, jobs.c.account, jobs.c.payment_key)
-                .where(jobs.c.status.in_(LIVE_STATUSES))
-                .distinct()
-            )
-        return {(r["source"], r["account"], r["payment_key"]) for r in live}
-
-    async def _record(
-        self, started: datetime, checked: int, findings: Sequence[Finding]
-    ) -> tuple[int, int]:
-        """The run, its findings and their repair jobs, in one transaction; the run's id and
-        how many findings were repaired."""
-        source = RAZORPAY
-        account = self._config.razorpay.account
-        now = utc_now()
-        line = status_line(started, self._zone, checked, len(findings))
-        repaired = sum(1 for f in findings if f.repair is not None)
-        async with self._writer.transaction() as tx:
-            [run] = await tx.execute(
-                sa.insert(verify_runs)
-                .values(
-                    kind="quick",
-                    started_at=to_db_text(started),
-                    finished_at=to_db_text(now),
-                    window_days=0,
-                    local_date=started.astimezone(self._zone).date().isoformat(),
-                    payments_checked=checked,
-                    findings_count=len(findings),
-                    repaired_count=repaired,
-                    ignored_events=0,
-                    outcome="differences" if findings else "clean",
-                    status_line=line,
-                )
-                .returning(verify_runs.c.id)
-            )
-            for finding in findings:
-                job_id = None
-                if finding.repair is not None:
-                    # Coalesced: two findings of one payment share its one live job.
-                    job_id = await enqueue(
-                        tx,
-                        stage=STAGE,
-                        sink=SINK,
-                        source=source,
-                        account=account,
-                        payment_key=finding.repair,
-                        event_id=None,
-                        retry_profile=self._config.service.retry_profile,
-                        now=now,
-                    )
-                await tx.execute(
-                    sa.insert(verify_findings).values(
-                        run_id=run["id"],
-                        kind=finding.kind,
-                        source=source,
-                        account=account,
-                        payment_id=finding.payment_id,
-                        detail=finding.detail,
-                        repair_job_id=job_id,
-                    )
-                )
-        return run["id"], repaired
-
 
 def status_line(started: datetime, zone: ZoneInfo, checked: int, differences: int) -> str:
     """The quick run's Sync status line (Q153)."""
-    local = started.astimezone(zone)
     return (
-        f"Sheet checked {local:%d %b %H:%M} {zone_label(zone)}: "
-        f"{_counted(checked, 'payment')}, {_counted(differences, 'difference')}"
+        f"Sheet checked {local_time(started, zone)}: "
+        f"{counted(checked, 'payment')}, {counted(differences, 'difference')}"
     )
 
 
@@ -364,10 +305,6 @@ def until_next(now: datetime, zone: ZoneInfo, every: timedelta) -> float:
     while at <= now:  # a wall time a daylight-saving change skipped
         at += every
     return (at - now).total_seconds()
-
-
-def _counted(n: int, noun: str) -> str:
-    return f"{n:,} {noun}" + ("" if n == 1 else "s")
 
 
 def _rows(sheet_id: int, width: int) -> Json:
