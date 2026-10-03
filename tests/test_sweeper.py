@@ -10,7 +10,8 @@ real; our clock is moved with time-machine and keeps ticking, so the API's token
 import asyncio
 import json
 import logging
-from collections.abc import AsyncGenerator, Iterator
+import time
+from collections.abc import AsyncGenerator, Callable, Iterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
@@ -22,6 +23,7 @@ from zoneinfo import ZoneInfo
 import httpx
 import pytest
 import respx
+import sqlalchemy as sa
 from fakes.sheets import FakeSheets
 from fastapi import FastAPI
 from support import (
@@ -37,7 +39,9 @@ from support import (
 from time_machine import TimeMachineFixture
 
 from webhook_sync.alerts import SILENT_WEBHOOK_ADVICE
+from webhook_sync.clock import to_db_text
 from webhook_sync.config import AlertsConfig, Config, SweeperConfig
+from webhook_sync.db.schema import checkpoints
 from webhook_sync.db.writer import Writer
 from webhook_sync.queue import record_pause
 from webhook_sync.queue import runner as runner_module
@@ -180,14 +184,45 @@ async def running(config: Config, data_dir: Path) -> AsyncGenerator[httpx.AsyncC
             yield client
 
 
+DEADLINE = 30.0
+"""Real seconds a background loop gets to show what a test waits for, even on a busy machine."""
+
+
+async def until(condition: Callable[[], bool], what: str) -> None:
+    """Wait (in real time) until `condition` holds, failing with `what` at the deadline."""
+    deadline = time.monotonic() + DEADLINE
+    while not condition():
+        if time.monotonic() > deadline:
+            raise AssertionError(f"timed out waiting for {what}")
+        await asyncio.sleep(0.01)
+
+
 async def wait_for(read_rows: ReadRows, sql: str, expected: list[dict[str, Any]]) -> None:
     """Wait (in real time) until `sql` reads `expected`: the app's loops work in the
     background."""
-    for _ in range(500):
+    deadline = time.monotonic() + DEADLINE
+    while time.monotonic() <= deadline:
         if await read_rows(sql) == expected:
             return
         await asyncio.sleep(0.01)
     assert await read_rows(sql) == expected
+
+
+def logged(caplog: pytest.LogCaptureFixture, message: str) -> int:
+    """How many records carry `message`, or start with it."""
+    return sum(r.getMessage().startswith(message) for r in caplog.records)
+
+
+async def passes_ended(caplog: pytest.LogCaptureFixture, count: int) -> None:
+    """Wait until `count` sweep passes have ended, silence check and heartbeat included. The
+    sweeper logs at INFO: set `caplog`'s level for it first."""
+    await until(lambda: logged(caplog, "sweep pass ended") >= count, f"{count} sweep pass(es)")
+
+
+@pytest.fixture
+def sweeper_logs(caplog: pytest.LogCaptureFixture) -> pytest.LogCaptureFixture:
+    caplog.set_level(logging.INFO, logger="webhook_sync.sweeper")
+    return caplog
 
 
 def settled(ids: tuple[str, ...]) -> list[dict[str, Any]]:
@@ -291,10 +326,12 @@ async def test_a_sweep_cancelled_mid_slice_re_reads_that_slice_and_stores_nothin
     fake.hold_at = last_slice - 600  # the last slice's call waits: cancelled mid-slice
 
     async with running(swept_config, data_dir):
-        for _ in range(500):
-            if any(int(query["from"]) == fake.hold_at for query in fake.calls_to("/v1/payments")):
-                break
-            await asyncio.sleep(0.01)
+        await until(
+            lambda: any(
+                int(query["from"]) == fake.hold_at for query in fake.calls_to("/v1/payments")
+            ),
+            "the held slice's list call",
+        )
     stopped_at = await checkpoint(read_rows, "payments")
     stored_before = await read_rows("SELECT payment_key FROM events ORDER BY payment_key")
 
@@ -418,12 +455,9 @@ async def test_while_razorpay_is_paused_the_sweeper_makes_no_list_calls(
     outside.razorpay.payments.update(recorded_listed_payments())
 
     async with running(swept_config, data_dir):
-        for _ in range(500):
-            if any(r.message == "sweep skipped: Razorpay is paused" for r in caplog.records):
-                break
-            await asyncio.sleep(0.01)
+        await passes_ended(caplog, 1)
 
-    assert any(r.message == "sweep skipped: Razorpay is paused" for r in caplog.records)
+    assert logged(caplog, "sweep skipped: Razorpay is paused")
     assert outside.razorpay.list_calls == []
     assert await read_rows("SELECT * FROM checkpoints") == []
     assert await read_rows("SELECT * FROM events") == []
@@ -520,13 +554,34 @@ async def test_a_changed_state_re_read_in_the_overlap_is_a_new_event_and_the_sam
 
 AUTHORIZED = recorded_api_answer("20261003T010947-pay_Tj9rKBOXWcsMeE-authorized")
 CAPTURED = recorded_api_answer("20261003T010957-pay_Tj9rKBOXWcsMeE-captured")
-AN_HOUR_ON = NOW + timedelta(hours=1, minutes=1)
+LATER = NOW + timedelta(hours=2)
+"""Far enough on that a re-list is due however long the test's real time runs."""
 
 
-async def an_hour_later(clock: TimeMachineFixture, fake: FakeRazorpay) -> None:
-    """Both clocks an hour on: the next sweep's slices are past every item, its re-list due."""
-    clock.move_to(AN_HOUR_ON, tick=True)
-    fake.now = AN_HOUR_ON
+async def later(clock: TimeMachineFixture, fake: FakeRazorpay) -> None:
+    """Both clocks two hours on: the next sweep's slices are past every item, its re-list
+    due."""
+    clock.move_to(LATER, tick=True)
+    fake.now = LATER
+
+
+async def running_for_a_month(writer: Writer) -> None:
+    """Both lists' checkpoints as a server running for a month leaves them: swept to a day
+    before NOW, re-listed at NOW, their first checkpoint 30 days back."""
+    async with writer.transaction() as tx:
+        for name in ("payments", "refunds"):
+            await tx.execute(
+                sa.insert(checkpoints).values(
+                    source="razorpay",
+                    account=RECORDED_ACCOUNT,
+                    list=name,
+                    checkpoint_at=to_db_text(NOW - timedelta(days=1)),
+                    last_sweep_at=to_db_text(NOW - timedelta(days=1)),
+                    last_sweep_stored=0,
+                    last_relist_at=to_db_text(NOW),
+                    relist_floor_at=to_db_text(NOW - timedelta(days=30)),
+                )
+            )
 
 
 @pytest.fixture
@@ -537,11 +592,13 @@ def frequent_sweeps(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.usefixtures("frequent_sweeps")
 async def test_a_payment_captured_after_it_was_swept_is_re_listed_and_its_row_succeeds_with_the_fee(
     swept_config: Config,
+    writer: Writer,
     data_dir: Path,
     outside: Outside,
     read_rows: ReadRows,
     clock: TimeMachineFixture,
 ) -> None:
+    await running_for_a_month(writer)  # the window, not the floor, bounds the re-list
     fake = outside.razorpay
     fake.payments["pay_Tj9rKBOXWcsMeE"] = AUTHORIZED  # created 21 minutes before NOW
     fake.fetches["pay_Tj9rKBOXWcsMeE"] = AUTHORIZED
@@ -552,7 +609,7 @@ async def test_a_payment_captured_after_it_was_swept_is_re_listed_and_its_row_su
         await wait_for(read_rows, CAUGHT_UP, [{"n": 2}])  # this pass's re-list check is done
         fake.payments["pay_Tj9rKBOXWcsMeE"] = CAPTURED
         fake.fetches["pay_Tj9rKBOXWcsMeE"] = CAPTURED
-        await an_hour_later(clock, fake)
+        await later(clock, fake)
         await wait_for(read_rows, row, [{"status": "succeeded", "fee_minor": 1180}])
 
     assert await read_rows("SELECT type, origin FROM events ORDER BY received_at") == [
@@ -561,12 +618,10 @@ async def test_a_payment_captured_after_it_was_swept_is_re_listed_and_its_row_su
     ]
     # The re-list read the last 7 days of payments, up to Razorpay's now.
     relists = [
-        q
-        for q in fake.calls_to("/v1/payments")
-        if int(q["from"]) == at(AN_HOUR_ON - timedelta(days=7))
+        q for q in fake.calls_to("/v1/payments") if int(q["from"]) == at(LATER - timedelta(days=7))
     ]
     assert relists
-    assert {int(q["to"]) for q in relists} == {at(AN_HOUR_ON)}
+    assert {int(q["to"]) for q in relists} == {at(LATER)}
 
 
 ALL_LEDGER_JOBS_DONE = "SELECT count(*) AS n FROM jobs WHERE stage = 'ledger' AND status != 'done'"
@@ -581,11 +636,13 @@ def with_refunds(payment: dict[str, Any], status: str) -> dict[str, Any]:
 @pytest.mark.usefixtures("frequent_sweeps")
 async def test_a_refund_going_from_pending_to_processed_updates_the_refunded_amount_on_the_re_list(
     swept_config: Config,
+    writer: Writer,
     data_dir: Path,
     outside: Outside,
     read_rows: ReadRows,
     clock: TimeMachineFixture,
 ) -> None:
+    await running_for_a_month(writer)  # the window, not the floor, bounds the re-list
     fake = outside.razorpay
     fetched = fake.fetches["pay_Tj9gmEfed6kRqO"]
     fake.payments["pay_Tj9gmEfed6kRqO"] = recorded_listed_payments()["pay_Tj9gmEfed6kRqO"]
@@ -611,7 +668,7 @@ async def test_a_refund_going_from_pending_to_processed_updates_the_refunded_amo
             )
         ]
         fake.fetches["pay_Tj9gmEfed6kRqO"] = fetched
-        await an_hour_later(clock, fake)
+        await later(clock, fake)
         await wait_for(read_rows, row, [{"status": "partially_refunded", "refunded_minor": 20000}])
 
     assert await read_rows(
@@ -619,11 +676,46 @@ async def test_a_refund_going_from_pending_to_processed_updates_the_refunded_amo
         " ORDER BY type"
     ) == [{"type": "refund.created", "n": 2}, {"type": "refund.processed", "n": 2}]
     relists = [
-        q
-        for q in fake.calls_to("/v1/refunds")
-        if int(q["from"]) == at(AN_HOUR_ON - timedelta(days=21))
+        q for q in fake.calls_to("/v1/refunds") if int(q["from"]) == at(LATER - timedelta(days=21))
     ]
     assert relists
+
+
+@pytest.mark.usefixtures("frequent_sweeps")
+async def test_with_no_lookback_the_re_list_never_reads_before_the_first_checkpoint(
+    swept_config: Config,
+    data_dir: Path,
+    outside: Outside,
+    read_rows: ReadRows,
+    clock: TimeMachineFixture,
+) -> None:
+    config = replace(swept_config, sweeper=SweeperConfig(initial_lookback_days=0))
+    fake = outside.razorpay
+    fake.payments["pay_Tj64grZUMO3PEj"] = {
+        **recorded_listed_payments()["pay_Tj64grZUMO3PEj"],
+        "created_at": at(NOW - timedelta(days=2)),
+    }
+    fake.refunds.extend(  # created 19:40 on 2 Oct, before the first checkpoint
+        recorded_api_answer(name)
+        for name in (
+            "20261003T011109-rfnd_Tj9tB2hm5WLvww-processed",
+            "20261003T011111-rfnd_Tj9tMhKlOulF3Q-processed",
+        )
+    )
+    relisted = "SELECT count(*) AS n FROM checkpoints WHERE last_relist_at >= '2026-10-02T22:00'"
+
+    async with running(config, data_dir):
+        await wait_for(read_rows, "SELECT count(*) AS n FROM checkpoints", [{"n": 2}])
+        await later(clock, fake)
+        await wait_for(read_rows, relisted, [{"n": 2}])
+
+    first = at(NOW)  # Razorpay's now at the first sweep: the first checkpoint
+    assert await read_rows("SELECT DISTINCT relist_floor_at FROM checkpoints") == [
+        {"relist_floor_at": "2026-10-02T20:00:00.000000Z"}
+    ]
+    for path in ("/v1/payments", "/v1/refunds"):
+        assert min(int(q["from"]) for q in fake.calls_to(path)) >= first
+    assert await read_rows("SELECT * FROM events") == []
 
 
 @pytest.mark.usefixtures("frequent_sweeps")
@@ -637,14 +729,14 @@ async def test_a_re_list_in_which_nothing_changed_stores_no_event_and_enqueues_n
     fake = outside.razorpay
     fake.payments.update(recorded_listed_payments())
     fake.refunds.extend(recorded_listed_refunds())
-    relisted = "SELECT count(*) AS n FROM checkpoints WHERE last_relist_at > '2026-10-02T21:00'"
+    relisted = "SELECT count(*) AS n FROM checkpoints WHERE last_relist_at >= '2026-10-02T22:00'"
 
     async with running(swept_config, data_dir):
         await wait_for(read_rows, CAUGHT_UP, [{"n": 2}])
         await wait_for(read_rows, ALL_LEDGER_JOBS_DONE, [{"n": 0}])
         events = await read_rows("SELECT event_id FROM events ORDER BY event_id")
         jobs = await read_rows("SELECT id FROM jobs ORDER BY id")
-        await an_hour_later(clock, fake)
+        await later(clock, fake)
         await wait_for(read_rows, relisted, [{"n": 2}])
 
     assert len(events) == 7
@@ -733,10 +825,7 @@ async def test_with_a_heartbeat_url_each_healthy_pass_is_followed_by_one_post(
 
     async with running(heartbeat_config, data_dir):
         await wait_for(read_rows, CAUGHT_UP, [{"n": 2}])
-        for _ in range(500):
-            if len(heartbeats(outside.router)) >= 2:
-                break
-            await asyncio.sleep(0.01)
+        await until(lambda: len(heartbeats(outside.router)) >= 2, "two heartbeats")
         passes = len(outside.razorpay.calls_to("/v1/refunds"))  # the walk's probe, at least
 
     pings = heartbeats(outside.router)
@@ -749,22 +838,17 @@ async def test_no_heartbeat_follows_a_failed_pass(
     heartbeat_config: Config,
     data_dir: Path,
     outside: Outside,
-    caplog: pytest.LogCaptureFixture,
+    sweeper_logs: pytest.LogCaptureFixture,
 ) -> None:
-    caplog.set_level(logging.WARNING, logger="webhook_sync.sweeper")
     outside.router.post(HEARTBEAT).mock(return_value=httpx.Response(200, text="OK"))
     outside.router.get(f"{RAZORPAY_API}/v1/refunds").mock(
         return_value=httpx.Response(503, json={"error": {"description": "down"}})
     )
 
     async with running(heartbeat_config, data_dir):
-        for _ in range(500):
-            if any(r.message == "sweep stopped: the list failed" for r in caplog.records):
-                break
-            await asyncio.sleep(0.01)
-        await asyncio.sleep(0.1)
+        await passes_ended(sweeper_logs, 1)
 
-    assert any(r.message == "sweep stopped: the list failed" for r in caplog.records)
+    assert logged(sweeper_logs, "sweep stopped: the list failed")
     assert heartbeats(outside.router) == []
 
 
@@ -773,30 +857,29 @@ async def test_no_heartbeat_while_razorpay_is_paused(
     data_dir: Path,
     writer: Writer,
     outside: Outside,
-    caplog: pytest.LogCaptureFixture,
+    sweeper_logs: pytest.LogCaptureFixture,
 ) -> None:
-    caplog.set_level(logging.INFO, logger="webhook_sync.sweeper")
     outside.router.post(HEARTBEAT).mock(return_value=httpx.Response(200, text="OK"))
     async with writer.transaction() as tx:
         await record_pause(tx, "source", "razorpay", "Razorpay answered HTTP 401", now=NOW)
 
     async with running(heartbeat_config, data_dir):
-        for _ in range(500):
-            if any(r.message == "sweep skipped: Razorpay is paused" for r in caplog.records):
-                break
-            await asyncio.sleep(0.01)
-        await asyncio.sleep(0.1)
+        await passes_ended(sweeper_logs, 1)
 
-    assert any(r.message == "sweep skipped: Razorpay is paused" for r in caplog.records)
+    assert logged(sweeper_logs, "sweep skipped: Razorpay is paused")
     assert heartbeats(outside.router) == []
 
 
 async def test_with_no_heartbeat_url_a_healthy_pass_posts_nowhere(
-    swept_config: Config, data_dir: Path, outside: Outside, read_rows: ReadRows
+    swept_config: Config,
+    data_dir: Path,
+    outside: Outside,
+    read_rows: ReadRows,
+    sweeper_logs: pytest.LogCaptureFixture,
 ) -> None:
     async with running(swept_config, data_dir):
+        await passes_ended(sweeper_logs, 1)
         await wait_for(read_rows, CAUGHT_UP, [{"n": 2}])
-        await asyncio.sleep(0.1)
 
     hosts = {request.url.host for request in requests(outside.router)}
     assert hosts <= {"api.razorpay.test", "oauth2.googleapis.com", "sheets.googleapis.com"}
@@ -807,19 +890,14 @@ async def test_a_heartbeat_that_fails_is_logged_and_not_retried(
     heartbeat_config: Config,
     data_dir: Path,
     outside: Outside,
-    caplog: pytest.LogCaptureFixture,
+    sweeper_logs: pytest.LogCaptureFixture,
 ) -> None:
-    caplog.set_level(logging.WARNING, logger="webhook_sync.sweeper")
     outside.router.post(HEARTBEAT).mock(return_value=httpx.Response(500))
 
     async with running(heartbeat_config, data_dir):
-        for _ in range(500):
-            if any(r.message.startswith("heartbeat not sent") for r in caplog.records):
-                break
-            await asyncio.sleep(0.01)
-        await asyncio.sleep(0.1)
+        await passes_ended(sweeper_logs, 1)
 
-    assert [r.message for r in caplog.records if r.message.startswith("heartbeat")] == [
+    assert [r.getMessage() for r in sweeper_logs.records if r.message.startswith("heartbeat")] == [
         "heartbeat not sent: HTTPStatusError"
     ]
     assert len(heartbeats(outside.router)) == 1
@@ -845,10 +923,7 @@ def alert_texts(router: respx.MockRouter) -> list[str]:
 
 
 async def wait_for_alert(router: respx.MockRouter) -> None:
-    for _ in range(500):
-        if alert_texts(router):
-            return
-        await asyncio.sleep(0.01)
+    await until(lambda: bool(alert_texts(router)), "a silent_webhook alert")
 
 
 @pytest.mark.usefixtures("frequent_sweeps")
@@ -858,6 +933,7 @@ async def test_an_old_payment_found_only_by_the_sweep_raises_one_silent_webhook_
     outside: Outside,
     read_rows: ReadRows,
     clock: TimeMachineFixture,
+    sweeper_logs: pytest.LogCaptureFixture,
 ) -> None:
     outside.router.post(HOOK).mock(return_value=httpx.Response(200))
     fake = outside.razorpay
@@ -865,13 +941,13 @@ async def test_an_old_payment_found_only_by_the_sweep_raises_one_silent_webhook_
     # The first start's lookback is history, not missed deliveries: no alert.
     fake.payments["pay_Tj64grZUMO3PEj"] = listed["pay_Tj64grZUMO3PEj"]
     async with running(alerting_config, data_dir):
-        await wait_for(read_rows, CAUGHT_UP, [{"n": 2}])
-        await asyncio.sleep(0.1)
+        await passes_ended(sweeper_logs, 1)
+    assert await read_rows("SELECT count(*) AS n FROM events") == [{"n": 1}]
     assert alert_texts(outside.router) == []
 
-    # An hour on, a payment created 50 minutes ago that no delivery brought is swept; then a
-    # second one, within the hour.
-    await an_hour_later(clock, fake)
+    # Two hours on, a payment created an hour and 49 minutes ago that no delivery brought is
+    # swept; then a second one, within the hour.
+    await later(clock, fake)
     fake.payments["pay_Tj66x2JuEXjIdB"] = {
         **listed["pay_Tj66x2JuEXjIdB"],
         "created_at": at(NOW + timedelta(minutes=11)),
@@ -880,9 +956,9 @@ async def test_an_old_payment_found_only_by_the_sweep_raises_one_silent_webhook_
         await wait_for_alert(outside.router)
         fake.payments["pay_Tj9rKBOXWcsMeE"] = {
             **listed["pay_Tj9rKBOXWcsMeE"],
-            "created_at": at(AN_HOUR_ON - timedelta(minutes=8)),  # in the next overlap
+            "created_at": at(LATER - timedelta(minutes=8)),  # in the next overlap
         }
-        fake.now = AN_HOUR_ON + timedelta(minutes=5)
+        fake.now = LATER + timedelta(minutes=5)
         await wait_for(
             read_rows,
             "SELECT count(*) AS n FROM events WHERE payment_key = 'pay_Tj9rKBOXWcsMeE'",
@@ -906,30 +982,31 @@ async def test_a_swept_payment_that_a_delivery_already_brought_raises_no_alert(
     outside: Outside,
     read_rows: ReadRows,
     clock: TimeMachineFixture,
+    sweeper_logs: pytest.LogCaptureFixture,
 ) -> None:
     outside.router.post(HOOK).mock(return_value=httpx.Response(200))
     fake = outside.razorpay
     async with running(alerting_config, data_dir):
         await wait_for(read_rows, CAUGHT_UP, [{"n": 2}])
 
-    # Delivered at once, then swept 50 minutes later by a server that was down meanwhile.
+    # Delivered at once, then swept later by a server that was down meanwhile.
     fake.payments["pay_Tj9rKBOXWcsMeE"] = {
         **CAPTURED,
         "created_at": at(NOW + timedelta(minutes=11)),
     }
     clock.move_to(NOW + timedelta(minutes=11), tick=True)
     body, headers = sign_razorpay(recorded_delivery("Tj9sMcl7hE9PaT"), event_id="Tj9sMcl7hE9PaT")
-    await an_hour_later(clock, fake)
+    await later(clock, fake)
+    swept = logged(sweeper_logs, "sweep pass ended")
     async with running(alerting_config, data_dir) as client:
         delivered = await client.post("/webhooks/razorpay", content=body, headers=headers)
-        await wait_for(
-            read_rows,
-            "SELECT origin FROM events ORDER BY origin",
-            [{"origin": "delivery"}, {"origin": "sweep"}],
-        )
-        await asyncio.sleep(0.1)
+        await passes_ended(sweeper_logs, swept + 1)
 
     assert delivered.status_code == 202
+    assert await read_rows("SELECT origin FROM events ORDER BY origin") == [
+        {"origin": "delivery"},
+        {"origin": "sweep"},
+    ]
     assert alert_texts(outside.router) == []
 
 
@@ -973,6 +1050,7 @@ async def test_sweeps_storing_events_with_a_recent_delivery_raise_no_alert(
     outside: Outside,
     read_rows: ReadRows,
     clock: TimeMachineFixture,
+    sweeper_logs: pytest.LogCaptureFixture,
 ) -> None:
     outside.router.post(HOOK).mock(return_value=httpx.Response(200))
     fake = outside.razorpay
@@ -990,9 +1068,9 @@ async def test_sweeps_storing_events_with_a_recent_delivery_raise_no_alert(
         **recorded_listed_payments()["pay_Tj64grZUMO3PEj"],
         "created_at": at(NOW - timedelta(minutes=5)),
     }
+    swept = logged(sweeper_logs, "sweep pass ended")
     async with running(alerting_config, data_dir):
-        await wait_for(read_rows, CAUGHT_UP, [{"n": 2}])
-        await asyncio.sleep(0.1)
+        await passes_ended(sweeper_logs, swept + 1)
 
     assert await read_rows("SELECT count(*) AS n FROM events WHERE origin = 'sweep'") == [{"n": 1}]
     assert alert_texts(outside.router) == []

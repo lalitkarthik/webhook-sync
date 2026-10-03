@@ -14,8 +14,8 @@ then, in its own transaction, the checkpoint moves to the slice's end. An empty 
 too, so a quiet account's checkpoint keeps up. A sweep stopped mid-slice re-reads that slice
 next time, and insert-if-absent stores nothing twice.
 
-Each list is also re-listed hourly over its last 7 days (payments) or 21 days (refunds), so a
-later change to an item the slices have passed (a capture, a fee, a refund reaching processed)
+Each list is also re-listed hourly over its last 7 days (payments) or 21 days (refunds), never
+before its first checkpoint, so a later change to an item the slices have passed (a capture, a fee, a refund reaching processed)
 is a new state hash, so a new event (Q108). Backfill lists payments created on past local dates
 as `backfill:` events and never touches a checkpoint (Q156).
 
@@ -111,8 +111,10 @@ class Sweeper:
         await self._sleep(self._rng.uniform(0, START_DELAY.total_seconds()))
         while True:
             try:
-                if await self.sweep():
+                finished = await self.sweep()
+                if finished:
                     await self._heartbeat()
+                log.info("sweep pass ended", extra={"finished": finished})
             except Exception:
                 log.exception("sweep failed; the next one runs on time")
             await self._sleep(SWEEP_EVERY.total_seconds())
@@ -154,8 +156,11 @@ class Sweeper:
                     continue
                 stored += walked.stored
                 unannounced.extend(walked.unannounced)
-                if await self._relist_due(list_name):
-                    finished = await self._relist(list_name, entity, walked.source_now) and finished
+                floor = await self._relist_floor(list_name)
+                if floor is not None:
+                    finished = (
+                        await self._relist(list_name, entity, walked.source_now, floor) and finished
+                    )
         finally:
             await self._check_silence(stored, unannounced)
         return finished
@@ -233,19 +238,27 @@ class Sweeper:
         await self._swept(list_name, stored)
         return _Walked(source_now, stored, unannounced)
 
-    async def _relist_due(self, list_name: ListName) -> bool:
-        """Whether the list was last re-listed an hour ago or more (our clock)."""
+    async def _relist_floor(self, list_name: ListName) -> int | None:
+        """The list's re-list floor in Unix seconds when its re-list is due (last run an hour
+        ago or more, on our clock); None when it isn't."""
         async with self._writer.transaction() as tx:
             rows = await tx.execute(
-                sa.select(checkpoints.c.last_relist_at).where(*_matching(self._key(list_name)))
+                sa.select(checkpoints.c.last_relist_at, checkpoints.c.relist_floor_at).where(
+                    *_matching(self._key(list_name))
+                )
             )
-        last = rows[0]["last_relist_at"] if rows else None
-        return last is None or last <= to_db_text(utc_now() - RELIST_EVERY)
+        last = rows[0]["last_relist_at"]
+        if last is not None and last > to_db_text(utc_now() - RELIST_EVERY):
+            return None
+        return int(datetime.fromisoformat(rows[0]["relist_floor_at"]).timestamp())
 
-    async def _relist(self, list_name: ListName, entity: ListedEntity, source_now: int) -> bool:
-        """Re-list every item created in the list's re-list window up to Razorpay's now; an
-        item whose state hash is new is a new synthetic event with its ledger job (Q108)."""
-        start = source_now - _seconds(RELIST_WINDOW[list_name])
+    async def _relist(
+        self, list_name: ListName, entity: ListedEntity, source_now: int, floor: int
+    ) -> bool:
+        """Re-list every item created in the list's re-list window up to Razorpay's now, never
+        before its floor (the first checkpoint); an item whose state hash is new is a new
+        synthetic event with its ledger job (Q108)."""
+        start = max(source_now - _seconds(RELIST_WINDOW[list_name]), floor)
         listed = await self._list(list_name, start, source_now)
         if isinstance(listed, Failure):
             _stopped(list_name, listed)
@@ -346,8 +359,9 @@ class Sweeper:
     async def _checkpoint(self, list_name: ListName, source_now: int) -> tuple[int, bool]:
         """The list's checkpoint in Unix seconds, and whether it is still the first start's (no
         slice stored yet). With none, one is stored at once, `initial_lookback_days` before
-        Razorpay's now, so a restart doesn't move it. Its re-list is first due an hour on, so the
-        first start reads only its lookback."""
+        Razorpay's now, so a restart doesn't move it. The re-list never reads before this first
+        checkpoint (`relist_floor_at`), so a first start reads only its lookback (Q157), and
+        it is first due an hour on."""
         key = self._key(list_name)
         lookback = timedelta(days=self._config.sweeper.initial_lookback_days)
         first = _moment(source_now - _seconds(lookback))
@@ -359,6 +373,7 @@ class Sweeper:
                     checkpoint_at=to_db_text(first),
                     last_sweep_stored=0,
                     last_relist_at=to_db_text(utc_now()),
+                    relist_floor_at=to_db_text(first),
                 )
                 .on_conflict_do_nothing()
             )

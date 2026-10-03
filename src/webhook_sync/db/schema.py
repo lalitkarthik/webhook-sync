@@ -170,4 +170,5 @@ checkpoints = sa.Table(
     sa.Column("last_sweep_at", sa.Text),
     sa.Column("last_sweep_stored", sa.Integer, nullable=False),
     sa.Column("last_relist_at", sa.Text),
+    sa.Column("relist_floor_at", sa.Text, nullable=False),
 )
