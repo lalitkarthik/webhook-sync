@@ -14,10 +14,10 @@ columns, the card network excluded: a list can't expand the card. What disagrees
   and `unknown_columns`: listed so a person knows.
 
 Work in progress is skipped as in the sheet check: a payment with a live job, changed since the
-run started, or under an hour old with the fee pending. So is a payment the sweeper hasn't
-reached: one created at or after its payments checkpoint, or with no checkpoint yet, within
-`initial_lookback_days`, where its first sweep starts. A run at start after an outage leaves the
-payments made meanwhile to the sweep, which brings them in with Via = sweep.
+run started, or under an hour old with the fee pending. So is a payment created at or after the
+sweeper's payments checkpoint while the sweeper keeps up (it moved the checkpoint within the last
+two sweep periods): the next sweep brings it in, with Via = sweep. A sweeper that stalled, or
+never swept, is not trusted: everything is compared, and what it missed is `missing`.
 """
 
 import logging
@@ -36,9 +36,13 @@ from webhook_sync.ledger.worker import HASHED_COLUMNS, business_columns
 from webhook_sync.queue import Failure, Pauses
 from webhook_sync.sources.base import UnusableState
 from webhook_sync.sources.razorpay import RazorpayAdapter
+from webhook_sync.sweeper.sweep import SWEEP_EVERY
 from webhook_sync.verify.runs import Finding, in_progress, live_payments
 
 log = logging.getLogger("webhook_sync.verify")
+
+SWEEPER_FRESH = 2 * SWEEP_EVERY
+"""A sweeper that moved its checkpoint within this long is keeping up."""
 
 REFUNDS_BEFORE = timedelta(days=21)
 """How much further back than the payments the refunds list is read (Q151)."""
@@ -93,6 +97,8 @@ class RazorpayVerify:
             if refund.get("status") == "processed":
                 processed.setdefault(refund["payment_id"], []).append(refund)
         unswept = await self._unswept_from(started)
+        if unswept is None:
+            unswept = end + 1  # nothing is the sweeper's
         ledger = await self._ledger()
         live = {key[2] for key in await live_payments(self._writer) if key[:2] == self._key}
         skipped = {
@@ -148,22 +154,22 @@ class RazorpayVerify:
                 findings.append(Finding("unknown_columns", payment_id, stored["unknown_columns"]))
         return SourceCheck(len(compared), findings, await self._ignored(since))
 
-    async def _unswept_from(self, started: datetime) -> int:
-        """Where the sweeper's payments are still to come, in Unix seconds: its checkpoint, or
-        with none yet, where its first sweep will start."""
+    async def _unswept_from(self, started: datetime) -> int | None:
+        """Where the sweeper's payments are still to come, in Unix seconds: its payments
+        checkpoint, if it moved within `SWEEPER_FRESH` of `started`; else None."""
         source, account = self._key
         async with self._writer.transaction() as tx:
             rows = await tx.execute(
-                sa.select(checkpoints.c.checkpoint_at).where(
+                sa.select(checkpoints.c.checkpoint_at, checkpoints.c.last_sweep_at).where(
                     checkpoints.c.source == source,
                     checkpoints.c.account == account,
                     checkpoints.c.list == "payments",
                 )
             )
-        if rows:
-            return _seconds_of(datetime.fromisoformat(rows[0]["checkpoint_at"]))
-        lookback = timedelta(days=self._config.sweeper.initial_lookback_days)
-        return _seconds_of(started - lookback)
+        swept = rows[0]["last_sweep_at"] if rows else None
+        if swept is None or swept < to_db_text(started - SWEEPER_FRESH):
+            return None
+        return _seconds_of(datetime.fromisoformat(rows[0]["checkpoint_at"]))
 
     @property
     def _key(self) -> tuple[str, str]:
