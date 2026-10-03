@@ -29,6 +29,8 @@ LOGGED_FIELDS = (
     "outcome",
     "error_class",
     "http_status",
+    "target",
+    "by",
 )
 
 

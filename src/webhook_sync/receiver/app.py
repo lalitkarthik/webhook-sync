@@ -121,6 +121,7 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
                     await minutely
                 await write_all_rejection_counts(receiver)
         finally:
+            app.state.writer = None  # the admin listener answers 503 from here on
             await razorpay_api.aclose()
             await writer.close()
 
