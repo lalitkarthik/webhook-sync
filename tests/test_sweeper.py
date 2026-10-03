@@ -8,7 +8,9 @@ real; our clock is moved with time-machine and keeps ticking, so the API's token
 """
 
 import asyncio
+import itertools
 import json
+import logging
 from collections.abc import AsyncGenerator, Iterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
@@ -26,6 +28,7 @@ from support import (
     RECORDED_ACCOUNT,
     TEST_SPREADSHEET_ID,
     ReadRows,
+    recorded_api_answer,
     recorded_delivery,
     recorded_fetch,
     sign_razorpay,
@@ -33,6 +36,8 @@ from support import (
 from time_machine import TimeMachineFixture
 
 from webhook_sync.config import Config, SweeperConfig
+from webhook_sync.db.writer import Writer
+from webhook_sync.queue import record_pause
 from webhook_sync.queue import runner as runner_module
 from webhook_sync.receiver.app import create_app
 from webhook_sync.sinks import sheets as sheets_module
@@ -248,3 +253,239 @@ async def test_a_late_delivery_of_a_swept_payment_is_a_new_event_that_changes_no
     ) == [{"via": "sweep", "row_version": 1}]
     assert await read_rows("SELECT count(*) AS n FROM jobs WHERE stage = 'mirror'") == [{"n": 3}]
     assert sorted(sheet_rows(outside.sheets)) == sorted(OUTAGE)
+
+
+def at(moment: datetime) -> int:
+    return int(moment.timestamp())
+
+
+async def checkpoint(read_rows: ReadRows, list_name: str) -> str | None:
+    rows = await read_rows(f"SELECT checkpoint_at FROM checkpoints WHERE list = '{list_name}'")
+    return rows[0]["checkpoint_at"] if rows else None
+
+
+async def test_a_sweep_cancelled_mid_slice_re_reads_that_slice_and_stores_nothing_twice(
+    swept_config: Config,
+    data_dir: Path,
+    outside: Outside,
+    read_rows: ReadRows,
+    clock: TimeMachineFixture,
+) -> None:
+    # A day back from 22:00 in 6 h slices: the last runs from 16:00, so its overlap re-reads
+    # the two payments of 15:56 and 15:58 that the slice before it stored.
+    now = datetime(2026, 10, 2, 22, 0, tzinfo=UTC)
+    clock.move_to(now, tick=True)
+    fake = outside.razorpay
+    fake.now = now
+    listed = recorded_listed_payments()
+    for payment_id in OUTAGE:
+        fake.payments[payment_id] = listed[payment_id]
+    last_slice = at(datetime(2026, 10, 2, 16, 0, tzinfo=UTC))
+    fake.hold_from = last_slice - 605  # the last slice's call waits: cancelled mid-slice
+
+    async with running(swept_config, data_dir):
+        for _ in range(500):
+            if any(int(query["from"]) >= fake.hold_from for query in fake.calls_to("/v1/payments")):
+                break
+            await asyncio.sleep(0.01)
+    stopped_at = await checkpoint(read_rows, "payments")
+    stored_before = await read_rows("SELECT payment_key FROM events ORDER BY payment_key")
+
+    fake.hold_from = None
+    fake.release.set()
+    async with running(swept_config, data_dir):
+        await wait_for(read_rows, ALL_ROWS, settled(OUTAGE))
+        await wait_for(read_rows, f"SELECT count(*) AS n FROM ({MIRRORED})", [{"n": 3}])
+
+    assert stopped_at is not None
+    assert stopped_at.startswith("2026-10-02T16:00:0")
+    assert stored_before == [
+        {"payment_key": "pay_Tj64grZUMO3PEj"},
+        {"payment_key": "pay_Tj66x2JuEXjIdB"},
+    ]
+    restarted = int(datetime.fromisoformat(stopped_at).timestamp())
+    assert any(int(query["from"]) == restarted - 600 for query in fake.calls_to("/v1/payments"))
+    assert await read_rows(
+        "SELECT payment_key, count(*) AS n FROM events GROUP BY payment_key ORDER BY payment_key"
+    ) == [{"payment_key": payment_id, "n": 1} for payment_id in OUTAGE]
+    assert await checkpoint(read_rows, "payments") == "2026-10-02T21:59:00.000000Z"
+
+
+async def test_a_quiet_accounts_checkpoints_still_advance_to_razorpays_now_less_a_minute(
+    swept_config: Config, data_dir: Path, outside: Outside, read_rows: ReadRows
+) -> None:
+    outside.razorpay.now = NOW + timedelta(seconds=7)  # Razorpay's clock, not ours
+
+    async with running(swept_config, data_dir):
+        await wait_for(
+            read_rows,
+            "SELECT list, checkpoint_at, last_sweep_stored FROM checkpoints"
+            " WHERE last_sweep_at IS NOT NULL ORDER BY list",
+            [
+                {
+                    "list": name,
+                    "checkpoint_at": "2026-10-02T19:59:07.000000Z",
+                    "last_sweep_stored": 0,
+                }
+                for name in ("payments", "refunds")
+            ],
+        )
+
+    assert await read_rows("SELECT * FROM events") == []
+    # A day back, in four slices of up to 6 h; each requested from 10 minutes before its start.
+    starts = [int(query["from"]) for query in outside.razorpay.calls_to("/v1/payments")]
+    assert len(starts) == 4
+    assert [later - earlier for earlier, later in itertools.pairwise(starts)] == [6 * 3600] * 3
+
+
+async def test_with_no_lookback_the_first_sweep_starts_from_now_and_stores_nothing_older(
+    swept_config: Config,
+    data_dir: Path,
+    outside: Outside,
+    read_rows: ReadRows,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sweeper_module, "SWEEP_EVERY", timedelta(milliseconds=300))
+    config = replace(swept_config, sweeper=SweeperConfig(initial_lookback_days=0))
+    fake = outside.razorpay
+    listed = recorded_listed_payments()
+    for payment_id in OUTAGE:  # 21 minutes to 4 hours old
+        fake.payments[payment_id] = listed[payment_id]
+
+    async with running(config, data_dir):
+        await wait_for(
+            read_rows,
+            "SELECT count(*) AS n FROM checkpoints WHERE last_sweep_at IS NOT NULL",
+            [{"n": 2}],
+        )
+        started_at = await checkpoint(read_rows, "payments")
+        assert await read_rows("SELECT * FROM events") == []
+        # Ten minutes on, a payment made after the start is swept; the older ones still aren't.
+        fake.payments["pay_Tj64grZUMO3PEj"] = {
+            **listed["pay_Tj64grZUMO3PEj"],
+            "created_at": at(NOW + timedelta(minutes=5)),
+        }
+        fake.now = NOW + timedelta(minutes=10)
+        await wait_for(
+            read_rows,
+            "SELECT payment_key FROM events",
+            [{"payment_key": "pay_Tj64grZUMO3PEj"}],
+        )
+
+    assert started_at is not None
+    assert started_at.startswith("2026-10-02T20:00:0")
+    assert await read_rows(ALL_ROWS) in ([], settled(("pay_Tj64grZUMO3PEj",)))
+    assert await read_rows("SELECT payment_key FROM events") == [
+        {"payment_key": "pay_Tj64grZUMO3PEj"}
+    ]
+
+
+async def test_while_razorpay_is_paused_the_sweeper_makes_no_list_calls(
+    swept_config: Config,
+    data_dir: Path,
+    writer: Writer,
+    outside: Outside,
+    read_rows: ReadRows,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="webhook_sync.sweeper")
+    async with writer.transaction() as tx:
+        await record_pause(tx, "source", "razorpay", "Razorpay answered HTTP 401", now=NOW)
+    outside.razorpay.payments.update(recorded_listed_payments())
+
+    async with running(swept_config, data_dir):
+        for _ in range(500):
+            if any(r.message == "sweep skipped: Razorpay is paused" for r in caplog.records):
+                break
+            await asyncio.sleep(0.01)
+
+    assert any(r.message == "sweep skipped: Razorpay is paused" for r in caplog.records)
+    assert outside.razorpay.list_calls == []
+    assert await read_rows("SELECT * FROM checkpoints") == []
+    assert await read_rows("SELECT * FROM events") == []
+
+
+async def test_each_listed_payment_and_refund_is_stored_as_a_synthetic_event_like_a_delivery(
+    swept_config: Config, data_dir: Path, outside: Outside, read_rows: ReadRows
+) -> None:
+    outside.razorpay.payments.update(recorded_listed_payments())  # 7, two still `created`
+    outside.razorpay.refunds.extend(recorded_listed_refunds())  # 2, of pay_Tj9gmEfed6kRqO
+
+    async with running(swept_config, data_dir):
+        await wait_for(
+            read_rows,
+            "SELECT payment_id, status FROM payments ORDER BY payment_id",
+            [
+                {"payment_id": "pay_Tj64grZUMO3PEj", "status": "succeeded"},
+                {"payment_id": "pay_Tj66x2JuEXjIdB", "status": "succeeded"},
+                {"payment_id": "pay_Tj9gmEfed6kRqO", "status": "partially_refunded"},
+                {"payment_id": "pay_Tj9rKBOXWcsMeE", "status": "succeeded"},
+                {"payment_id": "pay_Tj9sm13R8h2378", "status": "failed"},
+            ],
+        )
+
+    events = await read_rows("SELECT * FROM events ORDER BY source_created_at")
+    assert [(e["type"], e["payment_key"], e["event_id"].split(":")[1]) for e in events] == [
+        ("payment.captured", "pay_Tj64grZUMO3PEj", "pay_Tj64grZUMO3PEj"),
+        ("payment.captured", "pay_Tj66x2JuEXjIdB", "pay_Tj66x2JuEXjIdB"),
+        ("payment.captured", "pay_Tj9gmEfed6kRqO", "pay_Tj9gmEfed6kRqO"),
+        ("payment.captured", "pay_Tj9rKBOXWcsMeE", "pay_Tj9rKBOXWcsMeE"),
+        ("payment.failed", "pay_Tj9sm13R8h2378", "pay_Tj9sm13R8h2378"),
+        ("refund.processed", "pay_Tj9gmEfed6kRqO", "rfnd_Tj9tB2hm5WLvww"),
+        ("refund.processed", "pay_Tj9gmEfed6kRqO", "rfnd_Tj9tMhKlOulF3Q"),
+    ]
+    first = events[0]
+    prefix, entity_id, state_hash = first["event_id"].split(":")
+    assert (prefix, entity_id, len(state_hash)) == ("sweep", "pay_Tj64grZUMO3PEj", 64)
+    assert {
+        k: first[k]
+        for k in ("account", "mode", "origin", "outcome", "body_sha256", "source_created_at")
+    } == {
+        "account": RECORDED_ACCOUNT,
+        "mode": "test",
+        "origin": "sweep",
+        "outcome": "queued",
+        "body_sha256": None,
+        "source_created_at": "2026-10-02T15:56:51.000000Z",  # the payment's created_at
+    }
+    assert len({e["fingerprint"] for e in events}) == len(events)
+    assert all(e["job_id"] is not None for e in events)
+    payload = json.loads(first["payload"])
+    assert payload["event"] == "payment.captured"
+    entity = payload["payload"]["payment"]["entity"]
+    assert entity["id"] == "pay_Tj64grZUMO3PEj"
+    assert not {"email", "notes", "acquirer_data", "description"} & set(entity)
+    assert await read_rows("SELECT * FROM deliveries") == []
+
+
+async def test_a_changed_state_re_read_in_the_overlap_is_a_new_event_and_the_same_one_is_not(
+    swept_config: Config,
+    data_dir: Path,
+    outside: Outside,
+    read_rows: ReadRows,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sweeper_module, "SWEEP_EVERY", timedelta(milliseconds=300))
+    fake = outside.razorpay
+    created = at(NOW - timedelta(minutes=3))  # inside every later slice's 10-minute overlap
+    authorized = recorded_api_answer("20261003T010947-pay_Tj9rKBOXWcsMeE-authorized")
+    captured = recorded_api_answer("20261003T010957-pay_Tj9rKBOXWcsMeE-captured")
+    fake.payments["pay_Tj9rKBOXWcsMeE"] = {**authorized, "created_at": created}
+
+    async with running(swept_config, data_dir):
+        await wait_for(read_rows, "SELECT type FROM events", [{"type": "payment.authorized"}])
+        fake.payments["pay_Tj9rKBOXWcsMeE"] = {**captured, "created_at": created}
+        fake.now = NOW + timedelta(minutes=5)
+        await wait_for(
+            read_rows,
+            "SELECT type FROM events ORDER BY received_at",
+            [{"type": "payment.authorized"}, {"type": "payment.captured"}],
+        )
+        fake.now = NOW + timedelta(minutes=8)  # re-read again, unchanged
+        await wait_for(
+            read_rows,
+            "SELECT checkpoint_at FROM checkpoints WHERE list = 'payments'",
+            [{"checkpoint_at": "2026-10-02T20:07:00.000000Z"}],
+        )
+
+    assert await read_rows("SELECT count(*) AS n FROM events") == [{"n": 2}]
