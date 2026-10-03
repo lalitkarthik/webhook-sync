@@ -179,8 +179,12 @@ A tab only the service writes: the Payments and Daily summary tabs. Buyers read,
 _Avoid_: locked tab, protected tab
 
 **Daily summary**:
-The tab with one row per day, per currency paid in and per currency paid out: count, gross and refunds in the first; settled, fees and net in the second; from payments that succeeded.
+The tab with one row per local day (by `source_created_at` in `service.timezone`), currency and fee currency: Payments, Gross, Refunds, Fees, Net (before refunds) and Fee pending, from payments that succeeded; a fee-pending payment counts only in Payments, Gross and Fee pending. A flush recomputes the days it touched.
 _Avoid_: report, dashboard
+
+**Sync status**:
+The tab of `Label | Value` rows the flusher rewrites whole on every flush: last flush, rows written, jobs waiting, dead jobs, the sheet's and Razorpay's state, and Last verify.
+_Avoid_: health page, status sheet
 
 **Forwarding sink**:
 A sink that sends each business-row change, once and signed, to the buyer's own automation (n8n, Zapier, Make).
