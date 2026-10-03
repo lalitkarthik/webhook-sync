@@ -48,6 +48,8 @@ select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF", "ASYNC", "PT"]
 
 [tool.pyright]
 include = ["src", "tests"]
+# Acceptance tests import modules their ticket has not built yet; the gate runs them, not pyright.
+exclude = ["tests/acceptance"]
 pythonVersion = "3.14"
 pythonPlatform = "Linux"
 extraPaths = ["src", "tests"]
