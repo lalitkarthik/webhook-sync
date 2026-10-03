@@ -366,7 +366,9 @@ class FakeSheets:
     It starts as Google makes a new spreadsheet: one tab, `Sheet1` (sheetId 0, 1000 x 26).
     `mount(router)` serves it; `apply(requests)` edits it as a person would (no HTTP, no quota).
     Fault switches: `access` ("edit", "view" or "none": unshared), `deleted`,
-    `exhaust_quota`, `fail_next`, `lose_next_write_reply`, `refuse_tokens`, `revoke_tokens`.
+    `exhaust_quota`, `fail_next`, `lose_next_write_reply`, `refuse_tokens`, `revoke_tokens`,
+    `cell_characters` (a lower per-cell limit, to make one cell bad); `after_next` makes a
+    person's edits straight after a call is answered, between the flusher's read and write.
     """
 
     def __init__(
@@ -402,6 +404,8 @@ class FakeSheets:
         self._quota: dict[QuotaKind, datetime] = {}
         self._failures: list[int] = []
         self._lose_write_replies = 0
+        self.cell_characters = CELL_CHARACTERS
+        self._after: list[tuple[str, list[Json]]] = []
         if first_tab:
             self.apply([{"addSheet": {"properties": {"title": "Sheet1", "sheetId": 0}}}])
 
@@ -447,6 +451,11 @@ class FakeSheets:
     def lose_next_write_reply(self) -> None:
         """The next `batchUpdate` is applied, then its reply lost: the caller times out."""
         self._lose_write_replies += 1
+
+    def after_next(self, name: str, requests: Sequence[Json]) -> None:
+        """Apply `requests` as a person's edits right after the next `name` call
+        (`get`, `getByDataFilter`, `batchUpdate`) is answered."""
+        self._after.append((name, list(requests)))
 
     def cell_count(self, tabs: Iterable[Tab] | None = None) -> int:
         return sum(tab.row_count * tab.column_count for tab in (tabs or self.tabs))
@@ -545,9 +554,13 @@ class FakeSheets:
         try:
             self._admit(kind, request, sid)
             self.calls.append(name)
-            return httpx.Response(200, json=answer())
+            response = httpx.Response(200, json=answer())
         except SheetsError as error:
             return httpx.Response(error.code, json=error.body())
+        for edit in [e for e in self._after if e[0] == name][:1]:
+            self._after.remove(edit)
+            self.apply(edit[1])
+        return response
 
     def _admit(self, kind: QuotaKind, request: httpx.Request, sid: str) -> None:
         """The checks before any call: token, spreadsheet, sharing, injected faults, quota."""
@@ -704,9 +717,9 @@ class FakeSheets:
     ) -> None:
         entered = given.get("userEnteredValue", {})
         text = entered.get("stringValue")
-        if isinstance(text, str) and _utf16_units(text) > CELL_CHARACTERS:
+        if isinstance(text, str) and _utf16_units(text) > self.cell_characters:
             raise _invalid(
-                f"Your input contains more than the maximum of {CELL_CHARACTERS} characters "
+                f"Your input contains more than the maximum of {self.cell_characters} characters "
                 "in a single cell."
             )
         if "formulaValue" in entered:

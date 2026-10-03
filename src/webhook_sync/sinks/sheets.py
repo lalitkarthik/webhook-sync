@@ -4,16 +4,21 @@ A batch stage on the stage runner (A12): every 3 s while mirror jobs wait, or at
 do, it claims up to 200 and makes one flush of them all:
 
 1. the first time, with no tab ids stored, create the three tabs (header, header note, frozen
-   header row and key columns), adopting any already named so, and store their ids and a
+   header row and key columns), adopting any already named so whose header matches ours (one
+   that differs pauses "layout changed", nothing written), and store their ids and a
    deployment id;
-2. read the grid sizes and key columns of Payments and Daily summary by tab id, in one call;
-   any read failure fails every job with its class;
+2. read the grid sizes, header rows and key columns of Payments and Daily summary by tab id,
+   in one call; any read failure fails every job with its class (a pause keeps them waiting,
+   attempts refunded). A missing Payments or Daily summary pauses "tab missing", a missing
+   Sync status is made again; a header that differs in our columns pauses "layout changed";
 3. map key → row on each (the last key row is the last used row; a duplicated key: the first);
 4. load each job's current ledger row, never the event (ADR 0001), and every succeeded
    payment of the days they touch;
 5. one `batchUpdate`: `updateCells` for rows already there without the key cells, appends with
    the key after the last used row, `appendDimension` first when the grid is too small; the
-   same for the touched Daily summary rows, recomputed (A15); Sync status rewritten whole;
+   same for the touched Daily summary rows, recomputed (A15); Sync status rewritten whole.
+   A 400 naming `requests[N]` of one payment's row sends that job dead, and the batch is
+   rebuilt without it and written again (G70); every other failure fails every job;
 6. complete every job and update `sheet_state` in one transaction.
 
 A payment in an unknown currency is held back: its job alone goes dead, with one
@@ -29,7 +34,7 @@ import random
 import time
 import uuid
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -93,6 +98,9 @@ DAILY_SUMMARY_HEADER = (
     "Fee pending",
 )
 SYNC_STATUS_HEADER = ("Label", "Value")
+
+LAYOUT_CHANGED = "layout changed"
+"""The pause reason when a header row differs from ours in our columns (G8, Q140)."""
 
 NEW_TAB_ROWS = 1000
 NEW_TAB_COLUMNS = 26
@@ -172,11 +180,10 @@ class Flusher:
     async def flush(self, claimed: list[ClaimedJob]) -> Done:
         started = time.perf_counter()
         state = await self._state()
-        tabs = state.tabs
-        read = await self._read(tabs)
+        read = await self._read(state.tabs)
+        tabs = read.tabs
         rows = await self._ledger_rows(claimed)
-        updates: list[Json] = []
-        appended: list[list[Json]] = []
+        cells: dict[int, list[Json]] = {}
         failed: dict[int, Failure] = {}
         held: dict[str, list[str]] = {}
         for job in claimed:
@@ -184,36 +191,40 @@ class Flusher:
             if row is None:
                 continue  # nothing in the ledger to mirror
             try:
-                cells = self._cells(row)
+                cells[job.id] = self._cells(row)
             except UnknownCurrency as unknown:
                 # Held back, never written 100 times off (Q62): only this job goes dead.
                 failed[job.id] = Failure(str(unknown), "dead")
                 held.setdefault(unknown.code, []).append(job.payment_key)
-                continue
-            at = read.payment_keys.get(job.payment_key)
-            if at is None:
-                appended.append(cells)
-            else:
-                updates.extend(self._update(tabs.payments, at, cells))
         summary = await self._summary(tabs.daily_summary, read, rows.values())
-        rows_written = len(rows) - len(failed)
-        now = utc_now()
-        status = await self._status(state, rows_written, failed, now)
-        requests = [
-            *updates,
-            *self._append(tabs.payments, appended, read.payments_last, read.payments_rows),
-            *summary,
-            _update_cells(tabs.sync_status, 1, 0, sync_status_rows(status, self._zone)),
-        ]
         summary_rows = sum(1 for r in summary if "updateCells" in r)
-        written = await self._client.batch_update(requests)
-        if isinstance(written, SheetsFailure):
-            _log_flush(claimed, 0, 0, 0, started, outcome=written.error_class)
-            raise StageFailed(written)
+        now = utc_now()
+        while True:
+            writing = [job for job in claimed if job.id in cells and job.id not in failed]
+            rows_written = len(rows) - len(failed)
+            status = await self._status(state, rows_written, failed, now)
+            payment_requests, owners = self._payment_requests(tabs.payments, read, writing, cells)
+            requests = [
+                *payment_requests,
+                *summary,
+                _update_cells(tabs.sync_status, 1, 0, sync_status_rows(status, self._zone)),
+            ]
+            written = await self._client.batch_update(requests)
+            if not isinstance(written, SheetsFailure):
+                break
+            index = written.request_index
+            owner = owners[index] if index is not None and index < len(owners) else None
+            if written.error_class != "dead" or owner is None:
+                _log_flush(claimed, 0, 0, 0, started, outcome=written.error_class)
+                raise StageFailed(written)
+            # One payment's row is bad (G70): its job alone goes dead; the batch is rebuilt
+            # without it and written again.
+            failed[owner] = written
+        appended = sum(1 for job in writing if job.payment_key not in read.payment_keys)
         _log_flush(
             claimed,
-            rows_written - len(appended),
-            len(appended),
+            rows_written - appended,
+            appended,
             summary_rows,
             started,
             outcome="ok",
@@ -370,19 +381,30 @@ class Flusher:
 
     async def _set_up_tabs(self) -> TabIds:
         """First run (Q140): a tab already named Payments, Daily summary or Sync status is
-        adopted (its header check comes later); a missing one is created with its header,
-        header note, frozen header row and key column, all in one `batchUpdate`."""
+        adopted when its header matches ours; when one differs, the flush pauses "layout
+        changed" before anything is written or stored. A missing tab is created with its
+        header, header note, frozen header row and key column, all in one `batchUpdate`."""
         answer = _answered(await self._client.get(fields="sheets.properties(sheetId,title)"))
         existing: dict[str, int] = {}
         for sheet in answer.get("sheets", []):
             properties = sheet.get("properties", {})
             existing[properties.get("title")] = properties.get("sheetId", 0)
         taken = set(existing.values())
-        specs = (
-            _TabSpec(PAYMENTS, tuple(c.header for c in self._columns), self._key + 1),
-            _TabSpec(DAILY_SUMMARY, DAILY_SUMMARY_HEADER, 3),
-            _TabSpec(SYNC_STATUS, SYNC_STATUS_HEADER, 1),
-        )
+        specs = self._specs()
+        adopted = [(existing[s.title], s) for s in specs if s.title in existing]
+        if adopted:
+            headers = _answered(
+                await self._client.get_by_data_filter(
+                    [_header(sheet_id, len(spec.header)) for sheet_id, spec in adopted],
+                    fields=KEY_COLUMN_FIELDS,
+                )
+            )
+            found = {
+                s.get("properties", {}).get("sheetId", 0): s for s in headers.get("sheets", [])
+            }
+            for sheet_id, spec in adopted:
+                if _header_of(found.get(sheet_id, {})) != spec.header:
+                    raise StageFailed(_layout_changed())
         ids: list[int] = []
         requests: list[Json] = []
         for spec in specs:
@@ -399,21 +421,41 @@ class Flusher:
 
     # -- the read -------------------------------------------------------------------------------
 
-    async def _read(self, tabs: TabIds) -> _Read:
-        """One read by tab id: the key columns and grid sizes of Payments and Daily summary.
-        A missing tab fails the flush as "tab missing"."""
-        answer = _answered(
-            await self._client.get_by_data_filter(
-                [
-                    _columns(tabs.payments, self._key, self._key + 1),
-                    _columns(tabs.daily_summary, 0, KEY_COLUMNS),
-                ],
-                fields=KEY_COLUMN_FIELDS,
-            )
+    def _specs(self) -> tuple[_TabSpec, _TabSpec, _TabSpec]:
+        return (
+            _TabSpec(PAYMENTS, tuple(c.header for c in self._columns), self._key + 1),
+            _TabSpec(DAILY_SUMMARY, DAILY_SUMMARY_HEADER, 3),
+            _TabSpec(SYNC_STATUS, SYNC_STATUS_HEADER, 1),
         )
-        found = {s.get("properties", {}).get("sheetId", 0): s for s in answer.get("sheets", [])}
-        if tabs.payments not in found or tabs.daily_summary not in found:
+
+    async def _read(self, tabs: TabIds) -> _Read:
+        """One read by tab id: the header rows, key columns and grid sizes of Payments and
+        Daily summary, and Sync status's header row (only to see it is there).
+
+        A missing Payments or Daily summary tab pauses the sink, "tab missing"; a missing
+        Sync status is made again and the read repeated. A header that differs from ours in
+        our columns (extra columns to the right are not read) pauses it, "layout changed"."""
+        payments_spec, summary_spec, status_spec = self._specs()
+        filters = [
+            _header(tabs.payments, len(payments_spec.header)),
+            _key_columns(tabs.payments, self._key, self._key + 1),
+            _header(tabs.daily_summary, len(summary_spec.header)),
+            _key_columns(tabs.daily_summary, 0, KEY_COLUMNS),
+            _header(tabs.sync_status, len(status_spec.header)),
+        ]
+        answer = await self._client.get_by_data_filter(filters, fields=KEY_COLUMN_FIELDS)
+        if isinstance(answer, SheetsFailure) and answer.error == TAB_MISSING:
+            tabs = await self._sync_status_again(tabs, answer)
+            return await self._read(tabs)
+        found = {
+            s.get("properties", {}).get("sheetId", 0): s
+            for s in _answered(answer).get("sheets", [])
+        }
+        if any(sheet_id not in found for sheet_id in (tabs.payments, tabs.daily_summary)):
             raise StageFailed(Failure(TAB_MISSING, "pause", pause_target="sink"))
+        for sheet_id, spec in ((tabs.payments, payments_spec), (tabs.daily_summary, summary_spec)):
+            if _header_of(found[sheet_id]) != spec.header:
+                raise StageFailed(_layout_changed())
 
         def payment_key(values: list[Json]) -> str | None:
             key: object = (values or [{}])[0].get("effectiveValue", {}).get("stringValue")
@@ -422,8 +464,34 @@ class Flusher:
         payment_keys, payments_last, payments_rows = _keys(found[tabs.payments], payment_key)
         summary_keys, summary_last, summary_rows = _keys(found[tabs.daily_summary], read_key)
         return _Read(
-            payment_keys, payments_last, payments_rows, summary_keys, summary_last, summary_rows
+            tabs,
+            payment_keys,
+            payments_last,
+            payments_rows,
+            summary_keys,
+            summary_last,
+            summary_rows,
         )
+
+    async def _sync_status_again(self, tabs: TabIds, missing: SheetsFailure) -> TabIds:
+        """After a read found a tab missing: when only Sync status is gone, make it again
+        (G10) and store its new id; otherwise the flush fails with `missing`, a pause."""
+        answer = _answered(await self._client.get(fields="sheets.properties(sheetId,title)"))
+        present = {s.get("properties", {}).get("sheetId", 0) for s in answer.get("sheets", [])}
+        if tabs.payments not in present or tabs.daily_summary not in present:
+            raise StageFailed(missing)
+        if tabs.sync_status in present:
+            raise StageFailed(missing)  # not ours to mend: something else went missing
+        sheet_id = _new_sheet_id(present)
+        _answered(await self._client.batch_update(_new_tab(sheet_id, self._specs()[2])))
+        async with self._writer.transaction() as tx:
+            await tx.execute(
+                sa.update(sheet_state)
+                .where(sheet_state.c.spreadsheet_id == self._spreadsheet_id)
+                .values(sync_status_tab_id=sheet_id)
+            )
+        log.warning("Sync status tab made again")
+        return replace(tabs, sync_status=sheet_id)
 
     # -- the ledger -----------------------------------------------------------------------------
 
@@ -438,6 +506,37 @@ class Flusher:
         return {(r["source"], r["account"], r["payment_id"]): dict(r) for r in found}
 
     # -- the write ------------------------------------------------------------------------------
+
+    def _payment_requests(
+        self,
+        sheet_id: int,
+        read: _Read,
+        writing: Sequence[ClaimedJob],
+        cells: Mapping[int, list[Json]],
+    ) -> tuple[list[Json], list[int | None]]:
+        """The Payments tab's requests and, for each, the job whose row it writes (None for
+        the grid growing): updates around the key cell, then one request per appended row, so
+        that a 400 naming `requests[N]` names one job."""
+        requests: list[Json] = []
+        owners: list[int | None] = []
+        appended: list[ClaimedJob] = []
+        for job in writing:
+            at = read.payment_keys.get(job.payment_key)
+            if at is None:
+                appended.append(job)
+                continue
+            for request in self._update(sheet_id, at, cells[job.id]):
+                requests.append(request)
+                owners.append(job.id)
+        first = read.payments_last + 1
+        grow = _grow(sheet_id, first + len(appended) - read.payments_rows)
+        if appended and grow is not None:
+            requests.append(grow)
+            owners.append(None)
+        for offset, job in enumerate(appended):
+            requests.append(_update_cells(sheet_id, first + offset, 0, [cells[job.id]]))
+            owners.append(job.id)
+        return requests, owners
 
     def _cells(self, row: Mapping[str, Any]) -> list[Json]:
         return [column.cell(row) for column in self._columns]
@@ -455,14 +554,8 @@ class Flusher:
         if not rows:
             return []
         first = last_used + 1
-        requests: list[Json] = []
-        short = first + len(rows) - row_count
-        if short > 0:
-            requests.append(
-                {"appendDimension": {"sheetId": sheet_id, "dimension": "ROWS", "length": short}}
-            )
-        requests.append(_update_cells(sheet_id, first, 0, rows))
-        return requests
+        grow = _grow(sheet_id, first + len(rows) - row_count)
+        return [*([grow] if grow is not None else []), _update_cells(sheet_id, first, 0, rows)]
 
 
 @dataclass(frozen=True)
@@ -481,9 +574,11 @@ class _State:
 
 @dataclass(frozen=True)
 class _Read:
-    """What the one read found: each tab's key → row index (the first row holding it), its
-    last used row (0, the header, when none) and its row count."""
+    """What the one read found: the tab ids it read by (Sync status's new one if it was made
+    again), and each tab's key → row index (the first row holding it), its last used row (0,
+    the header, when none) and its row count."""
 
+    tabs: TabIds
     payment_keys: dict[str, int]
     payments_last: int
     payments_rows: int
@@ -492,8 +587,49 @@ class _Read:
     summary_rows: int
 
 
-def _columns(sheet_id: int, first: int, end: int) -> Json:
-    return {"gridRange": {"sheetId": sheet_id, "startColumnIndex": first, "endColumnIndex": end}}
+def _header(sheet_id: int, width: int) -> Json:
+    """A tab's header row, our columns only: an extra column to the right is never read."""
+    return {
+        "gridRange": {
+            "sheetId": sheet_id,
+            "startRowIndex": 0,
+            "endRowIndex": 1,
+            "startColumnIndex": 0,
+            "endColumnIndex": width,
+        }
+    }
+
+
+def _key_columns(sheet_id: int, first: int, end: int) -> Json:
+    """A tab's key columns below the header (a range the read clips to the grid)."""
+    return {
+        "gridRange": {
+            "sheetId": sheet_id,
+            "startRowIndex": 1,
+            "startColumnIndex": first,
+            "endColumnIndex": end,
+        }
+    }
+
+
+def _header_of(sheet: Json) -> tuple[str, ...] | None:
+    """The header row's texts as a read found them: the range starting at row 0 (a key
+    range starts at row 1); None when the read holds no header range."""
+    for data in sheet.get("data", []):
+        if data.get("startRow", 0) == 0:
+            rows: list[Json] = data.get("rowData") or [{}]
+            values: list[Json] = rows[0].get("values") or []
+            return tuple(_text(value) for value in values)
+    return None
+
+
+def _text(cell: Json) -> str:
+    value: object = cell.get("effectiveValue", {}).get("stringValue")
+    return value if isinstance(value, str) else ""
+
+
+def _layout_changed() -> Failure:
+    return Failure(LAYOUT_CHANGED, "pause", pause_target="sink")
 
 
 def _keys[K](
@@ -514,6 +650,13 @@ def _keys[K](
             keys.setdefault(key, at)
             last_used = max(last_used, at)
     return keys, last_used, row_count
+
+
+def _grow(sheet_id: int, short: int) -> Json | None:
+    """`appendDimension` for the rows a tab's grid is `short` of, or None when it isn't."""
+    if short <= 0:
+        return None
+    return {"appendDimension": {"sheetId": sheet_id, "dimension": "ROWS", "length": short}}
 
 
 def _update_cells(sheet_id: int, row: int, column: int, rows: Sequence[Sequence[Json]]) -> Json:
