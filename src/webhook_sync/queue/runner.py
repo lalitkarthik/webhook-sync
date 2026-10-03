@@ -8,8 +8,8 @@ the one clock (A14); the sleeps are injected, so tests drive the runner without 
 import asyncio
 import logging
 import random
-from collections.abc import Awaitable, Callable, Coroutine, Sequence
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
 
@@ -40,9 +40,13 @@ type Sleep = Callable[[float], Awaitable[None]]
 @dataclass(frozen=True)
 class Done:
     """The work succeeded. `writes`, if given, runs in the same transaction as `complete`, so a
-    stale worker's writes roll back with its fenced completion."""
+    stale worker's writes roll back with its fenced completion.
+
+    `failed` (batch stages only) names jobs of the batch that failed on their own, by job id:
+    those fail with their class after the rest complete."""
 
     writes: Callable[[Transaction], Awaitable[None]] | None = None
+    failed: Mapping[int, Failure] = field(default_factory=dict[int, Failure])
 
 
 class StageFailed(Exception):
@@ -60,7 +64,8 @@ exception is our own bug, so the job goes to dead (queue.md's error classes)."""
 
 type BatchWork = Callable[[list[ClaimedJob]], Coroutine[Any, Any, Done]]
 """A batch stage's work on every claimed job at once (A12): returns `Done`, whose writes commit
-with every job's `complete`, or raises `StageFailed`, which fails every job with its class."""
+with every job's `complete` but those in its `failed`, or raises `StageFailed`, which fails
+every job with its class."""
 
 
 class StageRunner:
@@ -277,11 +282,16 @@ class BatchStageRunner:
             if done.writes is not None:
                 await done.writes(tx)
             for job in claimed:
+                if job.id in done.failed:
+                    continue
                 try:
                     await complete(tx, job, now=utc_now())
                 except LeaseLost:
                     # The reaper has it back: it runs again, and writing by key is idempotent.
                     log.warning("lease lost: result discarded", extra={"job_id": job.id})
+        for job in claimed:
+            if job.id in done.failed:
+                await self._fail_all([job], done.failed[job.id])
 
     async def _fail_all(self, claimed: list[ClaimedJob], failure: Failure) -> None:
         for job in claimed:

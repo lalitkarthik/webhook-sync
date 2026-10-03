@@ -8,7 +8,8 @@ real; time is frozen with time-machine. No call reaches Google.
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any
@@ -20,6 +21,7 @@ from fakes.sheets import FakeSheets, Tab
 from support import TEST_ACCOUNT, TEST_SPREADSHEET_ID, ReadRows, fixture_service_account
 from time_machine import TimeMachineFixture
 
+from webhook_sync.alerts import Alerter
 from webhook_sync.clock import to_db_text, utc_now
 from webhook_sync.config import Config
 from webhook_sync.db.schema import payments
@@ -38,6 +40,7 @@ from webhook_sync.sinks.sheets import (
 )
 from webhook_sync.sinks.sheets_client import ServiceAccountTokens, SheetsClient
 
+HOOK = "https://hooks.example.test/alerts"
 NOW = datetime(2026, 10, 2, 16, 0, tzinfo=UTC)
 CREATED = datetime(2026, 10, 2, 15, 58, 59, tzinfo=UTC)  # 21:28:59 IST
 
@@ -59,6 +62,12 @@ class Sheets:
     flusher: BatchStageRunner
     writer: Writer
     router: respx.MockRouter
+    hook: respx.Route
+
+    def alerts(self) -> list[str]:
+        """The texts of the alerts posted."""
+        calls: list[Any] = list(self.hook.calls)  # pyright: ignore[reportUnknownArgumentType]
+        return [json.loads(call.request.content)["text"] for call in calls]
 
     @property
     def payments(self) -> Tab:
@@ -82,10 +91,18 @@ def sheet_config(config: Config) -> Config:
 
 @pytest.fixture
 async def sheets(writer: Writer, sheet_config: Config) -> AsyncIterator[Sheets]:
-    """The flusher on the runner, writing to a fresh fake spreadsheet."""
+    """The flusher on the runner, writing to a fresh fake spreadsheet, alerting to `HOOK`."""
+    async with flusher_on(writer, sheet_config) as sheets:
+        yield sheets
+
+
+@asynccontextmanager
+async def flusher_on(writer: Writer, config: Config) -> AsyncGenerator[Sheets]:
     fake = FakeSheets(TEST_SPREADSHEET_ID)
     with respx.mock(assert_all_called=False) as router:
         fake.mount(router)
+        hook = router.post(HOOK).respond(200, text="ok")
+        alerter = Alerter(writer, HOOK)
         async with httpx.AsyncClient() as http:
             client = SheetsClient(
                 http, TEST_SPREADSHEET_ID, ServiceAccountTokens(fixture_service_account())
@@ -93,12 +110,16 @@ async def sheets(writer: Writer, sheet_config: Config) -> AsyncIterator[Sheets]:
             flusher = sheets_runner(
                 writer,
                 client,
-                sheet_config,
+                config,
                 claimed_by="wsync-test",
                 pauses=Pauses(),
                 sleep=never_wakes,
+                alerter=alerter,
             )
-            yield Sheets(fake, flusher, writer, router)
+            try:
+                yield Sheets(fake, flusher, writer, router, hook)
+            finally:
+                await alerter.aclose()
 
 
 def captured(payment_id: str = "pay_A", **changes: Any) -> dict[str, Any]:
@@ -118,7 +139,7 @@ def captured(payment_id: str = "pay_A", **changes: Any) -> dict[str, Any]:
         "settlement_currency": "INR",
         "method": "netbanking (CNRB)",
         "metadata": '{"order_id": "A-1042"}',
-        "customer_email": None,
+        "customer_email": "a.b@gmail.com",
         "description": "Pro plan",
         "source_created_at": to_db_text(CREATED),
         "via": "delivery",
@@ -207,7 +228,7 @@ async def test_a_captured_payment_reaches_a_fresh_sheet_as_one_typed_row(
         "488.20",
         "INR",
         "netbanking (CNRB)",
-        "",
+        "a***@gmail.com",
         "Pro plan",
         "A-1042",
         "delivery",
@@ -429,3 +450,130 @@ async def test_the_server_runs_the_flusher_in_its_lifespan(
                 await asyncio.sleep(0.01)
     assert await statuses(read_rows) == ["done"]
     assert fake.tab(PAYMENTS).values()[1][0] == "pay_A"
+
+
+# -- exact values (#32) ----------------------------------------------------------------------
+
+
+async def test_a_custom_column_list_writes_exactly_those_headers_in_that_order(
+    writer: Writer, sheet_config: Config
+) -> None:
+    config = replace(
+        sheet_config,
+        sheets=replace(sheet_config.sheets, columns=("payment_id", "metadata", "amount")),
+        razorpay=replace(sheet_config.razorpay, metadata_keys=("order_id", "plan")),
+    )
+    async with flusher_on(writer, config) as sheets:
+        await put(writer, captured(metadata='{"order_id": "A-1042", "plan": "pro"}'))
+
+        await sheets.flush()
+
+        assert sheets.payments.values() == [
+            ["Payment ID", "order_id", "plan", "Amount"],
+            ["pay_A", "A-1042", "pro", 500.0],
+        ]
+
+
+async def test_amounts_take_their_currencys_decimals(sheets: Sheets) -> None:
+    await put(sheets.writer, captured("pay_JPY", amount_minor=1999, currency="JPY"))
+    await put(sheets.writer, captured("pay_USD", amount_minor=1999, currency="usd"))
+
+    await sheets.flush()
+
+    rows = {row[0]: row for row in sheets.payments.values()[1:]}
+    assert rows["pay_JPY"][4] == 1999
+    assert rows["pay_USD"][4] == 19.99
+    assert shown(sheets.payments, 1)[4] == "1999"
+    assert shown(sheets.payments, 2)[4] == "19.99"
+
+
+async def test_an_unknown_currency_holds_back_only_that_row_dead_with_one_alert(
+    sheets: Sheets, read_rows: ReadRows
+) -> None:
+    await put(sheets.writer, captured("pay_00"))
+    await put(sheets.writer, captured("pay_01", currency="XYZ"))
+    await put(sheets.writer, captured("pay_02"))
+
+    assert await sheets.flush() == 3
+
+    assert [row[0] for row in sheets.payments.values()[1:]] == ["pay_00", "pay_02"]
+    jobs = await read_rows(
+        "SELECT payment_key, status, last_error_class, last_error FROM jobs "
+        "WHERE stage = 'mirror' ORDER BY id"
+    )
+    assert [(j["payment_key"], j["status"]) for j in jobs] == [
+        ("pay_00", "done"),
+        ("pay_01", "dead"),
+        ("pay_02", "done"),
+    ]
+    assert "XYZ" in jobs[1]["last_error"]
+    [alert] = sheets.alerts()
+    assert "unknown_currency" in alert
+    assert "XYZ" in alert
+    assert "pay_01" in alert
+    [state] = await read_rows("SELECT rows_written_last FROM sheet_state")
+    assert state["rows_written_last"] == 2
+
+
+async def test_a_60000_character_description_with_emoji_is_cut_and_accepted(
+    sheets: Sheets, read_rows: ReadRows
+) -> None:
+    await put(sheets.writer, captured(description="😀 " + "x" * 59997))
+
+    await sheets.flush()
+
+    cell: str = sheets.payments.value(1, 13)
+    assert len(cell.encode("utf-16-le")) // 2 == 50000
+    assert cell.startswith("😀 x")
+    assert cell.endswith("…[truncated]")
+    assert await statuses(read_rows) == ["done"]
+
+
+async def test_emails_are_written_as_is_when_masking_is_off(
+    writer: Writer, sheet_config: Config
+) -> None:
+    config = replace(sheet_config, sheets=replace(sheet_config.sheets, mask_email=False))
+    async with flusher_on(writer, config) as sheets:
+        await put(writer, captured("pay_A"))
+        await put(writer, captured("pay_B", customer_email="x"))
+
+        await sheets.flush()
+
+        assert [row[12] for row in sheets.payments.values()[1:]] == ["a.b@gmail.com", "x"]
+
+
+async def test_an_email_without_an_at_is_masked_whole(sheets: Sheets) -> None:
+    await put(sheets.writer, captured(customer_email="x"))
+
+    await sheets.flush()
+
+    assert sheets.payments.value(1, 12) == "***"
+
+
+async def test_a_row_not_found_at_source_with_unknown_columns_gets_both_notes(
+    sheets: Sheets,
+) -> None:
+    await put(
+        sheets.writer,
+        captured(not_found_at=to_db_text(NOW), unknown_columns='["fee", "gst_on_fee"]'),
+    )
+
+    await sheets.flush()
+
+    assert sheets.payments.value(1, 16) == "not found at source; unknown: fee, gst_on_fee"
+
+
+async def test_formula_phone_and_zero_padded_text_stay_text(sheets: Sheets) -> None:
+    await put(
+        sheets.writer,
+        captured(
+            description='=HYPERLINK("http://x")',
+            method="+919876543210",
+            metadata='{"order_id": "007"}',
+        ),
+    )
+
+    await sheets.flush()
+
+    row = sheets.payments.values()[1]
+    assert (row[11], row[13], row[14]) == ("+919876543210", '=HYPERLINK("http://x")', "007")

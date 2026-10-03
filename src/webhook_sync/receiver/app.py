@@ -123,7 +123,14 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
                     ServiceAccountTokens(config.google_secrets.service_account),
                 )
                 stages.append(
-                    sheets_runner(writer, sheets, config, claimed_by=claimed_by, pauses=pauses)
+                    sheets_runner(
+                        writer,
+                        sheets,
+                        config,
+                        claimed_by=claimed_by,
+                        pauses=pauses,
+                        alerter=alerter,
+                    )
                 )
             runners = Runners(writer, stages)
             app.state.runners = runners
