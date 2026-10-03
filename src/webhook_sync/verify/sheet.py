@@ -26,7 +26,7 @@ import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
@@ -39,7 +39,7 @@ from webhook_sync.db.writer import Writer
 from webhook_sync.queue import Pauses, enqueue
 from webhook_sync.queue.operations import LIVE_STATUSES
 from webhook_sync.sinks.encoding import UnknownCurrency, payment_columns, zone_label
-from webhook_sync.sinks.sheets import DAILY_SUMMARY_HEADER, SINK, STAGE
+from webhook_sync.sinks.sheets import DAILY_SUMMARY_HEADER, RAZORPAY, SINK, STAGE
 from webhook_sync.sinks.sheets_client import Json, SheetsClient, SheetsFailure
 from webhook_sync.sinks.summary import (
     SummaryKey,
@@ -177,7 +177,7 @@ class SheetVerify:
         """Each payment against its Payments row; the payments compared and the findings."""
         found: dict[str, list[tuple[int, list[Json]]]] = {}
         for at, cells in tab:
-            key = _text(cells[self._key]) if self._key < len(cells) else None
+            key = _text(_cell(cells, self._key))
             if key:
                 found.setdefault(key, []).append((at, cells))
         findings: list[Finding] = []
@@ -201,7 +201,7 @@ class SheetVerify:
             differs = [
                 column.header
                 for i, column in enumerate(self._columns)
-                if _written(cells[i] if i < len(cells) else {}) != _written(expected[i])
+                if _written(_cell(cells, i)) != _written(expected[i])
             ]
             if differs:
                 findings.append(
@@ -222,7 +222,7 @@ class SheetVerify:
             for key in skipped
             if ledger[key]["source_created_at"]
         }
-        on_day: dict[Any, str] = {}
+        on_day: dict[date, str] = {}
         for key in sorted(ledger):
             created = ledger[key]["source_created_at"]
             if created:
@@ -242,8 +242,7 @@ class SheetVerify:
                 continue  # an unknown currency: held back with its payments
             cells = found.get(summary_key, [])
             same = all(
-                _written(cells[i] if i < len(cells) else {}) == _written(cell)
-                for i, cell in enumerate(expected)
+                _written(_cell(cells, i)) == _written(cell) for i, cell in enumerate(expected)
             )
             if not same:
                 findings.append(
@@ -291,10 +290,11 @@ class SheetVerify:
     ) -> tuple[int, int]:
         """The run, its findings and their repair jobs, in one transaction; the run's id and
         how many findings were repaired."""
-        source = "razorpay"
+        source = RAZORPAY
         account = self._config.razorpay.account
         now = utc_now()
         line = status_line(started, self._zone, checked, len(findings))
+        repaired = sum(1 for f in findings if f.repair is not None)
         async with self._writer.transaction() as tx:
             [run] = await tx.execute(
                 sa.insert(verify_runs)
@@ -306,31 +306,28 @@ class SheetVerify:
                     local_date=started.astimezone(self._zone).date().isoformat(),
                     payments_checked=checked,
                     findings_count=len(findings),
-                    repaired_count=sum(1 for f in findings if f.repair is not None),
+                    repaired_count=repaired,
                     ignored_events=0,
                     outcome="differences" if findings else "clean",
                     status_line=line,
                 )
                 .returning(verify_runs.c.id)
             )
-            jobs_by_payment: dict[str, int] = {}
             for finding in findings:
                 job_id = None
                 if finding.repair is not None:
-                    job_id = jobs_by_payment.get(finding.repair)
-                    if job_id is None:
-                        job_id = await enqueue(
-                            tx,
-                            stage=STAGE,
-                            sink=SINK,
-                            source=source,
-                            account=account,
-                            payment_key=finding.repair,
-                            event_id=None,
-                            retry_profile=self._config.service.retry_profile,
-                            now=now,
-                        )
-                        jobs_by_payment[finding.repair] = job_id
+                    # Coalesced: two findings of one payment share its one live job.
+                    job_id = await enqueue(
+                        tx,
+                        stage=STAGE,
+                        sink=SINK,
+                        source=source,
+                        account=account,
+                        payment_key=finding.repair,
+                        event_id=None,
+                        retry_profile=self._config.service.retry_profile,
+                        now=now,
+                    )
                 await tx.execute(
                     sa.insert(verify_findings).values(
                         run_id=run["id"],
@@ -342,7 +339,7 @@ class SheetVerify:
                         repair_job_id=job_id,
                     )
                 )
-        return run["id"], sum(1 for f in findings if f.repair is not None)
+        return run["id"], repaired
 
 
 def status_line(started: datetime, zone: ZoneInfo, checked: int, differences: int) -> str:
@@ -401,6 +398,11 @@ def _written(cell: Json) -> Json:
     if number_format := cell.get("userEnteredFormat", {}).get("numberFormat"):
         out["format"] = number_format
     return out
+
+
+def _cell(cells: Sequence[Json], i: int) -> Json:
+    """A row's cell `i`; {} for one left out of the read as a trailing empty cell."""
+    return cells[i] if i < len(cells) else {}
 
 
 def _text(cell: Json) -> str | None:
