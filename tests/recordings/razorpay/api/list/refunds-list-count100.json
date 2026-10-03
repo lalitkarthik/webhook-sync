@@ -1,0 +1,50 @@
+{
+  "recorded_at": "2026-10-03T07:52:50+00:00",
+  "request": "GET /v1/refunds?count=100",
+  "http": 200,
+  "elapsed_ms": 1292,
+  "headers": {
+    "date": "Sat, 03 Oct 2026 07:52:50 GMT",
+    "content-type": "application/json; charset=utf-8"
+  },
+  "body": {
+    "count": 2,
+    "entity": "collection",
+    "items": [
+      {
+        "acquirer_data": {
+          "arn": "<redacted>"
+        },
+        "amount": 10000,
+        "batch_id": null,
+        "created_at": 1790970053,
+        "currency": "INR",
+        "entity": "refund",
+        "id": "rfnd_Tj9tMhKlOulF3Q",
+        "notes": [],
+        "payment_id": "pay_Tj9gmEfed6kRqO",
+        "receipt": null,
+        "speed_processed": "normal",
+        "speed_requested": "optimum",
+        "status": "processed"
+      },
+      {
+        "acquirer_data": {
+          "arn": "<redacted>"
+        },
+        "amount": 10000,
+        "batch_id": null,
+        "created_at": 1790970043,
+        "currency": "INR",
+        "entity": "refund",
+        "id": "rfnd_Tj9tB2hm5WLvww",
+        "notes": [],
+        "payment_id": "pay_Tj9gmEfed6kRqO",
+        "receipt": null,
+        "speed_processed": "normal",
+        "speed_requested": "normal",
+        "status": "processed"
+      }
+    ]
+  }
+}

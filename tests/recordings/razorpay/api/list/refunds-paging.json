@@ -1,0 +1,96 @@
+[
+  {
+    "recorded_at": "2026-10-03T07:54:35+00:00",
+    "request": "GET /v1/refunds?count=1&skip=0",
+    "http": 200,
+    "elapsed_ms": 894,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:54:35 GMT",
+      "content-type": "application/json; charset=utf-8"
+    },
+    "body_summary": {
+      "entity": "collection",
+      "count": 1,
+      "top_level_keys": [
+        "count",
+        "entity",
+        "items"
+      ],
+      "items": [
+        {
+          "id": "rfnd_Tj9tMhKlOulF3Q",
+          "created_at": 1790970053,
+          "status": "processed",
+          "payment_id": "pay_Tj9gmEfed6kRqO"
+        }
+      ]
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:54:35+00:00",
+    "request": "GET /v1/refunds?count=1&skip=1",
+    "http": 200,
+    "elapsed_ms": 796,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:54:35 GMT",
+      "content-type": "application/json; charset=utf-8"
+    },
+    "body_summary": {
+      "entity": "collection",
+      "count": 1,
+      "top_level_keys": [
+        "count",
+        "entity",
+        "items"
+      ],
+      "items": [
+        {
+          "id": "rfnd_Tj9tB2hm5WLvww",
+          "created_at": 1790970043,
+          "status": "processed",
+          "payment_id": "pay_Tj9gmEfed6kRqO"
+        }
+      ]
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:54:37+00:00",
+    "request": "GET /v1/refunds?count=1&skip=2",
+    "http": 200,
+    "elapsed_ms": 1340,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:54:37 GMT",
+      "content-type": "application/json; charset=utf-8"
+    },
+    "body_summary": {
+      "entity": "collection",
+      "count": 0,
+      "top_level_keys": [
+        "count",
+        "entity",
+        "items"
+      ],
+      "items": []
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:54:38+00:00",
+    "request": "GET /v1/refunds?count=100&skip=1000000",
+    "http": 200,
+    "elapsed_ms": 772,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:54:37 GMT",
+      "content-type": "application/json; charset=utf-8"
+    },
+    "body_summary": {
+      "entity": "collection",
+      "count": 0,
+      "top_level_keys": [
+        "count",
+        "entity",
+        "items"
+      ],
+      "items": []
+    }
+  }
+]

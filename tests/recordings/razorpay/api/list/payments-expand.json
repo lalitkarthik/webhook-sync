@@ -1,0 +1,977 @@
+[
+  {
+    "recorded_at": "2026-10-03T07:53:48+00:00",
+    "request": "GET /v1/payments?count=100&expand[]=refunds",
+    "http": 200,
+    "elapsed_ms": 1603,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:53:48 GMT",
+      "content-type": "application/json",
+      "uber-trace-id": "4fe8342caecbbfaa79aca340bc1836fe:3c81941d6c6c2122:0000000000000000:1"
+    },
+    "body_summary": {
+      "entity": "collection",
+      "count": 7,
+      "top_level_keys": [
+        "count",
+        "entity",
+        "items"
+      ],
+      "items": [
+        {
+          "id": "pay_Tj9sm13R8h2378",
+          "created_at": 1790970020,
+          "status": "failed",
+          "refunds": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          }
+        },
+        {
+          "id": "pay_Tj9rKBOXWcsMeE",
+          "created_at": 1790969938,
+          "status": "captured",
+          "refunds": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          }
+        },
+        {
+          "id": "pay_Tj9gmEfed6kRqO",
+          "created_at": 1790969339,
+          "status": "captured",
+          "refunds": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          }
+        },
+        {
+          "id": "pay_Tj66x2JuEXjIdB",
+          "created_at": 1790956739,
+          "status": "captured",
+          "refunds": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          }
+        },
+        {
+          "id": "pay_Tj64grZUMO3PEj",
+          "created_at": 1790956611,
+          "status": "captured",
+          "refunds": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          }
+        },
+        {
+          "id": "pay_Tj64GJlPGe5X07",
+          "created_at": 1790956586,
+          "status": "created",
+          "refunds": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          }
+        },
+        {
+          "id": "pay_Tj63Ohj3DwqGru",
+          "created_at": 1790956537,
+          "status": "created",
+          "refunds": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          }
+        }
+      ]
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:53:50+00:00",
+    "request": "GET /v1/payments?count=100&expand[]=card",
+    "http": 200,
+    "elapsed_ms": 1577,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:53:50 GMT",
+      "content-type": "application/json",
+      "uber-trace-id": "a2804b6f11266ee4bd821b62582ab648:9ad0276d64d909af:0000000000000000:1"
+    },
+    "body_summary": {
+      "entity": "collection",
+      "count": 7,
+      "top_level_keys": [
+        "count",
+        "entity",
+        "items"
+      ],
+      "items": [
+        {
+          "id": "pay_Tj9sm13R8h2378",
+          "created_at": 1790970020,
+          "status": "failed",
+          "card": null
+        },
+        {
+          "id": "pay_Tj9rKBOXWcsMeE",
+          "created_at": 1790969938,
+          "status": "captured",
+          "card": null
+        },
+        {
+          "id": "pay_Tj9gmEfed6kRqO",
+          "created_at": 1790969339,
+          "status": "captured",
+          "card": null
+        },
+        {
+          "id": "pay_Tj66x2JuEXjIdB",
+          "created_at": 1790956739,
+          "status": "captured",
+          "card": null
+        },
+        {
+          "id": "pay_Tj64grZUMO3PEj",
+          "created_at": 1790956611,
+          "status": "captured",
+          "card": null
+        },
+        {
+          "id": "pay_Tj64GJlPGe5X07",
+          "created_at": 1790956586,
+          "status": "created",
+          "card": null
+        },
+        {
+          "id": "pay_Tj63Ohj3DwqGru",
+          "created_at": 1790956537,
+          "status": "created",
+          "card": null
+        }
+      ]
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:53:51+00:00",
+    "request": "GET /v1/payments?count=100&expand[]=transaction",
+    "http": 200,
+    "elapsed_ms": 1498,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:53:51 GMT",
+      "content-type": "application/json",
+      "uber-trace-id": "77b008cf04c430680a27111d911382fa:3c8906fa8a732c0f:0000000000000000:1"
+    },
+    "body_summary": {
+      "entity": "collection",
+      "count": 7,
+      "top_level_keys": [
+        "count",
+        "entity",
+        "items"
+      ],
+      "items": [
+        {
+          "id": "pay_Tj9sm13R8h2378",
+          "created_at": 1790970020,
+          "status": "failed"
+        },
+        {
+          "id": "pay_Tj9rKBOXWcsMeE",
+          "created_at": 1790969938,
+          "status": "captured"
+        },
+        {
+          "id": "pay_Tj9gmEfed6kRqO",
+          "created_at": 1790969339,
+          "status": "captured"
+        },
+        {
+          "id": "pay_Tj66x2JuEXjIdB",
+          "created_at": 1790956739,
+          "status": "captured"
+        },
+        {
+          "id": "pay_Tj64grZUMO3PEj",
+          "created_at": 1790956611,
+          "status": "captured"
+        },
+        {
+          "id": "pay_Tj64GJlPGe5X07",
+          "created_at": 1790956586,
+          "status": "created"
+        },
+        {
+          "id": "pay_Tj63Ohj3DwqGru",
+          "created_at": 1790956537,
+          "status": "created"
+        }
+      ]
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:53:53+00:00",
+    "request": "GET /v1/payments?count=100&expand[]=refunds&expand[]=card",
+    "http": 200,
+    "elapsed_ms": 1690,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:53:53 GMT",
+      "content-type": "application/json",
+      "uber-trace-id": "94830a7a1cd0aaa6b5e08192983aaa40:c16eb00b709696fd:0000000000000000:1"
+    },
+    "body_summary": {
+      "entity": "collection",
+      "count": 7,
+      "top_level_keys": [
+        "count",
+        "entity",
+        "items"
+      ],
+      "items": [
+        {
+          "id": "pay_Tj9sm13R8h2378",
+          "created_at": 1790970020,
+          "status": "failed",
+          "refunds": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          },
+          "card": null
+        },
+        {
+          "id": "pay_Tj9rKBOXWcsMeE",
+          "created_at": 1790969938,
+          "status": "captured",
+          "refunds": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          },
+          "card": null
+        },
+        {
+          "id": "pay_Tj9gmEfed6kRqO",
+          "created_at": 1790969339,
+          "status": "captured",
+          "refunds": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          },
+          "card": null
+        },
+        {
+          "id": "pay_Tj66x2JuEXjIdB",
+          "created_at": 1790956739,
+          "status": "captured",
+          "refunds": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          },
+          "card": null
+        },
+        {
+          "id": "pay_Tj64grZUMO3PEj",
+          "created_at": 1790956611,
+          "status": "captured",
+          "refunds": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          },
+          "card": null
+        },
+        {
+          "id": "pay_Tj64GJlPGe5X07",
+          "created_at": 1790956586,
+          "status": "created",
+          "refunds": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          },
+          "card": null
+        },
+        {
+          "id": "pay_Tj63Ohj3DwqGru",
+          "created_at": 1790956537,
+          "status": "created",
+          "refunds": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          },
+          "card": null
+        }
+      ]
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:53:55+00:00",
+    "request": "GET /v1/payments?count=100&expand[]=emi",
+    "http": 200,
+    "elapsed_ms": 1506,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:53:54 GMT",
+      "content-type": "application/json",
+      "uber-trace-id": "332928bdb7fdcce7c37194551a18a093:78c9a51ff8f4932e:0000000000000000:1"
+    },
+    "body_summary": {
+      "entity": "collection",
+      "count": 7,
+      "top_level_keys": [
+        "count",
+        "entity",
+        "items"
+      ],
+      "items": [
+        {
+          "id": "pay_Tj9sm13R8h2378",
+          "created_at": 1790970020,
+          "status": "failed",
+          "emi": null,
+          "emi_plan": null
+        },
+        {
+          "id": "pay_Tj9rKBOXWcsMeE",
+          "created_at": 1790969938,
+          "status": "captured",
+          "emi": null,
+          "emi_plan": null
+        },
+        {
+          "id": "pay_Tj9gmEfed6kRqO",
+          "created_at": 1790969339,
+          "status": "captured",
+          "emi": null,
+          "emi_plan": null
+        },
+        {
+          "id": "pay_Tj66x2JuEXjIdB",
+          "created_at": 1790956739,
+          "status": "captured",
+          "emi": null,
+          "emi_plan": null
+        },
+        {
+          "id": "pay_Tj64grZUMO3PEj",
+          "created_at": 1790956611,
+          "status": "captured",
+          "emi": null,
+          "emi_plan": null
+        },
+        {
+          "id": "pay_Tj64GJlPGe5X07",
+          "created_at": 1790956586,
+          "status": "created",
+          "emi": null,
+          "emi_plan": null
+        },
+        {
+          "id": "pay_Tj63Ohj3DwqGru",
+          "created_at": 1790956537,
+          "status": "created",
+          "emi": null,
+          "emi_plan": null
+        }
+      ]
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:53:56+00:00",
+    "request": "GET /v1/payments?count=100&expand[]=offers",
+    "http": 200,
+    "elapsed_ms": 1554,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:53:56 GMT",
+      "content-type": "application/json",
+      "uber-trace-id": "26a79d1a03ab20e9e380e7964859a6cb:e05ca6f6cefc5474:0000000000000000:1"
+    },
+    "body_summary": {
+      "entity": "collection",
+      "count": 7,
+      "top_level_keys": [
+        "count",
+        "entity",
+        "items"
+      ],
+      "items": [
+        {
+          "id": "pay_Tj9sm13R8h2378",
+          "created_at": 1790970020,
+          "status": "failed",
+          "offers": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          }
+        },
+        {
+          "id": "pay_Tj9rKBOXWcsMeE",
+          "created_at": 1790969938,
+          "status": "captured",
+          "offers": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          }
+        },
+        {
+          "id": "pay_Tj9gmEfed6kRqO",
+          "created_at": 1790969339,
+          "status": "captured",
+          "offers": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          }
+        },
+        {
+          "id": "pay_Tj66x2JuEXjIdB",
+          "created_at": 1790956739,
+          "status": "captured",
+          "offers": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          }
+        },
+        {
+          "id": "pay_Tj64grZUMO3PEj",
+          "created_at": 1790956611,
+          "status": "captured",
+          "offers": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          }
+        },
+        {
+          "id": "pay_Tj64GJlPGe5X07",
+          "created_at": 1790956586,
+          "status": "created",
+          "offers": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          }
+        },
+        {
+          "id": "pay_Tj63Ohj3DwqGru",
+          "created_at": 1790956537,
+          "status": "created",
+          "offers": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          }
+        }
+      ]
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:53:58+00:00",
+    "request": "GET /v1/payments?count=100&expand[]=token",
+    "http": 200,
+    "elapsed_ms": 1812,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:53:58 GMT",
+      "content-type": "application/json",
+      "uber-trace-id": "846104f5ad4761cf2dd02d88331293cf:996364a380fe39da:0000000000000000:1"
+    },
+    "body_summary": {
+      "entity": "collection",
+      "count": 7,
+      "top_level_keys": [
+        "count",
+        "entity",
+        "items"
+      ],
+      "items": [
+        {
+          "id": "pay_Tj9sm13R8h2378",
+          "created_at": 1790970020,
+          "status": "failed",
+          "token": null
+        },
+        {
+          "id": "pay_Tj9rKBOXWcsMeE",
+          "created_at": 1790969938,
+          "status": "captured",
+          "token": null
+        },
+        {
+          "id": "pay_Tj9gmEfed6kRqO",
+          "created_at": 1790969339,
+          "status": "captured",
+          "token": null
+        },
+        {
+          "id": "pay_Tj66x2JuEXjIdB",
+          "created_at": 1790956739,
+          "status": "captured",
+          "token": null
+        },
+        {
+          "id": "pay_Tj64grZUMO3PEj",
+          "created_at": 1790956611,
+          "status": "captured",
+          "token": null
+        },
+        {
+          "id": "pay_Tj64GJlPGe5X07",
+          "created_at": 1790956586,
+          "status": "created",
+          "token": null
+        },
+        {
+          "id": "pay_Tj63Ohj3DwqGru",
+          "created_at": 1790956537,
+          "status": "created",
+          "token": null
+        }
+      ]
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:54:00+00:00",
+    "request": "GET /v1/payments?count=100&expand[]=transaction.settlement",
+    "http": 200,
+    "elapsed_ms": 2045,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:54:00 GMT",
+      "content-type": "application/json",
+      "uber-trace-id": "8511af4cb016c3fa3364c43a751fd760:4329cee98cdf5f20:0000000000000000:1"
+    },
+    "body_summary": {
+      "entity": "collection",
+      "count": 7,
+      "top_level_keys": [
+        "count",
+        "entity",
+        "items"
+      ],
+      "items": [
+        {
+          "id": "pay_Tj9sm13R8h2378",
+          "created_at": 1790970020,
+          "status": "failed"
+        },
+        {
+          "id": "pay_Tj9rKBOXWcsMeE",
+          "created_at": 1790969938,
+          "status": "captured"
+        },
+        {
+          "id": "pay_Tj9gmEfed6kRqO",
+          "created_at": 1790969339,
+          "status": "captured"
+        },
+        {
+          "id": "pay_Tj66x2JuEXjIdB",
+          "created_at": 1790956739,
+          "status": "captured"
+        },
+        {
+          "id": "pay_Tj64grZUMO3PEj",
+          "created_at": 1790956611,
+          "status": "captured"
+        },
+        {
+          "id": "pay_Tj64GJlPGe5X07",
+          "created_at": 1790956586,
+          "status": "created"
+        },
+        {
+          "id": "pay_Tj63Ohj3DwqGru",
+          "created_at": 1790956537,
+          "status": "created"
+        }
+      ]
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:54:01+00:00",
+    "request": "GET /v1/payments?count=100&expand[]=bogus",
+    "http": 400,
+    "elapsed_ms": 1073,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:54:01 GMT",
+      "content-type": "application/json"
+    },
+    "body": {
+      "error": {
+        "code": "BAD_REQUEST_ERROR",
+        "description": "Value of each expand must be one of following types: card, emi, transaction, transaction.settlement, refunds, offers, token, settlement",
+        "source": "internal",
+        "step": "payment_initiation",
+        "reason": "input_validation_failed",
+        "metadata": {},
+        "field": "expand.0"
+      }
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:54:02+00:00",
+    "request": "GET /v1/payments?count=100&expand=refunds",
+    "http": 500,
+    "elapsed_ms": 1102,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:54:02 GMT",
+      "content-type": "application/json"
+    },
+    "body": {
+      "error": {
+        "code": "SERVER_ERROR",
+        "description": "We are facing some trouble completing your request at the moment. Please try again shortly.",
+        "source": "NA",
+        "step": "NA",
+        "reason": "NA",
+        "metadata": {}
+      }
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:54:20+00:00",
+    "request": "GET /v1/payments?from=1790969339&to=1790969339&expand[]=refunds",
+    "http": 200,
+    "elapsed_ms": 1437,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:54:20 GMT",
+      "content-type": "application/json",
+      "uber-trace-id": "2ba54f71e034a3a6f26af965c753f507:aab4beb96f9c7d48:0000000000000000:1"
+    },
+    "body_summary": {
+      "entity": "collection",
+      "count": 1,
+      "top_level_keys": [
+        "count",
+        "entity",
+        "items"
+      ],
+      "items": [
+        {
+          "id": "pay_Tj9gmEfed6kRqO",
+          "created_at": 1790969339,
+          "status": "captured",
+          "refunds": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          }
+        }
+      ]
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:54:21+00:00",
+    "request": "GET /v1/payments?count=1&skip=2&expand[]=refunds&expand[]=transaction",
+    "http": 200,
+    "elapsed_ms": 1268,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:54:21 GMT",
+      "content-type": "application/json",
+      "uber-trace-id": "7b67137e8814f034709524007077da66:9649a1e7b86bb5f4:0000000000000000:1"
+    },
+    "body_summary": {
+      "entity": "collection",
+      "count": 1,
+      "top_level_keys": [
+        "count",
+        "entity",
+        "items"
+      ],
+      "items": [
+        {
+          "id": "pay_Tj9gmEfed6kRqO",
+          "created_at": 1790969339,
+          "status": "captured",
+          "refunds": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          }
+        }
+      ]
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:54:23+00:00",
+    "request": "GET /v1/payments?status=captured&expand[]=refunds",
+    "http": 200,
+    "elapsed_ms": 1849,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:54:23 GMT",
+      "content-type": "application/json",
+      "uber-trace-id": "b46c3c1d89ae4cfd9f43781060c2e1c2:d81e4bbcd471d671:0000000000000000:1"
+    },
+    "body_summary": {
+      "entity": "collection",
+      "count": 4,
+      "top_level_keys": [
+        "count",
+        "entity",
+        "items"
+      ],
+      "items": [
+        {
+          "id": "pay_Tj9rKBOXWcsMeE",
+          "created_at": 1790969938,
+          "status": "captured",
+          "refunds": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          }
+        },
+        {
+          "id": "pay_Tj9gmEfed6kRqO",
+          "created_at": 1790969339,
+          "status": "captured",
+          "refunds": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          }
+        },
+        {
+          "id": "pay_Tj66x2JuEXjIdB",
+          "created_at": 1790956739,
+          "status": "captured",
+          "refunds": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          }
+        },
+        {
+          "id": "pay_Tj64grZUMO3PEj",
+          "created_at": 1790956611,
+          "status": "captured",
+          "refunds": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          }
+        }
+      ]
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:54:25+00:00",
+    "request": "GET /v1/payments?count=100&expand[]=settlement",
+    "http": 200,
+    "elapsed_ms": 1814,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:54:25 GMT",
+      "content-type": "application/json",
+      "uber-trace-id": "0305f5b14f9427b201d93f6c548d2018:b7163f4a3347b494:0000000000000000:1"
+    },
+    "body_summary": {
+      "entity": "collection",
+      "count": 7,
+      "top_level_keys": [
+        "count",
+        "entity",
+        "items"
+      ],
+      "items": [
+        {
+          "id": "pay_Tj9sm13R8h2378",
+          "created_at": 1790970020,
+          "status": "failed"
+        },
+        {
+          "id": "pay_Tj9rKBOXWcsMeE",
+          "created_at": 1790969938,
+          "status": "captured"
+        },
+        {
+          "id": "pay_Tj9gmEfed6kRqO",
+          "created_at": 1790969339,
+          "status": "captured"
+        },
+        {
+          "id": "pay_Tj66x2JuEXjIdB",
+          "created_at": 1790956739,
+          "status": "captured"
+        },
+        {
+          "id": "pay_Tj64grZUMO3PEj",
+          "created_at": 1790956611,
+          "status": "captured"
+        },
+        {
+          "id": "pay_Tj64GJlPGe5X07",
+          "created_at": 1790956586,
+          "status": "created"
+        },
+        {
+          "id": "pay_Tj63Ohj3DwqGru",
+          "created_at": 1790956537,
+          "status": "created"
+        }
+      ]
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:54:27+00:00",
+    "request": "GET /v1/payments?count=100&expand[]=refunds&expand[]=card&expand[]=emi&expand[]=offers&expand[]=token&expand[]=transaction",
+    "http": 200,
+    "elapsed_ms": 1596,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:54:27 GMT",
+      "content-type": "application/json",
+      "uber-trace-id": "d94bc8c9a2d95c6e3d788b964099dcc9:186e792e568a197e:0000000000000000:1"
+    },
+    "body_summary": {
+      "entity": "collection",
+      "count": 7,
+      "top_level_keys": [
+        "count",
+        "entity",
+        "items"
+      ],
+      "items": [
+        {
+          "id": "pay_Tj9sm13R8h2378",
+          "created_at": 1790970020,
+          "status": "failed",
+          "refunds": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          },
+          "card": null,
+          "emi": null,
+          "emi_plan": null,
+          "offers": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          },
+          "token": null
+        },
+        {
+          "id": "pay_Tj9rKBOXWcsMeE",
+          "created_at": 1790969938,
+          "status": "captured",
+          "refunds": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          },
+          "card": null,
+          "emi": null,
+          "emi_plan": null,
+          "offers": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          },
+          "token": null
+        },
+        {
+          "id": "pay_Tj9gmEfed6kRqO",
+          "created_at": 1790969339,
+          "status": "captured",
+          "refunds": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          },
+          "card": null,
+          "emi": null,
+          "emi_plan": null,
+          "offers": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          },
+          "token": null
+        },
+        {
+          "id": "pay_Tj66x2JuEXjIdB",
+          "created_at": 1790956739,
+          "status": "captured",
+          "refunds": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          },
+          "card": null,
+          "emi": null,
+          "emi_plan": null,
+          "offers": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          },
+          "token": null
+        },
+        {
+          "id": "pay_Tj64grZUMO3PEj",
+          "created_at": 1790956611,
+          "status": "captured",
+          "refunds": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          },
+          "card": null,
+          "emi": null,
+          "emi_plan": null,
+          "offers": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          },
+          "token": null
+        },
+        {
+          "id": "pay_Tj64GJlPGe5X07",
+          "created_at": 1790956586,
+          "status": "created",
+          "refunds": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          },
+          "card": null,
+          "emi": null,
+          "emi_plan": null,
+          "offers": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          },
+          "token": null
+        },
+        {
+          "id": "pay_Tj63Ohj3DwqGru",
+          "created_at": 1790956537,
+          "status": "created",
+          "refunds": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          },
+          "card": null,
+          "emi": null,
+          "emi_plan": null,
+          "offers": {
+            "entity": "collection",
+            "count": 0,
+            "items": []
+          },
+          "token": null
+        }
+      ]
+    }
+  }
+]

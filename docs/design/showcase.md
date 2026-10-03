@@ -17,7 +17,7 @@ Three audiences, one core ([Q66](grilling-log.md)):
 
 About 20 seconds, from the 10-12 h prototype, against Razorpay test mode on the owner's laptop through a tunnel ([Q93](grilling-log.md), [Q106](grilling-log.md), [Q107](grilling-log.md)). It keeps 8 October only if the recording spike is done by 4 October ([Q114](grilling-log.md)).
 1. **Duplicate storm.** One test payment. Razorpay has no resend button, so the receiver runs with `--demo-fail-first 4`: it stores the event, then answers 500 to the first four attempts, and Razorpay's own retries make the five deliveries. The sheet keeps one row; the duplicates counter reads 4. Caption: "Our server answered 500 to the first four attempts on purpose; Razorpay retried the same event." If the spike shows retries take longer than about 30 minutes, the scene replays one recorded delivery instead, captioned "one real delivery, recorded, then re-sent four more times by us; Razorpay signs only the body, so each copy verifies". The caption is on screen, not only in the README.
-2. **Outage and catch-up.** Server stopped; three payments made; server started. The startup sweep brings the rows back with Via = `sweep`; Razorpay's own retries of the missed deliveries arrive later and are counted as duplicates. Still one row each.
+2. **Outage and catch-up.** Server stopped; three payments made; server started. The startup sweep brings the rows back with Via = `sweep`; Razorpay's own retries of the missed deliveries arrive later and change nothing: each is stored as an event, its fetch finds the row already current, and no sheet write follows. Still one row each ([Q145](grilling-log.md)).
 
 ## The pitch-ready video
 

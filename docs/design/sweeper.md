@@ -77,7 +77,7 @@ Every alert above comes from inside the running process, so a dead process, a fu
 | Action | Command | What it does |
 |---|---|---|
 | Replay one event | `wsync replay <event_id>` | Enqueues a ledger job for its payment; the fetch writes the current state. Works for any age, since only the payment id is needed. |
-| Backfill a date range | `wsync backfill --from 2026-09-01 --to 2026-09-10` | Lists payments (Stripe: PaymentIntents) created in that range with their state, as ledger jobs, without moving the checkpoint. |
+| Backfill a date range | `wsync backfill --from 2026-09-01 --to 2026-09-10` | Lists payments (Stripe: PaymentIntents, with their state) created in that range as ledger jobs, without moving the checkpoint. Razorpay's jobs fetch, because a listed payment's refunds come back empty ([Q147](grilling-log.md), [Q156](grilling-log.md)). |
 | Sweep now | `wsync sweep` | One ordinary sweep, immediately. |
 
 With a server running, these commands ask it over its admin port to do the work ([ADR 0007](decisions/0007-one-server-process-per-database.md)). Each is logged as an admin action.

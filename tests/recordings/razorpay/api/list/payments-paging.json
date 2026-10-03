@@ -1,0 +1,153 @@
+[
+  {
+    "recorded_at": "2026-10-03T07:53:04+00:00",
+    "request": "GET /v1/payments?count=1&skip=0",
+    "http": 200,
+    "elapsed_ms": 1559,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:53:04 GMT",
+      "content-type": "application/json",
+      "uber-trace-id": "6e511f9736900b05fbb9f9dfa9d82872:18b7f4f81de757f6:0000000000000000:1"
+    },
+    "body_summary": {
+      "entity": "collection",
+      "count": 1,
+      "top_level_keys": [
+        "count",
+        "entity",
+        "items"
+      ],
+      "items": [
+        {
+          "id": "pay_Tj9sm13R8h2378",
+          "created_at": 1790970020,
+          "status": "failed"
+        }
+      ]
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:53:05+00:00",
+    "request": "GET /v1/payments?count=1&skip=6",
+    "http": 200,
+    "elapsed_ms": 1234,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:53:05 GMT",
+      "content-type": "application/json",
+      "uber-trace-id": "57de75eb3bf14690706bfea3231e1d6f:d9dde951f94e34c5:0000000000000000:1"
+    },
+    "body_summary": {
+      "entity": "collection",
+      "count": 1,
+      "top_level_keys": [
+        "count",
+        "entity",
+        "items"
+      ],
+      "items": [
+        {
+          "id": "pay_Tj63Ohj3DwqGru",
+          "created_at": 1790956537,
+          "status": "created"
+        }
+      ]
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:53:06+00:00",
+    "request": "GET /v1/payments?count=1&skip=7",
+    "http": 200,
+    "elapsed_ms": 1164,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:53:06 GMT",
+      "content-type": "application/json"
+    },
+    "body_summary": {
+      "entity": "collection",
+      "count": 0,
+      "top_level_keys": [
+        "count",
+        "entity",
+        "items"
+      ],
+      "items": []
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:53:08+00:00",
+    "request": "GET /v1/payments?count=100&skip=7",
+    "http": 200,
+    "elapsed_ms": 1375,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:53:08 GMT",
+      "content-type": "application/json"
+    },
+    "body_summary": {
+      "entity": "collection",
+      "count": 0,
+      "top_level_keys": [
+        "count",
+        "entity",
+        "items"
+      ],
+      "items": []
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:53:09+00:00",
+    "request": "GET /v1/payments?count=100&skip=1000000",
+    "http": 200,
+    "elapsed_ms": 1153,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:53:09 GMT",
+      "content-type": "application/json"
+    },
+    "body_summary": {
+      "entity": "collection",
+      "count": 0,
+      "top_level_keys": [
+        "count",
+        "entity",
+        "items"
+      ],
+      "items": []
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:53:10+00:00",
+    "request": "GET /v1/payments?count=3&skip=2",
+    "http": 200,
+    "elapsed_ms": 1392,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:53:10 GMT",
+      "content-type": "application/json",
+      "uber-trace-id": "708b7d7bf67c7a2c2fc7b3cd6cce7aa7:939c44574d2dfa28:0000000000000000:1"
+    },
+    "body_summary": {
+      "entity": "collection",
+      "count": 3,
+      "top_level_keys": [
+        "count",
+        "entity",
+        "items"
+      ],
+      "items": [
+        {
+          "id": "pay_Tj9gmEfed6kRqO",
+          "created_at": 1790969339,
+          "status": "captured"
+        },
+        {
+          "id": "pay_Tj66x2JuEXjIdB",
+          "created_at": 1790956739,
+          "status": "captured"
+        },
+        {
+          "id": "pay_Tj64grZUMO3PEj",
+          "created_at": 1790956611,
+          "status": "captured"
+        }
+      ]
+    }
+  }
+]

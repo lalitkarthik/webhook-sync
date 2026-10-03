@@ -1,0 +1,128 @@
+{
+  "note": "Full response headers of one GET /v1/payments?count=100 and one GET /v1/refunds?count=100 (set-cookie excluded; none seen); elapsed_ms of 10 sequential payment lists, 5 sequential refund lists, and 20 payment lists over 10 threads, from the cloud session through its proxy. The account holds 7 payments, so 'count=100' returned 7.",
+  "payments_headers": {
+    "date": "Sat, 03 Oct 2026 07:55:35 GMT",
+    "content-type": "application/json",
+    "transfer-encoding": "chunked",
+    "connection": "close",
+    "cache-control": "max-age=0, must-revalidate, no-store, nocache, private",
+    "expires": "Fri, 01 Jan 1990 00:00:00 GMT",
+    "pragma": "no-cache",
+    "strict-transport-security": "max-age=315360000; includeSubDomains",
+    "uber-trace-id": "20d9574d261d9187318e75bdfb3e4877:18965d24bce4cca9:0000000000000000:1",
+    "via": "rws",
+    "x-frame-options": "SAMEORIGIN",
+    "x-pam": "0",
+    "x-xss-protection": "0"
+  },
+  "refunds_headers": {
+    "date": "Sat, 03 Oct 2026 07:55:50 GMT",
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "634",
+    "connection": "close",
+    "strict-transport-security": "max-age=315360000; includeSubDomains",
+    "via": "rws",
+    "x-xss-protection": "0"
+  },
+  "payments_sequential_ms": [
+    1533,
+    1679,
+    1791,
+    1532,
+    1497,
+    1481,
+    1461,
+    1586,
+    1828,
+    1602
+  ],
+  "refunds_sequential_ms": [
+    871,
+    791,
+    788,
+    804,
+    1038
+  ],
+  "payments_parallel_status_ms": [
+    [
+      200,
+      1546
+    ],
+    [
+      200,
+      1681
+    ],
+    [
+      200,
+      1789
+    ],
+    [
+      200,
+      1449
+    ],
+    [
+      200,
+      1668
+    ],
+    [
+      200,
+      1732
+    ],
+    [
+      200,
+      1670
+    ],
+    [
+      200,
+      1661
+    ],
+    [
+      200,
+      1644
+    ],
+    [
+      200,
+      1732
+    ],
+    [
+      200,
+      1439
+    ],
+    [
+      200,
+      1482
+    ],
+    [
+      200,
+      1443
+    ],
+    [
+      200,
+      1488
+    ],
+    [
+      200,
+      1483
+    ],
+    [
+      200,
+      1459
+    ],
+    [
+      200,
+      1703
+    ],
+    [
+      200,
+      1461
+    ],
+    [
+      200,
+      1511
+    ],
+    [
+      200,
+      1535
+    ]
+  ]
+}

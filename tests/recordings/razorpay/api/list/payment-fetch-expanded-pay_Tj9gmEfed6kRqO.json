@@ -1,0 +1,83 @@
+{
+  "recorded_at": "2026-10-03T07:54:04+00:00",
+  "request": "GET /v1/payments/pay_Tj9gmEfed6kRqO?expand[]=refunds&expand[]=card",
+  "http": 200,
+  "elapsed_ms": 1623,
+  "headers": {
+    "date": "Sat, 03 Oct 2026 07:54:04 GMT",
+    "content-type": "application/json",
+    "uber-trace-id": "f8882b5ba2453ddeecc8d1ab05cf93be:d2d1bf599776e257:0000000000000000:1"
+  },
+  "body": {
+    "id": "pay_Tj9gmEfed6kRqO",
+    "entity": "payment",
+    "amount": 50000,
+    "currency": "INR",
+    "status": "captured",
+    "order_id": "order_Tj9f2VW29YPycU",
+    "invoice_id": null,
+    "international": false,
+    "method": "netbanking",
+    "refunds": {
+      "entity": "collection",
+      "count": 2,
+      "items": [
+        {
+          "id": "rfnd_Tj9tMhKlOulF3Q",
+          "entity": "refund",
+          "amount": 10000,
+          "currency": "INR",
+          "payment_id": "pay_Tj9gmEfed6kRqO",
+          "notes": [],
+          "receipt": null,
+          "acquirer_data": {
+            "arn": "<redacted>"
+          },
+          "created_at": 1790970053,
+          "batch_id": null,
+          "status": "processed",
+          "speed_processed": "normal",
+          "speed_requested": "optimum"
+        },
+        {
+          "id": "rfnd_Tj9tB2hm5WLvww",
+          "entity": "refund",
+          "amount": 10000,
+          "currency": "INR",
+          "payment_id": "pay_Tj9gmEfed6kRqO",
+          "notes": [],
+          "receipt": null,
+          "acquirer_data": {
+            "arn": "<redacted>"
+          },
+          "created_at": 1790970043,
+          "batch_id": null,
+          "status": "processed",
+          "speed_processed": "normal",
+          "speed_requested": "normal"
+        }
+      ]
+    },
+    "amount_refunded": 20000,
+    "refund_status": "partial",
+    "captured": true,
+    "description": null,
+    "card_id": null,
+    "card": null,
+    "bank": "ALLA",
+    "wallet": null,
+    "email": "customer@example.com",
+    "notes": [],
+    "fee": 1180,
+    "tax": 180,
+    "error_code": null,
+    "error_description": null,
+    "error_source": null,
+    "error_step": null,
+    "error_reason": null,
+    "acquirer_data": {
+      "bank_transaction_id": "<redacted>"
+    },
+    "created_at": 1790969339
+  }
+}
