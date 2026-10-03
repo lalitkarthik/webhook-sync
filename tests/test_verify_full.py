@@ -37,7 +37,7 @@ from time_machine import TimeMachineFixture
 from webhook_sync.clock import utc_now
 from webhook_sync.config import AlertsConfig, Config, SweeperConfig, VerifyConfig
 from webhook_sync.db.writer import Writer
-from webhook_sync.queue import enqueue
+from webhook_sync.queue import enqueue, record_pause
 from webhook_sync.queue import runner as runner_module
 from webhook_sync.receiver.app import create_app
 from webhook_sync.sinks import sheets as sheets_module
@@ -459,3 +459,39 @@ async def test_a_payment_made_while_the_server_was_down_is_left_to_the_sweep(
         }
     ]
     assert await read_rows("SELECT count(*) AS n FROM jobs WHERE stage = 'ledger'") == [{"n": 0}]
+
+
+async def test_while_razorpay_is_paused_the_night_checks_only_the_sheet(
+    verified_config: Config,
+    data_dir: Path,
+    writer: Writer,
+    outside: Outside,
+    read_rows: ReadRows,
+    clock: TimeMachineFixture,
+) -> None:
+    fake = outside.razorpay
+    fake.payments.update(listed(CAPTURED))
+    await ledgered(verified_config, data_dir, writer, read_rows, CAPTURED)
+    async with writer.transaction() as tx:
+        await record_pause(tx, "source", "razorpay", "Razorpay answered HTTP 401", now=utc_now())
+    calls_before = len(fake.list_calls)
+
+    clock.move_to(LATE, tick=True)
+    async with running(verified_config, data_dir):
+        await wait_for(
+            read_rows,
+            "SELECT count(*) AS n FROM verify_runs WHERE finished_at IS NOT NULL",
+            [{"n": 1}],
+        )
+
+    assert await read_rows(RUNS) == [
+        {
+            "kind": "quick",
+            "local_date": "2026-10-12",
+            "payments_checked": 1,
+            "findings_count": 0,
+            "repaired_count": 0,
+            "status_line": "Sheet checked 12 Oct 03:00 IST: 1 payment, 0 differences",
+        }
+    ]
+    assert len(fake.list_calls) == calls_before
