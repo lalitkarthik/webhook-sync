@@ -35,20 +35,27 @@ def fixture_environment() -> dict[str, str]:
     return environ | fixture_secrets()
 
 
-def write_serve_config(config_dir: Path, port: int, admin_port: int | None = None) -> Path:
+def write_serve_config(
+    config_dir: Path,
+    port: int,
+    admin_port: int | None = None,
+    *,
+    account: str = TEST_ACCOUNT,
+    api_url: str = UNREACHABLE_API,
+) -> Path:
     """A valid test-mode `webhook-sync.toml` in `config_dir`, listening on `port`, its admin
     listener on `admin_port` (a free port if not given).
 
-    Its Razorpay API address is unreachable: the ledger worker's fetches fail to connect and
-    retry, and never reach Razorpay."""
+    Its Razorpay API address is unreachable unless `api_url` names a fake: the ledger worker's
+    fetches fail to connect and retry, and never reach Razorpay."""
     config_dir.mkdir(parents=True, exist_ok=True)
     path = config_dir / "webhook-sync.toml"
     path.write_text(
         f'[service]\npublic_listen = "127.0.0.1:{port}"\ndata_dir = "data"\n'
         f'admin_listen = "127.0.0.1:{admin_port or free_port()}"\n'
         f'timezone = "Asia/Kolkata"\n\n'
-        f'[sources.razorpay]\nmode = "test"\naccount = "{TEST_ACCOUNT}"\n'
-        f'api_url = "{UNREACHABLE_API}"\n\n'
+        f'[sources.razorpay]\nmode = "test"\naccount = "{account}"\n'
+        f'api_url = "{api_url}"\n\n'
         f'[sinks.sheets]\nspreadsheet_id = "{TEST_SPREADSHEET_ID}"\n',
         encoding="utf-8",
     )
