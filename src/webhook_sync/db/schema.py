@@ -171,3 +171,35 @@ checkpoints = sa.Table(
     sa.Column("last_sweep_stored", sa.Integer, nullable=False),
     sa.Column("last_relist_at", sa.Text),
 )
+
+
+verify_runs = sa.Table(
+    "verify_runs",
+    metadata,
+    sa.Column("id", sa.Integer, primary_key=True),
+    sa.Column("kind", sa.Text, nullable=False),
+    sa.Column("started_at", sa.Text, nullable=False),
+    sa.Column("finished_at", sa.Text),
+    sa.Column("window_days", sa.Integer, nullable=False),
+    sa.Column("local_date", sa.Text, nullable=False),
+    sa.Column("payments_checked", sa.Integer, nullable=False),
+    sa.Column("findings_count", sa.Integer, nullable=False),
+    sa.Column("repaired_count", sa.Integer, nullable=False),
+    sa.Column("ignored_events", sa.Integer, nullable=False),
+    sa.Column("outcome", sa.Text),
+    sa.Column("status_line", sa.Text),
+)
+
+
+verify_findings = sa.Table(
+    "verify_findings",
+    metadata,
+    sa.Column("id", sa.Integer, primary_key=True),
+    sa.Column("run_id", sa.Integer, nullable=False),
+    sa.Column("kind", sa.Text, nullable=False),
+    sa.Column("source", sa.Text, nullable=False),
+    sa.Column("account", sa.Text, nullable=False),
+    sa.Column("payment_id", sa.Text),
+    sa.Column("detail", sa.Text),
+    sa.Column("repair_job_id", sa.Integer),
+)
