@@ -4,13 +4,16 @@ A batch stage on the stage runner (A12): every 3 s while mirror jobs wait, or at
 do, it claims up to 200 and makes one flush of them all:
 
 1. the first time, with no tab ids stored, create the three tabs (header, header note, frozen
-   header row and key column), adopting any already named so, and store their ids;
-2. read the Payments tab's grid size and key column by tab id, in one call; any read failure
-   fails every job with its class;
-3. map key → row (the last key row is the last used row; a duplicated key: the first);
-4. load each job's current ledger row, never the event (ADR 0001);
-5. one `batchUpdate`: `updateCells` for rows already there without the key cell, appends with
-   the key after the last used row, `appendDimension` first when the grid is too small;
+   header row and key columns), adopting any already named so, and store their ids and a
+   deployment id;
+2. read the grid sizes and key columns of Payments and Daily summary by tab id, in one call;
+   any read failure fails every job with its class;
+3. map key → row on each (the last key row is the last used row; a duplicated key: the first);
+4. load each job's current ledger row, never the event (ADR 0001), and every succeeded
+   payment of the days they touch;
+5. one `batchUpdate`: `updateCells` for rows already there without the key cells, appends with
+   the key after the last used row, `appendDimension` first when the grid is too small; the
+   same for the touched Daily summary rows, recomputed (A15); Sync status rewritten whole;
 6. complete every job and update `sheet_state` in one transaction.
 
 A payment in an unknown currency is held back: its job alone goes dead, with one
@@ -24,9 +27,10 @@ Nothing here logs the spreadsheet id, an email or the service-account address.
 import logging
 import random
 import time
-from collections.abc import Mapping, Sequence
+import uuid
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import sqlalchemy as sa
@@ -35,16 +39,31 @@ from sqlalchemy.dialects import sqlite
 from webhook_sync.alerts import Alerter
 from webhook_sync.clock import to_db_text, utc_now
 from webhook_sync.config import Config
-from webhook_sync.db.schema import payments, sheet_state
+from webhook_sync.db.schema import jobs, payments, sheet_state, sinks
 from webhook_sync.db.writer import Transaction, Writer
 from webhook_sync.queue import ClaimedJob, Done, Failure, Pauses, StageFailed
 from webhook_sync.queue.runner import BatchStageRunner, BatchWork, Sleep
 from webhook_sync.sinks.encoding import UnknownCurrency, payment_columns
 from webhook_sync.sinks.sheets_client import TAB_MISSING, Json, SheetsClient, SheetsFailure
+from webhook_sync.sinks.summary import (
+    KEY_COLUMNS,
+    SUCCEEDED,
+    SummaryKey,
+    SyncStatus,
+    Totals,
+    day_bounds,
+    day_of,
+    read_key,
+    state_text,
+    summarise,
+    summary_cells,
+    sync_status_rows,
+)
 
 log = logging.getLogger("webhook_sync.sheets")
 
 SINK = "sheets"
+RAZORPAY = "razorpay"
 STAGE = "mirror"
 
 FLUSH_LIMIT = 200
@@ -142,6 +161,7 @@ class Flusher:
         self._client = client
         self._alerter = alerter
         self._spreadsheet_id = config.sheets.spreadsheet_id
+        self._zone = config.service.timezone
         self._columns = payment_columns(config)
         self._key = next(i for i, c in enumerate(self._columns) if c.key == "payment_id")
 
@@ -151,8 +171,9 @@ class Flusher:
 
     async def flush(self, claimed: list[ClaimedJob]) -> Done:
         started = time.perf_counter()
-        tabs = await self._tabs()
-        keys, last_used, row_count = await self._read_keys(tabs.payments)
+        state = await self._state()
+        tabs = state.tabs
+        read = await self._read(tabs)
         rows = await self._ledger_rows(claimed)
         updates: list[Json] = []
         appended: list[list[Json]] = []
@@ -169,22 +190,36 @@ class Flusher:
                 failed[job.id] = Failure(str(unknown), "dead")
                 held.setdefault(unknown.code, []).append(job.payment_key)
                 continue
-            at = keys.get(job.payment_key)
+            at = read.payment_keys.get(job.payment_key)
             if at is None:
                 appended.append(cells)
             else:
                 updates.extend(self._update(tabs.payments, at, cells))
-        requests = [*updates, *self._append(tabs.payments, appended, last_used, row_count)]
-        if requests:
-            written = await self._client.batch_update(requests)
-            if isinstance(written, SheetsFailure):
-                _log_flush(claimed, 0, 0, started, outcome=written.error_class)
-                raise StageFailed(written)
+        summary = await self._summary(tabs.daily_summary, read, rows.values())
         rows_written = len(rows) - len(failed)
-        _log_flush(claimed, rows_written - len(appended), len(appended), started, outcome="ok")
+        now = utc_now()
+        status = await self._status(state, rows_written, failed, now)
+        requests = [
+            *updates,
+            *self._append(tabs.payments, appended, read.payments_last, read.payments_rows),
+            *summary,
+            _update_cells(tabs.sync_status, 1, 0, sync_status_rows(status, self._zone)),
+        ]
+        summary_rows = sum(1 for r in summary if "updateCells" in r)
+        written = await self._client.batch_update(requests)
+        if isinstance(written, SheetsFailure):
+            _log_flush(claimed, 0, 0, 0, started, outcome=written.error_class)
+            raise StageFailed(written)
+        _log_flush(
+            claimed,
+            rows_written - len(appended),
+            len(appended),
+            summary_rows,
+            started,
+            outcome="ok",
+        )
         if held and self._alerter is not None:
             await self._alerter.unknown_currency(held)
-        now = utc_now()
 
         async def writes(tx: Transaction) -> None:
             await tx.execute(
@@ -199,28 +234,106 @@ class Flusher:
 
         return Done(writes=writes, failed=failed)
 
+    # -- Daily summary and Sync status -----------------------------------------------------------
+
+    async def _summary(
+        self, sheet_id: int, read: _Read, flushed: Iterable[Mapping[str, Any]]
+    ) -> list[Json]:
+        """The Daily summary rows of every day the flushed payments touch, recomputed from the
+        ledger (A15): rows already on the tab updated in place around their key, new days
+        appended after the last used row, and a key no longer in the ledger set to zero."""
+        days = sorted(
+            {day_of(r["source_created_at"], self._zone) for r in flushed if r["source_created_at"]}
+        )
+        if not days:
+            return []
+        ranges = [day_bounds(day, self._zone) for day in days]
+        async with self._writer.transaction() as tx:
+            found = await tx.execute(
+                sa.select(payments).where(
+                    payments.c.status.in_(SUCCEEDED),
+                    sa.or_(
+                        *(
+                            sa.and_(
+                                payments.c.source_created_at >= start,
+                                payments.c.source_created_at < end,
+                            )
+                            for start, end in ranges
+                        )
+                    ),
+                )
+            )
+        totals = summarise([dict(r) for r in found], self._zone)
+        touched = set(days)
+        for key in read.summary_keys:
+            if key[0] in touched:
+                totals.setdefault(key, Totals())
+        updates: list[Json] = []
+        appended: list[list[Json]] = []
+        for key in sorted(totals):
+            cells = summary_cells(key, totals[key])
+            if cells is None:
+                continue  # an unknown currency: held back with its payments
+            at = read.summary_keys.get(key)
+            if at is None:
+                if totals[key].payments:
+                    appended.append(cells)
+            else:
+                updates.append(_update_cells(sheet_id, at, KEY_COLUMNS, [cells[KEY_COLUMNS:]]))
+        return [
+            *updates,
+            *self._append(sheet_id, appended, read.summary_last, read.summary_rows),
+        ]
+
+    async def _status(
+        self, state: _State, rows_written: int, failed: Mapping[int, Failure], now: datetime
+    ) -> SyncStatus:
+        """Sync status as this flush leaves things."""
+        async with self._writer.transaction() as tx:
+            waiting = await tx.execute(
+                sa.select(sa.func.count().label("n"))
+                .select_from(jobs)
+                .where(jobs.c.sink == SINK, jobs.c.stage == STAGE, jobs.c.status == "waiting")
+            )
+            dead = await tx.execute(
+                sa.select(sa.func.count().label("n"))
+                .select_from(jobs)
+                .where(jobs.c.status == "dead")
+            )
+            states = await tx.execute(
+                sa.select(sinks.c.name, sinks.c.state, sinks.c.reason).where(
+                    sinks.c.name.in_([SINK, RAZORPAY])
+                )
+            )
+        by_name = {r["name"]: state_text(r["state"], r["reason"]) for r in states}
+        newly_dead = sum(1 for f in failed.values() if f.error_class == "dead")
+        return SyncStatus(
+            last_flush=now,
+            rows_written_last=rows_written,
+            rows_written_total=state.rows_written_total + rows_written,
+            jobs_waiting=waiting[0]["n"],
+            dead_jobs=dead[0]["n"] + newly_dead,
+            sheet_state=by_name.get(SINK, "active"),
+            razorpay_state=by_name.get(RAZORPAY, "active"),
+            deployment_id=state.deployment_id,
+        )
+
     # -- tabs ----------------------------------------------------------------------------------
 
-    async def _tabs(self) -> TabIds:
-        """The three tabs' ids: stored ones, or, on the first run, set up and then stored."""
-        async with self._writer.transaction() as tx:
-            stored = await tx.execute(
-                sa.select(sheet_state).where(sheet_state.c.spreadsheet_id == self._spreadsheet_id)
-            )
-        if stored:
-            ids = [
-                stored[0]["payments_tab_id"],
-                stored[0]["daily_summary_tab_id"],
-                stored[0]["sync_status_tab_id"],
-            ]
-            if None not in ids:
-                return TabIds(*ids)
-        tabs = await self._set_up_tabs()
+    async def _state(self) -> _State:
+        """`sheet_state`: the three tabs' ids (stored ones, or, on the first run, set up and
+        then stored), the deployment id (made once) and the rows written so far."""
+        stored = await self._stored()
+        if stored is not None and stored.tabs is not None and stored.deployment_id:
+            return _State(stored.tabs, stored.deployment_id, stored.rows_written_total)
+        tabs = stored.tabs if stored is not None and stored.tabs else await self._set_up_tabs()
+        deployment_id = stored.deployment_id if stored is not None else None
         insert = sqlite.insert(sheet_state).values(
             spreadsheet_id=self._spreadsheet_id,
             payments_tab_id=tabs.payments,
             daily_summary_tab_id=tabs.daily_summary,
             sync_status_tab_id=tabs.sync_status,
+            deployment_id=deployment_id or uuid.uuid4().hex,
         )
         async with self._writer.transaction() as tx:
             await tx.execute(
@@ -230,10 +343,30 @@ class Flusher:
                         "payments_tab_id": insert.excluded.payments_tab_id,
                         "daily_summary_tab_id": insert.excluded.daily_summary_tab_id,
                         "sync_status_tab_id": insert.excluded.sync_status_tab_id,
+                        "deployment_id": sa.func.coalesce(
+                            sheet_state.c.deployment_id, insert.excluded.deployment_id
+                        ),
                     },
                 )
             )
-        return tabs
+        stored = await self._stored()
+        assert stored is not None
+        return _State(tabs, stored.deployment_id, stored.rows_written_total)
+
+    async def _stored(self) -> _Stored | None:
+        async with self._writer.transaction() as tx:
+            found = await tx.execute(
+                sa.select(sheet_state).where(sheet_state.c.spreadsheet_id == self._spreadsheet_id)
+            )
+        if not found:
+            return None
+        row = found[0]
+        ids = [row["payments_tab_id"], row["daily_summary_tab_id"], row["sync_status_tab_id"]]
+        return _Stored(
+            TabIds(*ids) if None not in ids else None,
+            row["deployment_id"],
+            row["rows_written_total"],
+        )
 
     async def _set_up_tabs(self) -> TabIds:
         """First run (Q140): a tab already named Payments, Daily summary or Sync status is
@@ -266,48 +399,31 @@ class Flusher:
 
     # -- the read -------------------------------------------------------------------------------
 
-    async def _read_keys(self, sheet_id: int) -> tuple[dict[str, int], int, int]:
-        """One read by tab id: the key column and the grid size. Returns key → row index (the
-        first row holding it), the last used row (0, the header, when none) and the row
-        count."""
+    async def _read(self, tabs: TabIds) -> _Read:
+        """One read by tab id: the key columns and grid sizes of Payments and Daily summary.
+        A missing tab fails the flush as "tab missing"."""
         answer = _answered(
             await self._client.get_by_data_filter(
                 [
-                    {
-                        "gridRange": {
-                            "sheetId": sheet_id,
-                            "startColumnIndex": self._key,
-                            "endColumnIndex": self._key + 1,
-                        }
-                    }
+                    _columns(tabs.payments, self._key, self._key + 1),
+                    _columns(tabs.daily_summary, 0, KEY_COLUMNS),
                 ],
                 fields=KEY_COLUMN_FIELDS,
             )
         )
-        sheet = next(
-            (
-                s
-                for s in answer.get("sheets", [])
-                if s.get("properties", {}).get("sheetId", 0) == sheet_id
-            ),
-            None,
-        )
-        if sheet is None:
+        found = {s.get("properties", {}).get("sheetId", 0): s for s in answer.get("sheets", [])}
+        if tabs.payments not in found or tabs.daily_summary not in found:
             raise StageFailed(Failure(TAB_MISSING, "pause", pause_target="sink"))
-        row_count: int = sheet["properties"].get("gridProperties", {}).get("rowCount", 0)
-        keys: dict[str, int] = {}
-        last_used = 0
-        for data in sheet.get("data", []):
-            first = data.get("startRow", 0)
-            for offset, row in enumerate(data.get("rowData", [])):
-                at = first + offset
-                values: list[Json] = row.get("values") or [{}]
-                key: object = values[0].get("effectiveValue", {}).get("stringValue")
-                if at == 0 or not isinstance(key, str) or not key:
-                    continue
-                keys.setdefault(key, at)
-                last_used = max(last_used, at)
-        return keys, last_used, row_count
+
+        def payment_key(values: list[Json]) -> str | None:
+            key: object = (values or [{}])[0].get("effectiveValue", {}).get("stringValue")
+            return key if isinstance(key, str) and key else None
+
+        payment_keys, payments_last, payments_rows = _keys(found[tabs.payments], payment_key)
+        summary_keys, summary_last, summary_rows = _keys(found[tabs.daily_summary], read_key)
+        return _Read(
+            payment_keys, payments_last, payments_rows, summary_keys, summary_last, summary_rows
+        )
 
     # -- the ledger -----------------------------------------------------------------------------
 
@@ -347,6 +463,57 @@ class Flusher:
             )
         requests.append(_update_cells(sheet_id, first, 0, rows))
         return requests
+
+
+@dataclass(frozen=True)
+class _Stored:
+    tabs: TabIds | None
+    deployment_id: str | None
+    rows_written_total: int
+
+
+@dataclass(frozen=True)
+class _State:
+    tabs: TabIds
+    deployment_id: str | None
+    rows_written_total: int
+
+
+@dataclass(frozen=True)
+class _Read:
+    """What the one read found: each tab's key → row index (the first row holding it), its
+    last used row (0, the header, when none) and its row count."""
+
+    payment_keys: dict[str, int]
+    payments_last: int
+    payments_rows: int
+    summary_keys: dict[SummaryKey, int]
+    summary_last: int
+    summary_rows: int
+
+
+def _columns(sheet_id: int, first: int, end: int) -> Json:
+    return {"gridRange": {"sheetId": sheet_id, "startColumnIndex": first, "endColumnIndex": end}}
+
+
+def _keys[K](
+    sheet: Json, key_of: Callable[[list[Json]], K | None]
+) -> tuple[dict[K, int], int, int]:
+    row_count: int = sheet["properties"].get("gridProperties", {}).get("rowCount", 0)
+    keys: dict[K, int] = {}
+    last_used = 0
+    for data in sheet.get("data", []):
+        first = data.get("startRow", 0)
+        for offset, row in enumerate(data.get("rowData", [])):
+            at = first + offset
+            if at == 0:
+                continue
+            key = key_of(row.get("values") or [])
+            if key is None:
+                continue
+            keys.setdefault(key, at)
+            last_used = max(last_used, at)
+    return keys, last_used, row_count
 
 
 def _update_cells(sheet_id: int, row: int, column: int, rows: Sequence[Sequence[Json]]) -> Json:
@@ -404,7 +571,13 @@ def _answered(answer: Json | SheetsFailure) -> Json:
 
 
 def _log_flush(
-    claimed: Sequence[ClaimedJob], updated: int, appended: int, started: float, *, outcome: str
+    claimed: Sequence[ClaimedJob],
+    updated: int,
+    appended: int,
+    summary_rows: int,
+    started: float,
+    *,
+    outcome: str,
 ) -> None:
     log.info(
         "sheet flush",
@@ -412,6 +585,7 @@ def _log_flush(
             "jobs": len(claimed),
             "rows_updated": updated,
             "rows_appended": appended,
+            "summary_rows": summary_rows,
             "duration_ms": round((time.perf_counter() - started) * 1000),
             "outcome": outcome,
         },
