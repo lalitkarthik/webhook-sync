@@ -6,9 +6,11 @@ Seam: the alert sender against a respx-faked webhook URL, the stage runner's pau
 check, and the app's lifespan; time moved with time-machine.
 """
 
+import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator, Iterator
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -29,6 +31,7 @@ from time_machine import TimeMachineFixture
 
 from webhook_sync.alerts import Alerter
 from webhook_sync.clock import to_db_text, utc_now
+from webhook_sync.config import AlertsConfig, Config
 from webhook_sync.db.writer import Writer
 from webhook_sync.queue import (
     ClaimedJob,
@@ -41,6 +44,7 @@ from webhook_sync.queue import (
     enqueue,
     resume,
 )
+from webhook_sync.receiver.app import create_app
 
 HOOK = "https://hooks.example.test/services/T000/B000/fixture"
 NINE = datetime(2026, 10, 2, 20, 30, tzinfo=UTC)
@@ -297,3 +301,25 @@ async def test_a_source_pause_names_the_source(
 
     [body] = bodies(hook)
     assert body["text"] == "webhook-sync paused: source razorpay paused: spreadsheet missing"
+
+
+async def test_the_server_runs_the_dead_jobs_check_and_alerts_on_pauses(
+    config: Config, data_dir: Path, writer: Writer, hook: Route
+) -> None:
+    await dead_job(writer, data_dir, "mirror", "pay_A")
+    app = create_app(replace(config, alerts=AlertsConfig(url=HOOK)), data_dir)
+
+    async with app.router.lifespan_context(app):
+        for _ in range(500):
+            if hook.called:
+                break
+            await asyncio.sleep(0.01)
+        pauses: Pauses = app.state.pauses
+        assert pauses.on_pause is not None
+        await pauses.on_pause("sink", "sheets", f"{TEST_SPREADSHEET_ID} not found")
+
+    texts = [body["text"] for body in bodies(hook)]
+    assert texts == [
+        "webhook-sync dead_jobs: 1 new dead job (mirror 1)",
+        "webhook-sync paused: sink sheets paused: *** not found",
+    ]
