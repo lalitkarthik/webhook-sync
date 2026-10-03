@@ -29,7 +29,17 @@ from webhook_sync.queue.pause import PauseTarget
 
 log = logging.getLogger("webhook_sync.alerts")
 
-type AlertKind = Literal["paused", "dead_jobs", "sheet_changed", "unknown_currency"]
+type AlertKind = Literal[
+    "paused",
+    "dead_jobs",
+    "sheet_changed",
+    "unknown_currency",
+    "silent_webhook",
+    "verify_differences",
+    "stale_twice",
+]
+"""P3's kinds, and P4's: events found only by the sweeper, verify's unrepaired differences,
+and the same payment stale on two full runs in a row (Q155)."""
 
 type Outcome = Literal["sent", "suppressed", "logged", "failed"]
 """What became of an alert: posted, held back by the hourly rule, logged for want of a URL, or
