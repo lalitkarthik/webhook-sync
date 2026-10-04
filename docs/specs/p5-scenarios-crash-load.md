@@ -132,3 +132,10 @@ Five **scenarios** run in the test's own process, each followed by the invariant
 - A15 [INTERNAL] The crash exit uses one fixed non-zero exit code, and a crash test fails unless the first process exited with it — otherwise a test could pass without crashing.
 - A16 [INTERNAL] The load checks run in the default suite within about a minute on the laptop — the suite already includes the smoke tests; a ticket that can't meet the budget says so.
 - A17 [INTERNAL] No research step: the design route skips it, and G33 is measured by the storm itself.
+
+## Decisions made during the build
+
+- #49: invariant 5's "older" means earlier in the order of states FakeRazorpay served for that payment; a ledger row version that matches no served state fails the invariant.
+- #49: sending a delivery adds its payment to the fake's known payments, which are what invariant 1 holds the ledger to.
+- #49: scenarios run with `initial_lookback_days = 0`, so the sweeper adds nothing a scenario didn't send.
+- #49: invariants 2 and 5 compare against the product's own encoding and mapping (`payment_columns`, `payment_row`, `business_columns`).

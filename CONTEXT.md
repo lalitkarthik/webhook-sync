@@ -275,6 +275,12 @@ _Avoid_: scene (that is one demonstration for the video)
 **Settle**:
 To wait until no job is waiting or running, so the invariants can be checked.
 
+**On purpose**:
+What a test declares it broke (conflicts sent, dead jobs, alerts, pauses); the invariants accept only what is declared. `OnPurpose` in the tests.
+
+**Ledger watch**:
+A test helper that reads the payments table every 5 ms while the app runs, so invariant 5 sees every state a ledger row took. `LedgerWatch` in the tests.
+
 **Load check**:
 A test of many requests at once against the real server process: the duplicate storm (1,000 replays of one delivery) and the burst (200 payments).
 _Avoid_: benchmark, stress test
