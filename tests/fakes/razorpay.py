@@ -109,6 +109,10 @@ class FakeRazorpay:
     release: asyncio.Event = field(default_factory=asyncio.Event)
     sent: list[Sent] = field(default_factory=list[Sent])
     """Every delivery sent to the receiver so far, in the order answered."""
+    earlier: dict[str, list[dict[str, Any]]] = field(
+        default_factory=dict[str, list[dict[str, Any]]]
+    )
+    """The states each changed payment had before its current one in `fetches`, oldest first."""
 
     def mount(self, router: respx.MockRouter) -> None:
         router.get(f"{RAZORPAY_API}/v1/payments").mock(side_effect=self._list_payments)
@@ -116,6 +120,16 @@ class FakeRazorpay:
         router.get(url__regex=rf"^{RAZORPAY_API}/v1/payments/(?P<payment_id>pay_\w+)(\?|$)").mock(
             side_effect=self._fetch
         )
+
+    def change(self, payment_id: str, state: dict[str, Any]) -> None:
+        """The payment moves on at Razorpay: fetches answer `state` from now on."""
+        self.earlier.setdefault(payment_id, []).append(self.fetches[payment_id])
+        self.fetches[payment_id] = state
+
+    def states(self, payment_id: str) -> list[dict[str, Any]]:
+        """Every state the payment has had at Razorpay, oldest first; the last is current."""
+        current = [self.fetches[payment_id]] if payment_id in self.fetches else []
+        return [*self.earlier.get(payment_id, []), *current]
 
     def delivery(self, event_id: str, attempt: int = 1) -> Delivery:
         """The delivery P0 recorded (`tests/recordings/razorpay/<id>-<attempt>.json`), its body
