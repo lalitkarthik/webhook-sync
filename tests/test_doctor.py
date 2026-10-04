@@ -259,9 +259,14 @@ def test_before_the_first_serve_the_missing_database_is_a_warning(
 ) -> None:
     with healthy(tmp_path, monkeypatch) as on:
         on.database.unlink()
+        written = len(on.sheets.written)
         report = doctor(on, capsys)
+        database_made = on.database.exists()
+        sheet_written = len(on.sheets.written) != written
 
     assert report.state("database") == "warning"
+    assert not database_made
+    assert not sheet_written
     assert "wsync serve makes it" in report.says("database")
     assert report.state("sheet") == "ok"  # its tabs found by title, their headers compared
     assert report.exit_code == 0

@@ -204,10 +204,10 @@ class FakeRazorpay:
     webhooks: list[dict[str, Any]] = field(default_factory=lambda: [listed_webhook()])
     """What `GET /v1/webhooks` lists (see `listed_webhook`)."""
     webhooks_status: int = 200
-    key_refused: bool = False
-    """Every list call answers 401, as Razorpay does to a key it doesn't know."""
     """What the webhook list answers: Razorpay documents it only for partners, so a merchant
     key may get a 4xx."""
+    key_refused: bool = False
+    """Every list call answers 401, as Razorpay does to a key it doesn't know."""
 
     def mount(self, router: respx.MockRouter) -> None:
         router.get(f"{RAZORPAY_API}/v1/payments").mock(side_effect=self._list_payments)
