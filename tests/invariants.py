@@ -344,7 +344,8 @@ def _written(cell: Json) -> Json:
 
 def every_event_stored_once(outcome: Outcome, on_purpose: OnPurpose) -> list[str]:
     """No event is stored twice (by its fingerprint, or by its signed body), every delivery
-    answered `new` stored its event, and every delivery answered is logged exactly once."""
+    answered `new` stored its event, and every delivery answered is logged exactly once. A
+    delivery the server died before answering may be logged once, or not at all."""
     found: list[str] = []
     delivered = [e for e in outcome.events if e["origin"] == "delivery"]
     for what, column in (("same fingerprint", "fingerprint"), ("same signed body", "body_sha256")):
@@ -357,9 +358,11 @@ def every_event_stored_once(outcome: Outcome, on_purpose: OnPurpose) -> list[str
             found.append(f"{sent.delivery.event_id} was answered new but is not stored")
     by_answer = Counter(str(s.answer.get("result")) for s in answered)
     by_log = Counter(str(d["result"]) for d in outcome.deliveries)
-    if by_answer != by_log:
+    unanswered = len(outcome.razorpay.unanswered)
+    if by_answer - by_log or (by_log - by_answer).total() > unanswered:
         found.append(
-            f"{_counted(by_answer, 'delivery', 'deliveries')} answered ({_by_result(by_answer)}),"
+            f"{_counted(by_answer, 'delivery', 'deliveries')} answered ({_by_result(by_answer)})"
+            f"{f' and {unanswered} unanswered' if unanswered else ''},"
             f" but {by_log.total()} logged ({_by_result(by_log)})"
         )
     return found

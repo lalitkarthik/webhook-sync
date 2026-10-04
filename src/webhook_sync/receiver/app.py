@@ -24,6 +24,7 @@ from fastapi.responses import JSONResponse
 from webhook_sync.alerts import Alerter
 from webhook_sync.clock import to_db_text, utc_now
 from webhook_sync.config import Config
+from webhook_sync.crashpoints import crash_point
 from webhook_sync.db.migrations import apply_pending
 from webhook_sync.db.writer import Writer
 from webhook_sync.ledger import ledger_runner
@@ -223,6 +224,7 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
                 },
             )
             return JSONResponse({"error": "database_error"}, status_code=503)
+        crash_point("after_event_commit")  # stored and committed, not yet answered
         if stored.result == "conflict":
             # Until alerts exist, a conflict is logged at error level and counted (Q116).
             log.error(

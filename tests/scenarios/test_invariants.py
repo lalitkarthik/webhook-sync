@@ -26,7 +26,7 @@ from invariants import (
 from scenarios.harness import Scenario
 from support import ReadRows, execute_aside, recorded_api_answer
 
-from webhook_sync.db.schema import events
+from webhook_sync.db.schema import deliveries, events
 
 CAPTURE = "Tj9sMcl7hE9PaT"  # payment.captured of pay_Tj9rKBOXWcsMeE
 AUTHORIZE = "Tj9rs3245YOiVJ"  # payment.authorized of the same payment
@@ -175,6 +175,29 @@ async def test_3_every_delivery_is_logged_exactly_once(healthy: Scenario) -> Non
     found = every_event_stored_once(await healthy.outcome(), healthy.on_purpose)
 
     assert found == ["2 deliveries answered (1 duplicate, 1 new), but 1 logged (1 new)"]
+
+
+async def test_3_a_delivery_never_answered_may_be_logged_once_and_no_more(
+    healthy: Scenario,
+) -> None:
+    razorpay = healthy.razorpay
+    [first] = [sent for sent in razorpay.sent if sent.answer == {"result": "new"}]
+    razorpay.sent.remove(first)
+    razorpay.unanswered.append(first.delivery)  # the server stored it, then died unanswered
+
+    assert every_event_stored_once(await healthy.outcome(), healthy.on_purpose) == []
+
+    columns = ", ".join(c.name for c in deliveries.columns if c.name != "id")
+    await execute_aside(
+        healthy.data_dir,
+        f"INSERT INTO deliveries ({columns}) SELECT {columns} FROM deliveries"
+        " WHERE result = 'duplicate'",
+    )
+    found = every_event_stored_once(await healthy.outcome(), healthy.on_purpose)
+
+    assert found == [
+        "1 delivery answered (1 duplicate) and 1 unanswered, but 3 logged (2 duplicate, 1 new)"
+    ]
 
 
 async def test_3_every_event_is_stored_once(healthy: Scenario) -> None:

@@ -2,10 +2,10 @@
 the running server's admin listener when one holds the lock, polling the run until it ends; on
 their own under the lock when none does. And `wsync status` showing what they did.
 
-Razorpay is `tests/fakes/upstreams.py` on 127.0.0.1, its lists answering the recorded items moved
-in time, and the service account's token endpoint is the same fake, so nothing leaves this
-machine. What comes out is what an outsider sees: exit codes, output, the lock, and the
-database's events and verify runs.
+Razorpay and Google are FakeRazorpay and FakeSheets over HTTP on 127.0.0.1
+(`tests/fakes/over_http.py`), Razorpay's lists answering the recorded items moved in time, so
+nothing leaves this machine. What comes out is what an outsider sees: exit codes, output, the
+lock, and the database's events and verify runs.
 """
 
 import re
@@ -16,12 +16,14 @@ from collections.abc import Generator
 from contextlib import closing, contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from http.server import ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
-from fakes.upstreams import list_calls, start_upstreams, token_uri
+from fakes.over_http import FakesOverHttp
+from fakes.razorpay import FakeRazorpay, recorded_listed_payments, recorded_listed_refunds
+from fakes.sheets import FakeSheets
 from processes import (
     fixture_environment,
     free_port,
@@ -29,7 +31,7 @@ from processes import (
     write_serve_config,
     wsync_path,
 )
-from support import RECORDED_ACCOUNT, fixture_secrets, fixture_service_account_b64
+from support import RECORDED_ACCOUNT, TEST_SPREADSHEET_ID, fixture_secrets
 
 from webhook_sync.cli.serve import start
 from webhook_sync.db.lock import lock_if_free
@@ -55,7 +57,7 @@ class Setup:
     config_path: Path
     port: int
     admin_port: int
-    upstreams: ThreadingHTTPServer
+    razorpay: FakeRazorpay
     environ: dict[str, str]
 
     @property
@@ -87,32 +89,40 @@ class Setup:
             return db.execute(sql).fetchall()
 
 
+def moved(items: list[dict[str, Any]], shift: int) -> list[dict[str, Any]]:
+    """Each item with its `created_at` moved by `shift` seconds."""
+    return [item | {"created_at": item["created_at"] + shift} for item in items]
+
+
 @contextmanager
 def setup(
     tmp_path: Path, *, listed_at: datetime, list_delay: float = 0.0, extra: str = ""
 ) -> Generator[Setup]:
-    """A database migrated by a start and the fakes running; nothing serving yet."""
-    upstreams = start_upstreams(listed_at=listed_at, list_delay=list_delay)
-    fakes_port = upstreams.server_address[1]
-    port, admin_port = free_port(), free_port()
-    config_path = write_serve_config(
-        tmp_path / "conf",
-        port,
-        admin_port,
-        account=RECORDED_ACCOUNT,
-        api_url=f"http://127.0.0.1:{fakes_port}",
-        extra=extra,
+    """A database migrated by a start and the fakes running, Razorpay listing the recorded
+    payments and refunds moved so the newest payment was created at `listed_at`, each call
+    taking `list_delay` seconds; nothing serving yet."""
+    payments = list(recorded_listed_payments().values())
+    shift = int(listed_at.timestamp()) - max(item["created_at"] for item in payments)
+    razorpay = FakeRazorpay(
+        now=datetime.now(UTC),
+        payments={item["id"]: item for item in moved(payments, shift)},
+        refunds=moved(recorded_listed_refunds(), shift),
+        latency=list_delay,
     )
-    with start(config_path, fixture_secrets()):
-        pass
-    environ = fixture_environment() | {
-        "GOOGLE_SERVICE_ACCOUNT_B64": fixture_service_account_b64(token_uri=token_uri(fakes_port))
-    }
-    try:
-        yield Setup(config_path, port, admin_port, upstreams, environ)
-    finally:
-        upstreams.shutdown()
-        upstreams.server_close()
+    with FakesOverHttp(razorpay, FakeSheets(TEST_SPREADSHEET_ID)) as fakes:
+        port, admin_port = free_port(), free_port()
+        config_path = write_serve_config(
+            tmp_path / "conf",
+            port,
+            admin_port,
+            account=RECORDED_ACCOUNT,
+            api_url=fakes.url,
+            extra=extra,
+        )
+        with start(config_path, fixture_secrets()):
+            pass
+        environ = fakes.environ(fixture_environment())
+        yield Setup(config_path, port, admin_port, razorpay, environ)
 
 
 @contextmanager
@@ -135,7 +145,7 @@ def serving(on: Setup) -> Generator[None]:
 def locked_while_listing(on: Setup, command: subprocess.Popen[str]) -> bool:
     """Whether the lock was held once the command had begun listing."""
     deadline = time.monotonic() + 30
-    while not list_calls(on.upstreams) and time.monotonic() < deadline:
+    while not on.razorpay.list_calls and time.monotonic() < deadline:
         assert command.poll() is None, "the command ended before it listed"
         time.sleep(0.01)
     with lock_if_free(on.data_dir) as free:

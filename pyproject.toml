@@ -81,6 +81,6 @@ layers = [
     "webhook_sync.sinks",
     "webhook_sync.alerts",
     "webhook_sync.queue",
-    "webhook_sync.db | webhook_sync.logs",
+    "webhook_sync.db | webhook_sync.logs | webhook_sync.crashpoints",
     "webhook_sync.config | webhook_sync.clock",
 ]
