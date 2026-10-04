@@ -105,6 +105,9 @@ class Sweeper:
         self._alerter = alerter
         self._rng = rng or random.Random()
         self._sleep = sleep
+        self._sweeping = asyncio.Lock()
+        """One sweep at a time: a sweep asked for by hand waits for the loop's, and the other
+        way round, so no checkpoint moves back."""
 
     async def run(self) -> None:
         """Sweep after a random 0-30 s delay, then every 10 minutes, until cancelled. A sweep
@@ -143,6 +146,10 @@ class Sweeper:
     async def sweep(self) -> bool:
         """One sweep of both lists; True when every due slice of each was stored, and its
         re-list when due. Nothing is listed while Razorpay is paused."""
+        async with self._sweeping:
+            return await self._sweep()
+
+    async def _sweep(self) -> bool:
         finished = True
         stored = 0
         unannounced: list[str] = []

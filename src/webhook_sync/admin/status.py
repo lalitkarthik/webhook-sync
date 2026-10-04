@@ -61,10 +61,7 @@ async def read_status(data_dir: Path) -> Status:
             "SELECT last_flush_at, rows_written_last FROM sheet_state"
             " ORDER BY last_flush_at DESC LIMIT 1"
         )
-        sweeps = await reader.fetch_all(
-            "SELECT list, checkpoint_at, last_sweep_at, last_sweep_stored FROM checkpoints"
-            " ORDER BY list"
-        )
+        sweeps = await last_sweeps(reader)
         verified = await reader.fetch_all(
             "SELECT status_line FROM verify_runs WHERE status_line IS NOT NULL"
             " ORDER BY id DESC LIMIT 1"
@@ -89,17 +86,26 @@ async def read_status(data_dir: Path) -> Status:
             "at": flush.get("last_flush_at"),
             "rows_written": flush.get("rows_written_last") or 0,
         },
-        "sweeps": [
-            {
-                "list": row["list"],
-                "checkpoint_at": row["checkpoint_at"],
-                "last_sweep_at": row["last_sweep_at"],
-                "stored": row["last_sweep_stored"],
-            }
-            for row in sweeps
-        ],
+        "sweeps": sweeps,
         "last_verify": verified[0]["status_line"] if verified else None,
     }
+
+
+async def last_sweeps(reader: Reader) -> list[LastSweep]:
+    """Each list's checkpoint, when its last sweep moved it, and what that sweep stored."""
+    rows = await reader.fetch_all(
+        "SELECT list, checkpoint_at, last_sweep_at, last_sweep_stored FROM checkpoints"
+        " ORDER BY list"
+    )
+    return [
+        {
+            "list": row["list"],
+            "checkpoint_at": row["checkpoint_at"],
+            "last_sweep_at": row["last_sweep_at"],
+            "stored": row["last_sweep_stored"],
+        }
+        for row in rows
+    ]
 
 
 def format_status(status: Status) -> str:
@@ -124,14 +130,17 @@ def format_status(status: Status) -> str:
         if flush["at"]
         else "last flush: never"
     )
-    for sweep in status["sweeps"]:
-        lines.append(
-            f"last sweep of {sweep['list']}: {sweep['last_sweep_at']}, {sweep['stored']} stored;"
-            f" checkpoint {sweep['checkpoint_at']}"
-            if sweep["last_sweep_at"]
-            else f"last sweep of {sweep['list']}: never; checkpoint {sweep['checkpoint_at']}"
-        )
-    if not status["sweeps"]:
-        lines.append("last sweep: never")
+    lines += format_sweeps(status["sweeps"]) or ["last sweep: never"]
     lines.append(f"last verify: {status['last_verify'] or 'never'}")
     return "\n".join(lines)
+
+
+def format_sweeps(sweeps: list[LastSweep]) -> list[str]:
+    """One line per list: its last sweep and what it stored, and its checkpoint."""
+    return [
+        f"last sweep of {sweep['list']}: {sweep['last_sweep_at']}, {sweep['stored']} stored;"
+        f" checkpoint {sweep['checkpoint_at']}"
+        if sweep["last_sweep_at"]
+        else f"last sweep of {sweep['list']}: never; checkpoint {sweep['checkpoint_at']}"
+        for sweep in sweeps
+    ]

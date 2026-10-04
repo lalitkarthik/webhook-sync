@@ -159,17 +159,23 @@ class FullVerify:
             await self._sleep(POLL_EVERY.total_seconds())
 
     async def run(
-        self, *, repair: bool | None = None, local_date: date | None = None
+        self,
+        *,
+        repair: bool | None = None,
+        days: int | None = None,
+        local_date: date | None = None,
     ) -> int | Failure | None:
         """One full run: its `verify_runs` id, or the failure of a list. While Razorpay is
         paused, a quick run instead (None when there is no sheet to check). `repair` defaults
-        to `[verify] auto_repair`; `local_date` (the night it is for) to today's."""
+        to `[verify] auto_repair`; `days` to `[verify] days`; `local_date` (the night it is
+        for) to today's."""
         started = utc_now()
         clock = time.perf_counter()
         if self._razorpay.name in self._pauses.sources:
             log.info("full verify: Razorpay is paused, only the sheet is checked")
             return await self._sheet.run() if self._sheet is not None else None
-        source = await self._source.check(started)
+        days = self._config.verify.days if days is None else days
+        source = await self._source.check(started, days)
         if isinstance(source, Failure):
             log.warning(
                 "full verify stopped: a list failed",
@@ -178,7 +184,6 @@ class FullVerify:
             return source
         sheet = await self._sheet.check(started) if self._sheet is not None else None
         findings = source.findings + (sheet.findings if sheet is not None else [])
-        days = self._config.verify.days
         repair = self._config.verify.auto_repair if repair is None else repair
         recorded = await record_run(
             self._writer,
