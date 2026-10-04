@@ -311,3 +311,7 @@ _Avoid_: customer (reserved for the buyer's own paying customers), user, client 
 **Restricted key**:
 A Stripe API key limited to named permissions; the service requires one with read access only.
 _Avoid_: API key (too broad), secret key (Stripe's name for a full-access key)
+
+**Settings**:
+The config without its secrets: what `webhook-sync.toml` holds. The config adds the secrets read from the environment; `wsync doctor` checks the two apart.
+_Avoid_: options, preferences
