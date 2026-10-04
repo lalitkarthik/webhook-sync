@@ -44,8 +44,10 @@ async def test_one_delivery_sent_many_times_makes_one_event_one_row_and_one_shee
     ]
     _, *rows = scenario.sheets.tab(PAYMENTS).values()
     assert [row[0] for row in rows] == [CAPTURED]
+    # Every delivery, replays under new ids included, is logged against the one stored event.
     assert await read_rows(
-        "SELECT event_id, result, count(*) AS n FROM deliveries GROUP BY result ORDER BY result"
+        "SELECT event_id, result, count(*) AS n FROM deliveries"
+        " GROUP BY event_id, result ORDER BY event_id, result"
     ) == [
         {"event_id": CAPTURE, "result": "duplicate", "n": total - 1},
         {"event_id": CAPTURE, "result": "new", "n": 1},
