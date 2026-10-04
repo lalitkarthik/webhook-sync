@@ -10,7 +10,6 @@ re-signed with the fixture secret; the ledger row must equal `expected/`'s file.
 import json
 import sqlite3
 import subprocess
-import sys
 import time
 from contextlib import closing
 from pathlib import Path
@@ -22,6 +21,7 @@ from fakes.upstreams import start_upstreams, token_uri
 from processes import (
     fixture_environment,
     free_port,
+    stop,
     wait_until_healthy,
     write_serve_config,
     wsync_path,
@@ -44,18 +44,6 @@ def ledger_row(database: Path) -> dict[str, Any] | None:
         db.row_factory = sqlite3.Row
         rows = db.execute("SELECT * FROM payments WHERE payment_id = ?", (PAYMENT,)).fetchall()
     return {k: v for k, v in dict(rows[0]).items() if k not in VOLATILE} if rows else None
-
-
-def stop(process: subprocess.Popen[bytes]) -> None:
-    """Stop the server and every process under it: on Windows `wsync.exe` is a launcher with
-    the server as its grandchild, and `terminate` would only end the launcher."""
-    if sys.platform == "win32":
-        subprocess.run(
-            ["taskkill", "/T", "/F", "/PID", str(process.pid)], capture_output=True, check=False
-        )
-    else:
-        process.terminate()
-    process.wait(timeout=30)
 
 
 def test_a_recorded_delivery_becomes_the_expected_ledger_row(tmp_path: Path) -> None:
