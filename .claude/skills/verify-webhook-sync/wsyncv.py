@@ -36,6 +36,7 @@ ROOT = Path(__file__).resolve().parents[3]
 VERIFY = ROOT / ".verify"
 RUN = VERIFY / "run"
 PID_FILE = VERIFY / "pid"
+PORT_FILE = VERIFY / "port"
 STATE = RUN / "state.json"
 CONFIG = RUN / "webhook-sync.toml"
 DATABASE = RUN / "data" / "webhook-sync.db"
@@ -120,6 +121,7 @@ def launch(args: argparse.Namespace) -> int:
         "demo_fail_first": args.demo_fail_first or 0,
     }
     STATE.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    PORT_FILE.write_text(str(port), encoding="utf-8")
     (RUN / "admin_port").write_text(str(admin_port), encoding="utf-8")
     (RUN / "upstreams_port").write_text(str(upstreams_port), encoding="utf-8")
     environ = processes.fixture_environment()
