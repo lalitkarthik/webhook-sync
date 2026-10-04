@@ -74,6 +74,39 @@ def recorded_fetches() -> dict[str, dict[str, Any]]:
     return fetched
 
 
+HANDLED_EVENTS = (
+    "payment.authorized",
+    "payment.captured",
+    "payment.failed",
+    "refund.created",
+    "refund.processed",
+    "refund.failed",
+    "refund.speed_changed",
+)
+WEBHOOK_URL = "https://wsync-fixture.example/webhooks/razorpay"
+
+
+def listed_webhook(url: str = WEBHOOK_URL, **changes: Any) -> dict[str, Any]:
+    """A webhook as `GET /v1/webhooks` lists one for a merchant key (seen on the test account,
+    2026-10-04): active, with a secret, every handled event ticked and one other not."""
+    events = dict.fromkeys(HANDLED_EVENTS, True) | {"order.paid": True, "invoice.paid": False}
+    webhook: dict[str, Any] = {
+        "id": "Tj5fixtureWebhk",
+        "entity": "webhook",
+        "service": "api-test",
+        "owner_id": RECORDED_ACCOUNT.removeprefix("acc_"),
+        "owner_type": "merchant",
+        "url": url,
+        "active": True,
+        "disabled_at": 0,
+        "secret_exists": True,
+        "events": events,
+        "created_at": 1790000000,
+        "updated_at": 1790000000,
+    }
+    return webhook | changes
+
+
 @dataclass(frozen=True)
 class Delivery:
     """One webhook delivery as Razorpay sends it: the raw body, and the recorded headers with
@@ -168,10 +201,16 @@ class FakeRazorpay:
     arriving: list[Payment] = field(default_factory=list[Payment])
     """Payments made between two page calls: each is made once a payments list call has
     answered a full page."""
+    webhooks: list[dict[str, Any]] = field(default_factory=lambda: [listed_webhook()])
+    """What `GET /v1/webhooks` lists (see `listed_webhook`)."""
+    webhooks_status: int = 200
+    """What the webhook list answers: Razorpay documents it only for partners, so a merchant
+    key may get a 4xx."""
 
     def mount(self, router: respx.MockRouter) -> None:
         router.get(f"{RAZORPAY_API}/v1/payments").mock(side_effect=self._list_payments)
         router.get(f"{RAZORPAY_API}/v1/refunds").mock(side_effect=self._list_refunds)
+        router.get(f"{RAZORPAY_API}/v1/webhooks").mock(side_effect=self._list_webhooks)
         router.get(url__regex=rf"^{RAZORPAY_API}/v1/payments/(?P<payment_id>pay_\w+)(\?|$)").mock(
             side_effect=self._fetch
         )
@@ -347,6 +386,14 @@ class FakeRazorpay:
             while self.arriving:
                 self._add(self.arriving.pop(0))
         return answer
+
+    async def _list_webhooks(self, request: httpx.Request) -> httpx.Response:
+        date = {"date": format_datetime(self.now, usegmt=True)}
+        if self.webhooks_status != 200:
+            error = {"code": "BAD_REQUEST_ERROR", "description": "The requested URL was not found"}
+            return httpx.Response(self.webhooks_status, json={"error": error}, headers=date)
+        body = {"entity": "collection", "count": len(self.webhooks), "items": self.webhooks}
+        return httpx.Response(200, json=body, headers=date)
 
     async def _list_refunds(self, request: httpx.Request) -> httpx.Response:
         return await self._list(request, self.refunds)
