@@ -8,6 +8,7 @@ Plain helpers (fixture secrets, Razorpay samples, signing) live in `support.py`.
 
 import sys
 from collections.abc import AsyncIterator
+from datetime import time
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -32,6 +33,7 @@ from webhook_sync.config import (
     RazorpaySecrets,
     ServiceConfig,
     SheetsConfig,
+    VerifyConfig,
 )
 from webhook_sync.db.migrations import apply_pending
 from webhook_sync.db.reader import Reader
@@ -66,6 +68,8 @@ def config(data_dir: Path) -> Config:
         google_secrets=GoogleSecrets(service_account=fixture_service_account()),
         sheets=SheetsConfig(spreadsheet_id=TEST_SPREADSHEET_ID),
         sinks=("sheets",),
+        # The nightly full verify never due in a test day's hours: only its own tests run it.
+        verify=VerifyConfig(nightly_at=time(23, 59)),
     )
 
 

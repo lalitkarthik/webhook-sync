@@ -13,7 +13,7 @@ import asyncio
 from collections.abc import AsyncGenerator, Iterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime
 from pathlib import Path
 from typing import Any
@@ -26,7 +26,7 @@ from support import TEST_ACCOUNT, TEST_SPREADSHEET_ID, ReadRows
 from time_machine import TimeMachineFixture
 
 from webhook_sync.clock import to_db_text, utc_now
-from webhook_sync.config import Config, VerifyConfig
+from webhook_sync.config import Config
 from webhook_sync.db.schema import jobs, payments
 from webhook_sync.db.writer import Writer
 from webhook_sync.queue import enqueue
@@ -57,12 +57,7 @@ def quick_loops(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def checked_config(config: Config) -> Config:
-    """The nightly full verify not due while these tests run: they see the hourly check only."""
-    return replace(
-        config,
-        razorpay=replace(config.razorpay, api_url=RAZORPAY_API),
-        verify=VerifyConfig(nightly_at=time(23, 59)),
-    )
+    return replace(config, razorpay=replace(config.razorpay, api_url=RAZORPAY_API))
 
 
 @dataclass
