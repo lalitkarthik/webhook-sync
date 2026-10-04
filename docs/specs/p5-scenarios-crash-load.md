@@ -143,3 +143,6 @@ Five **scenarios** run in the test's own process, each followed by the invariant
 - #51: made payments copy the recorded capture of `pay_Tj9rKBOXWcsMeE` under a new id; the late capture takes that payment's recorded fee and tax (both INR 500 netbanking).
 - #51 (open, for the owner): with more than 100 payments inside two seconds, the fallback `skip` paging depends on the order of same-second items, which sweeper.md says it does not; the design leaves the right behaviour open, so it is unchanged.
 - #52: `mid_slice` fires only in a slice that listed at least one item (the ticket's "after some of a slice's items are stored"); the sweeper stores a slice in one transaction, so the crash comes after the whole slice is stored.
+- #54: the sink pauses on a 403 (the spreadsheet unshared) after the 429s; "five retry failures in a row pause" is after the cut (Q132), so only a pause-class error stops the sink.
+- #54: AC-54-2's "reason on Sync status" is read from `wsync status` (`GET /admin/status`): a paused sink does not flush, so the Sync status tab cannot show its own pause (Q138).
+- #54: `Scenario.resume` ends the declared pause, so the final settle and invariants run with the `paused` alert declared and no job excused. The crash runs do not carry the buyer's own tab and cells; invariant 6 is proved in the scenarios.
