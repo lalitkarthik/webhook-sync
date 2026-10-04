@@ -127,6 +127,37 @@ async def test_2_a_payment_on_two_rows(healthy: Scenario) -> None:
     assert found == ["pay_Tj9rKBOXWcsMeE is on rows 2, 3"]
 
 
+async def test_2_the_daily_summary_equals_its_sums(healthy: Scenario) -> None:
+    summary_tab = healthy.sheets.tab("Daily summary")
+    payments = summary_tab.values()[0].index("Payments")
+    start = {"sheetId": summary_tab.sheet_id, "rowIndex": 1, "columnIndex": payments}
+    healthy.sheets.apply(
+        [
+            {
+                "updateCells": {
+                    "rows": [{"values": [{"userEnteredValue": {"numberValue": 5}}]}],
+                    "fields": "userEnteredValue",
+                    "start": start,
+                }
+            }
+        ]
+    )
+
+    found = sheet_equals_ledger(await healthy.outcome(), healthy.on_purpose)
+
+    assert found == ["the Daily summary's 2026-10-03 INR/INR differs from its sums"]
+
+
+async def test_2_the_daily_summary_has_a_row_for_each_day(healthy: Scenario) -> None:
+    summary_tab = healthy.sheets.tab("Daily summary")
+    span = {"sheetId": summary_tab.sheet_id, "dimension": "ROWS", "startIndex": 1, "endIndex": 2}
+    healthy.sheets.apply([{"deleteDimension": {"range": span}}])
+
+    found = sheet_equals_ledger(await healthy.outcome(), healthy.on_purpose)
+
+    assert found == ["the Daily summary has no row for 2026-10-03 INR/INR"]
+
+
 async def test_3_every_delivery_is_logged_exactly_once(healthy: Scenario) -> None:
     await execute_aside(healthy.data_dir, "DELETE FROM deliveries WHERE result = 'duplicate'")
 
@@ -200,6 +231,23 @@ async def test_5_nothing_moves_backwards(scenario: Scenario, read_rows: ReadRows
     assert found == [
         "pay_Tj9rKBOXWcsMeE went back: row version 3 holds Razorpay's state 1 of 2, after row"
         " version 2 held state 2"
+    ]
+
+
+async def test_5_a_partial_step_back_is_a_state_razorpay_never_had(healthy: Scenario) -> None:
+    # Back to authorized, the captured amounts kept: no state Razorpay ever served.
+    await execute_aside(
+        healthy.data_dir,
+        "UPDATE payments SET status = 'authorized', source_status = 'authorized',"
+        " row_version = row_version + 1",
+    )
+    await healthy.watch.look()
+
+    found = nothing_moves_backwards(await healthy.outcome(), healthy.on_purpose)
+
+    assert found == [
+        "pay_Tj9rKBOXWcsMeE row version 2 holds no state Razorpay had (status authorized),"
+        " so it may have moved back"
     ]
 
 
