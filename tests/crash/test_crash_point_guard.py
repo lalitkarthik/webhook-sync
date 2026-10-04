@@ -88,7 +88,10 @@ def test_an_armed_crash_point_logs_one_warning_naming_it_at_start(tmp_path: Path
             stop(process)
 
     entries = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
-    warnings = [e["message"] for e in entries if e["level"] == "warning"]
-    assert warnings == [
-        "crash point armed: the server exits at after_event_commit without cleaning up"
+    # Only the crash points' lines: the sweeper may warn too, its list failing to connect.
+    crash_points = [
+        (e["level"], e["message"]) for e in entries if e["logger"] == "webhook_sync.crashpoints"
+    ]
+    assert crash_points == [
+        ("warning", "crash point armed: the server exits at after_event_commit without cleaning up")
     ]
