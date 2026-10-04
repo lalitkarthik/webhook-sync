@@ -7,10 +7,12 @@ A scenario scripts what the outside world does through `scenario.razorpay` and
 `scenario.on_purpose` first. The fixtures are in `conftest.py`.
 """
 
+import asyncio
+import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -27,13 +29,18 @@ from invariants import (
     observe,
     settle,
 )
+from time_machine import TimeMachineFixture
 
+from webhook_sync.clock import to_db_text
 from webhook_sync.config import Config
+from webhook_sync.db.reader import Reader
 from webhook_sync.receiver.app import create_app
 
 NOW = datetime(2026, 10, 2, 20, 5, tzinfo=UTC)
 """After every recorded payment was created, and off the hour, so the hourly sheet check waits."""
 HOOK = "https://hooks.example.test/services/T000/B000/fixture"
+SETTLE_BEHIND = timedelta(seconds=60)
+"""How far behind Razorpay's now a caught-up checkpoint stands (sweeper.md)."""
 
 
 @dataclass
@@ -43,6 +50,7 @@ class Scenario:
     razorpay: FakeRazorpay
     sheets: FakeSheets
     router: respx.MockRouter
+    clock: TimeMachineFixture
     on_purpose: OnPurpose = field(default_factory=OnPurpose)
     """What the scenario breaks on purpose: declare it before checking."""
     buyers_tabs: list[Tab] = field(default_factory=list[Tab])
@@ -62,6 +70,38 @@ class Scenario:
             transport = httpx.ASGITransport(app=app)
             async with httpx.AsyncClient(transport=transport, base_url="http://wsync.test") as c:
                 yield c
+
+    def at(self, moment: datetime) -> None:
+        """Our clock and Razorpay's both at `moment`, and ticking on."""
+        self.clock.move_to(moment, tick=True)
+        self.razorpay.now = moment
+
+    async def caught_up(self, *, limit: float = SETTLE_LIMIT) -> None:
+        """Wait until both lists' checkpoints stand at Razorpay's now less a minute, or past
+        it (a first start's): every slice up to it stored, its events' jobs enqueued."""
+        at = to_db_text(self.razorpay.now - SETTLE_BEHIND)
+        await self._until(
+            f"SELECT count(*) AS n FROM checkpoints WHERE checkpoint_at >= '{at}'",
+            f"both checkpoints at {at} or past it",
+            limit,
+        )
+
+    async def relisted(self, since: datetime, *, limit: float = SETTLE_LIMIT) -> None:
+        """Wait until both lists have been re-listed whole at `since` or later, on our clock."""
+        at = to_db_text(since)
+        await self._until(
+            f"SELECT count(*) AS n FROM checkpoints WHERE last_relist_at >= '{at}'",
+            f"both lists re-listed since {at}",
+            limit,
+        )
+
+    async def _until(self, count: str, what: str, limit: float) -> None:
+        deadline = time.monotonic() + limit
+        async with Reader.open(self.data_dir) as reader:
+            while (await reader.fetch_all(count))[0]["n"] < 2:
+                if time.monotonic() > deadline:
+                    raise AssertionError(f"timed out after {limit} s waiting for {what}")
+                await asyncio.sleep(0.01)
 
     async def settle(self, *, limit: float = SETTLE_LIMIT) -> None:
         await settle(self.data_dir, paused=self.on_purpose.paused, limit=limit)

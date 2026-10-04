@@ -35,7 +35,7 @@ def quick_loops(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def scenario(config: Config, data_dir: Path) -> Iterator[Scenario]:
+def scenario(config: Config, data_dir: Path, clock: TimeMachineFixture) -> Iterator[Scenario]:
     """Razorpay, Google and the alerts webhook faked through one respx router, and the config
     the recordings need. The first sweep starts empty, so only what a scenario sends arrives."""
     scenario_config = replace(
@@ -50,4 +50,4 @@ def scenario(config: Config, data_dir: Path) -> Iterator[Scenario]:
         razorpay.mount(router)
         sheets.mount(router)
         router.post(HOOK).respond(200, text="ok")
-        yield Scenario(scenario_config, data_dir, razorpay, sheets, router)
+        yield Scenario(scenario_config, data_dir, razorpay, sheets, router, clock)
