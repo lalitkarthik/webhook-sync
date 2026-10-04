@@ -1,8 +1,8 @@
 """Smoke: a Razorpay delivery to the real `wsync serve` becomes one ledger row.
 
-The installed `wsync serve` runs as a subprocess on fixture secrets. Its Razorpay API is
-`tests/fakes/upstreams.py` on 127.0.0.1, answering with the recorded fetch, and its service
-account's token endpoint is the same fake, so nothing leaves this machine. The input is P0's
+The installed `wsync serve` runs as a subprocess on fixture secrets. Its Razorpay and Google are
+FakeRazorpay and FakeSheets over HTTP on 127.0.0.1 (`tests/fakes/over_http.py`), Razorpay
+answering with the recorded fetch, so nothing leaves this machine. The input is P0's
 recorded `payment.captured` delivery (`tests/recordings/razorpay/Tj9sMcl7hE9PaT-1.json`),
 re-signed with the fixture secret; the ledger row must equal `expected/`'s file.
 """
@@ -12,12 +12,15 @@ import sqlite3
 import subprocess
 import time
 from contextlib import closing
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
-from fakes.upstreams import start_upstreams, token_uri
+from fakes.over_http import FakesOverHttp
+from fakes.razorpay import FakeRazorpay
+from fakes.sheets import FakeSheets
 from processes import (
     fixture_environment,
     free_port,
@@ -26,7 +29,7 @@ from processes import (
     write_serve_config,
     wsync_path,
 )
-from support import RECORDED_ACCOUNT, fixture_service_account_b64, recorded_delivery, sign_razorpay
+from support import RECORDED_ACCOUNT, TEST_SPREADSHEET_ID, recorded_delivery, sign_razorpay
 
 pytestmark = pytest.mark.smoke
 
@@ -47,25 +50,18 @@ def ledger_row(database: Path) -> dict[str, Any] | None:
 
 
 def test_a_recorded_delivery_becomes_the_expected_ledger_row(tmp_path: Path) -> None:
-    upstreams = start_upstreams()
-    fakes_port = upstreams.server_address[1]
+    fakes = FakesOverHttp(FakeRazorpay(now=datetime.now(UTC)), FakeSheets(TEST_SPREADSHEET_ID))
     port = free_port()
     config_path = write_serve_config(
-        tmp_path / "conf",
-        port,
-        account=RECORDED_ACCOUNT,
-        api_url=f"http://127.0.0.1:{fakes_port}",
+        tmp_path / "conf", port, account=RECORDED_ACCOUNT, api_url=fakes.url
     )
     database = tmp_path / "conf" / "data" / "webhook-sync.db"
-    environ = fixture_environment() | {
-        "GOOGLE_SERVICE_ACCOUNT_B64": fixture_service_account_b64(token_uri=token_uri(fakes_port))
-    }
     body, headers = sign_razorpay(recorded_delivery(EVENT_ID), event_id=EVENT_ID)
 
-    with (tmp_path / "serve.log").open("wb") as log_file:
+    with fakes, (tmp_path / "serve.log").open("wb") as log_file:
         process = subprocess.Popen(
             [wsync_path(), "serve", "--config", str(config_path)],
-            env=environ,
+            env=fakes.environ(fixture_environment()),
             stdout=log_file,
             stderr=log_file,
         )
@@ -80,8 +76,6 @@ def test_a_recorded_delivery_becomes_the_expected_ledger_row(tmp_path: Path) -> 
                 row = ledger_row(database)
         finally:
             stop(process)
-            upstreams.shutdown()
-            upstreams.server_close()
 
     assert (delivered.status_code, delivered.json()) == (202, {"result": "new"})
     assert row == json.loads(EXPECTED.read_text(encoding="utf-8"))

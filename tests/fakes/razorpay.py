@@ -231,6 +231,7 @@ class FakeRazorpay:
         await asyncio.sleep(self.latency)
         query = dict(request.url.params)
         count, skip = int(query.get("count", "10")), int(query.get("skip", "0"))
-        refunds = self.fetches.get(payment_id, {}).get("refunds") or {}
-        page = (refunds.get("items") or [])[skip : skip + count]
+        refunds: dict[str, Any] = self.fetches.get(payment_id, {}).get("refunds") or {}
+        items: list[dict[str, Any]] = refunds.get("items") or []
+        page = items[skip : skip + count]
         return httpx.Response(200, json={"count": len(page), "entity": "collection", "items": page})
