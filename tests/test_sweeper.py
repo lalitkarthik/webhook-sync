@@ -1093,9 +1093,9 @@ async def test_a_window_that_never_settles_fails_its_slice_and_the_next_pass_wal
     async with running(swept_config, data_dir):
         await wait_for(read_rows, CAUGHT_UP, [{"n": 2}])
 
-    assert [(r.levelname, getattr(r, "list")) for r in stopped] == [("WARNING", "payments")]
-    assert "settle" in getattr(stopped[0], "error")
-    assert stuck_at is not None and stuck_at <= to_db_text(datetime.fromtimestamp(CROWDED, UTC))
+    assert [(r.levelname, r.__dict__["list"]) for r in stopped] == [("WARNING", "payments")]
+    assert "did not settle in 5 walks" in stopped[0].__dict__["error"]
+    assert stuck_at == "2026-10-02T14:00:00.000000Z"  # the start of the crowded slice
     crowded = [q for q in fake.calls_to("/v1/payments") if int(q["to"]) == CROWDED + 1]
     assert len([q for q in crowded if q.get("skip") is None]) == 5 + 2  # five walks, then two
     # One late payment per full page of the first pass: the call that narrowed to the crowded
