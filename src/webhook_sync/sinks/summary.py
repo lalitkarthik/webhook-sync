@@ -153,10 +153,12 @@ class SyncStatus:
     sheet_state: str
     razorpay_state: str
     deployment_id: str | None
+    last_verify: str | None = None
+    """The latest verify run's line (A17), blank until one has run."""
 
 
 def sync_status_rows(status: SyncStatus, zone: ZoneInfo) -> list[list[Json]]:
-    """The label/value rows below the header, in order; Last verify blank until P4."""
+    """The label/value rows below the header, in order."""
     lines: list[tuple[str, Json]] = [
         ("Last flush", moment(to_db_text(status.last_flush), zone)),
         ("Rows written (last flush)", count(status.rows_written_last)),
@@ -165,7 +167,7 @@ def sync_status_rows(status: SyncStatus, zone: ZoneInfo) -> list[list[Json]]:
         ("Dead jobs", count(status.dead_jobs)),
         ("Sheet state", text(status.sheet_state)),
         ("Razorpay state", text(status.razorpay_state)),
-        (LAST_VERIFY, {}),
+        (LAST_VERIFY, text(status.last_verify)),
         ("Deployment id", text(status.deployment_id)),
     ]
     return [[text(label), value] for label, value in lines]

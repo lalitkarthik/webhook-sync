@@ -3,9 +3,9 @@
 
 Hook mode (default, no arguments): reads the hook event JSON on stdin, works
 out how full this session's context window is, and injects a notice into the
-model's context: an early warning at 35%, "hand off now" at 40% (repeated
-every few tool uses), and from 45%, the hard limit no session may pass, a
-stronger notice on every single call.
+model's context: "hand off now" at 40% (repeated every few tool uses), and
+from 45%, the hard limit no session may pass, a stronger notice on every
+single call. Below 40% it says nothing.
 The rule is in .claude/skills/feature-loop/workflow.md, "Context budget".
 
 Report mode (--report): prints one line per recently active Claude session on
@@ -30,7 +30,6 @@ import sys
 import tempfile
 import time
 
-WARN_PCT = 35
 HANDOFF_PCT = 40
 HARD_PCT = 45           # the hard limit: from here the notice comes on every call
 DEBOUNCE_CALLS = 5      # tool uses between repeated hand-off notices (40% to 45%)
@@ -130,7 +129,6 @@ def level_for(pct):
     return (
         "hard" if pct >= HARD_PCT
         else "handoff" if pct >= HANDOFF_PCT
-        else "warn" if pct >= WARN_PCT
         else None
     )
 
@@ -145,19 +143,12 @@ def notice(level, pct, source):
             f"the hand-off file ({HANDOFF_DOC}, format in docs/agents/handoff.md), start "
             "the successor, end your turn. This notice repeats on every call until you do."
         )
-    if level == "handoff":
-        return (
-            f"[Context budget] This session has used {pct}% of its context window "
-            f"({source}): the hand-off point is {HANDOFF_PCT}% and the hard limit is "
-            f"{HARD_PCT}%. Hand off now: follow {HANDOFF_DOC} (format in "
-            "docs/agents/handoff.md). Finish the current tool call, start nothing new, "
-            "write the hand-off file, hand over to the successor, then end your turn."
-        )
     return (
         f"[Context budget] This session has used {pct}% of its context window "
-        f"({source}). It hands off at {HANDOFF_PCT}% and must never pass {HARD_PCT}%. "
-        "Finish the current step, avoid reading large files or long outputs, and get "
-        f"ready to hand off ({HANDOFF_DOC})."
+        f"({source}): the hand-off point is {HANDOFF_PCT}% and the hard limit is "
+        f"{HARD_PCT}%. Hand off now: follow {HANDOFF_DOC} (format in "
+        "docs/agents/handoff.md). Finish the current tool call, start nothing new, "
+        "write the hand-off file, hand over to the successor, then end your turn."
     )
 
 
@@ -228,8 +219,8 @@ def report_mode(minutes):
     rows.sort(reverse=True)
     print(f"{'used%':>6}  {'source':<22} {'model':<18} {'branch':<24} cwd  [session]")
     for pct, source, model, branch, cwd, sid in rows:
-        flag = {"hard": f"  <-- OVER {HARD_PCT}% LIMIT", "handoff": "  <-- HAND OFF",
-                "warn": "  <-- warn"}.get(level_for(pct), "")
+        flag = {"hard": f"  <-- OVER {HARD_PCT}% LIMIT",
+                "handoff": "  <-- HAND OFF"}.get(level_for(pct), "")
         print(f"{pct:>5.0f}%  {source:<22} {model[:18]:<18} {branch[:24]:<24} {cwd}  [{sid[:8]}]{flag}")
 
 

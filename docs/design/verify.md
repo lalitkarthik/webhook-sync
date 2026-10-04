@@ -23,7 +23,7 @@ flowchart LR
 | **Source against ledger** | nightly | every payment created in the window (default 30 days), listed with its current state, against its `payments` row | one Stripe read per 100 payments |
 | **Independent totals** | nightly | the source's balance transactions in the window, grouped by `reporting_category` (charge, refund, dispute, fee, partial capture reversal and the rest), in the settlement currency and windowed by each balance transaction's own time, against the ledger's figures built the same way ([Q99](grilling-log.md)) | a few reads |
 
-**For Razorpay**, the source-against-ledger check lists `GET /v1/payments` by creation time, one read per 100 payments. The independent totals wait: Razorpay's only totals source, the settlement report, is keyed by settlement day, and a test account has no settlements (G53), so version 1's nightly verify runs the first two checks.
+**For Razorpay**, the source-against-ledger check lists `GET /v1/payments` by creation time, one read per 100 payments, and `GET /v1/refunds` for the window plus 21 days, attaching processed refunds to their payments, because a listed payment's refunds come back empty ([Q151](grilling-log.md), G71). The independent totals wait: Razorpay's only totals source, the settlement report, is keyed by settlement day, and a test account has no settlements (G53), so version 1's nightly verify runs the first two checks.
 
 The hourly check needs no source calls, because Stripe has no totals endpoint and summing would mean listing every payment each hour against the read allowance (F18, [Q89](grilling-log.md)).
 

@@ -133,9 +133,10 @@ mode reads to propose the next feature.
 Run [gaps.md](gaps.md) on the new design, on this branch and without a PR of its own (from its
 step 2 when this session wrote the pages, from step 1 otherwise), so `research-gaps.md` joins the
 design PR. Like every design page it opens with the **What this page contains.** and **How to
-read it.** lines; the template in gaps.md has them. When the context guard has already warned
-(35%), skip this step and tell the user in the final message to run `/feature-loop gaps` before
-the first `/feature-loop plan`.
+read it.** lines; the template in gaps.md has them. When the context guard says "hand
+off now" before this step starts, do not hand off for it: skip the step, finish the design PR, and
+tell the user in the final message to run `/feature-loop gaps` before the first
+`/feature-loop plan`.
 
 ## 8. Approve and hand over
 

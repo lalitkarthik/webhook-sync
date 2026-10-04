@@ -1,0 +1,356 @@
+[
+  {
+    "recorded_at": "2026-10-03T07:54:38+00:00",
+    "request": "GET /v1/refunds?from=1790970043&to=1790970043",
+    "http": 200,
+    "elapsed_ms": 922,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:54:38 GMT",
+      "content-type": "application/json; charset=utf-8"
+    },
+    "body_summary": {
+      "entity": "collection",
+      "count": 1,
+      "top_level_keys": [
+        "count",
+        "entity",
+        "items"
+      ],
+      "items": [
+        {
+          "id": "rfnd_Tj9tB2hm5WLvww",
+          "created_at": 1790970043,
+          "status": "processed",
+          "payment_id": "pay_Tj9gmEfed6kRqO"
+        }
+      ]
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:54:39+00:00",
+    "request": "GET /v1/refunds?from=1790970053&to=1790970053",
+    "http": 200,
+    "elapsed_ms": 827,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:54:39 GMT",
+      "content-type": "application/json; charset=utf-8"
+    },
+    "body_summary": {
+      "entity": "collection",
+      "count": 1,
+      "top_level_keys": [
+        "count",
+        "entity",
+        "items"
+      ],
+      "items": [
+        {
+          "id": "rfnd_Tj9tMhKlOulF3Q",
+          "created_at": 1790970053,
+          "status": "processed",
+          "payment_id": "pay_Tj9gmEfed6kRqO"
+        }
+      ]
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:54:40+00:00",
+    "request": "GET /v1/refunds?from=1790970044&to=1790970052",
+    "http": 200,
+    "elapsed_ms": 768,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:54:40 GMT",
+      "content-type": "application/json; charset=utf-8"
+    },
+    "body_summary": {
+      "entity": "collection",
+      "count": 0,
+      "top_level_keys": [
+        "count",
+        "entity",
+        "items"
+      ],
+      "items": []
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:54:41+00:00",
+    "request": "GET /v1/refunds?from=1790970053",
+    "http": 200,
+    "elapsed_ms": 809,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:54:41 GMT",
+      "content-type": "application/json; charset=utf-8"
+    },
+    "body_summary": {
+      "entity": "collection",
+      "count": 1,
+      "top_level_keys": [
+        "count",
+        "entity",
+        "items"
+      ],
+      "items": [
+        {
+          "id": "rfnd_Tj9tMhKlOulF3Q",
+          "created_at": 1790970053,
+          "status": "processed",
+          "payment_id": "pay_Tj9gmEfed6kRqO"
+        }
+      ]
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:54:42+00:00",
+    "request": "GET /v1/refunds?to=1790970043",
+    "http": 200,
+    "elapsed_ms": 875,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:54:42 GMT",
+      "content-type": "application/json; charset=utf-8"
+    },
+    "body_summary": {
+      "entity": "collection",
+      "count": 1,
+      "top_level_keys": [
+        "count",
+        "entity",
+        "items"
+      ],
+      "items": [
+        {
+          "id": "rfnd_Tj9tB2hm5WLvww",
+          "created_at": 1790970043,
+          "status": "processed",
+          "payment_id": "pay_Tj9gmEfed6kRqO"
+        }
+      ]
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:54:43+00:00",
+    "request": "GET /v1/refunds?from=1790970054",
+    "http": 200,
+    "elapsed_ms": 780,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:54:42 GMT",
+      "content-type": "application/json; charset=utf-8"
+    },
+    "body_summary": {
+      "entity": "collection",
+      "count": 0,
+      "top_level_keys": [
+        "count",
+        "entity",
+        "items"
+      ],
+      "items": []
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:54:43+00:00",
+    "request": "GET /v1/refunds?from=1790970053&to=1790970043",
+    "http": 200,
+    "elapsed_ms": 785,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:54:43 GMT",
+      "content-type": "application/json; charset=utf-8"
+    },
+    "body_summary": {
+      "entity": "collection",
+      "count": 0,
+      "top_level_keys": [
+        "count",
+        "entity",
+        "items"
+      ],
+      "items": []
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:54:44+00:00",
+    "request": "GET /v1/refunds?from=1790970043000",
+    "http": 200,
+    "elapsed_ms": 794,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:54:44 GMT",
+      "content-type": "application/json; charset=utf-8"
+    },
+    "body_summary": {
+      "entity": "collection",
+      "count": 0,
+      "top_level_keys": [
+        "count",
+        "entity",
+        "items"
+      ],
+      "items": []
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:54:45+00:00",
+    "request": "GET /v1/refunds?to=1790970053000",
+    "http": 200,
+    "elapsed_ms": 820,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:54:45 GMT",
+      "content-type": "application/json; charset=utf-8"
+    },
+    "body_summary": {
+      "entity": "collection",
+      "count": 2,
+      "top_level_keys": [
+        "count",
+        "entity",
+        "items"
+      ],
+      "items": [
+        {
+          "id": "rfnd_Tj9tMhKlOulF3Q",
+          "created_at": 1790970053,
+          "status": "processed",
+          "payment_id": "pay_Tj9gmEfed6kRqO"
+        },
+        {
+          "id": "rfnd_Tj9tB2hm5WLvww",
+          "created_at": 1790970043,
+          "status": "processed",
+          "payment_id": "pay_Tj9gmEfed6kRqO"
+        }
+      ]
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:54:46+00:00",
+    "request": "GET /v1/refunds?from=1790970043000&to=1790970053000",
+    "http": 200,
+    "elapsed_ms": 791,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:54:46 GMT",
+      "content-type": "application/json; charset=utf-8"
+    },
+    "body_summary": {
+      "entity": "collection",
+      "count": 0,
+      "top_level_keys": [
+        "count",
+        "entity",
+        "items"
+      ],
+      "items": []
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:54:47+00:00",
+    "request": "GET /v1/refunds?from=-1",
+    "http": 400,
+    "elapsed_ms": 864,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:54:46 GMT",
+      "content-type": "application/json; charset=utf-8"
+    },
+    "body": {
+      "error": {
+        "code": "BAD_REQUEST_ERROR",
+        "description": "The from must be no less than 0.",
+        "metadata": {},
+        "reason": "input_validation_failed",
+        "source": "business",
+        "step": "payment_initiation"
+      }
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:54:47+00:00",
+    "request": "GET /v1/refunds?to=-1",
+    "http": 400,
+    "elapsed_ms": 787,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:54:47 GMT",
+      "content-type": "application/json; charset=utf-8"
+    },
+    "body": {
+      "error": {
+        "code": "BAD_REQUEST_ERROR",
+        "description": "The to must be no less than 0.",
+        "metadata": {},
+        "reason": "input_validation_failed",
+        "source": "business",
+        "step": "payment_initiation"
+      }
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:54:48+00:00",
+    "request": "GET /v1/refunds?from=1790970043.5",
+    "http": 400,
+    "elapsed_ms": 784,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:54:48 GMT",
+      "content-type": "application/json; charset=utf-8"
+    },
+    "body": {
+      "error": {
+        "code": "BAD_REQUEST_ERROR",
+        "description": "The from must be an integer.",
+        "metadata": {},
+        "reason": "input_validation_failed",
+        "source": "business",
+        "step": "payment_initiation"
+      }
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:54:49+00:00",
+    "request": "GET /v1/refunds?from=abc",
+    "http": 400,
+    "elapsed_ms": 788,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:54:49 GMT",
+      "content-type": "application/json; charset=utf-8"
+    },
+    "body": {
+      "error": {
+        "code": "BAD_REQUEST_ERROR",
+        "description": "The from must be an integer.",
+        "metadata": {},
+        "reason": "input_validation_failed",
+        "source": "business",
+        "step": "payment_initiation"
+      }
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:54:53+00:00",
+    "request": "GET /v1/refunds",
+    "http": 200,
+    "elapsed_ms": 862,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:54:53 GMT",
+      "content-type": "application/json; charset=utf-8"
+    },
+    "body_summary": {
+      "entity": "collection",
+      "count": 2,
+      "top_level_keys": [
+        "count",
+        "entity",
+        "items"
+      ],
+      "items": [
+        {
+          "id": "rfnd_Tj9tMhKlOulF3Q",
+          "created_at": 1790970053,
+          "status": "processed",
+          "payment_id": "pay_Tj9gmEfed6kRqO"
+        },
+        {
+          "id": "rfnd_Tj9tB2hm5WLvww",
+          "created_at": 1790970043,
+          "status": "processed",
+          "payment_id": "pay_Tj9gmEfed6kRqO"
+        }
+      ]
+    }
+  }
+]

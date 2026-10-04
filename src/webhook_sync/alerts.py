@@ -29,7 +29,17 @@ from webhook_sync.queue.pause import PauseTarget
 
 log = logging.getLogger("webhook_sync.alerts")
 
-type AlertKind = Literal["paused", "dead_jobs", "sheet_changed", "unknown_currency"]
+type AlertKind = Literal[
+    "paused",
+    "dead_jobs",
+    "sheet_changed",
+    "unknown_currency",
+    "silent_webhook",
+    "verify_differences",
+    "stale_twice",
+]
+"""P3's kinds, and P4's: events found only by the sweeper, verify's unrepaired differences,
+and the same payment stale on two full runs in a row (Q155)."""
 
 type Outcome = Literal["sent", "suppressed", "logged", "failed"]
 """What became of an alert: posted, held back by the hourly rule, logged for want of a URL, or
@@ -43,6 +53,13 @@ TIMEOUT = 10.0
 
 DEAD_JOBS_CHECK_EVERY = 60.0
 """Seconds between dead-jobs checks (A17)."""
+
+SILENT_WEBHOOK_ADVICE = (
+    "Check the webhook settings in your Razorpay dashboard. A webhook Razorpay disabled after"
+    " 24 hours of failures stays disabled until you re-enable it under Accounts & Settings"
+    " \u203a Webhooks."
+)
+"""What the `silent_webhook` alert tells the owner to do (sweeper.md, "Silent webhooks")."""
 
 MASK = "***"
 _EMAIL = re.compile(r"[^\s@<>()\[\]{}\"',;:]+@[^\s@<>()\[\]{}\"',;:]+")
@@ -84,6 +101,14 @@ class Alerter:
             f"{count} payment(s) held back from the sheet, their jobs dead ({codes})",
         )
 
+    async def silent_webhook(self, found: str) -> None:
+        """The `silent_webhook` alert: what the sweeper found that no delivery brought, and how
+        to re-enable a webhook Razorpay disabled (Q149). Never raises."""
+        await self._never_raise(
+            "silent_webhook",
+            f"Events are reaching us only through the sweeper: {found}. {SILENT_WEBHOOK_ADVICE}",
+        )
+
     async def check_dead_jobs(self) -> Outcome | None:
         """One dead-jobs check: when `dead_jobs` is due and jobs went dead since its last alert,
         send their counts by stage. None when nothing is sent."""
@@ -116,6 +141,24 @@ class Alerter:
             except Exception:
                 log.exception("dead-jobs check failed")
             await asyncio.sleep(DEAD_JOBS_CHECK_EVERY)
+
+    async def verify_differences(self, unrepaired: Mapping[str, int]) -> None:
+        """The `verify_differences` alert: a full verify's findings left unrepaired, counted
+        by kind. Never raises."""
+        kinds = ", ".join(f"{kind} {n}" for kind, n in sorted(unrepaired.items()))
+        total = sum(unrepaired.values())
+        await self._never_raise(
+            "verify_differences", f"{total} difference(s) verify left unrepaired ({kinds})"
+        )
+
+    async def stale_twice(self, payment_ids: Sequence[str]) -> None:
+        """The `stale_twice` alert: payments stale on two full verify runs in a row. Never
+        raises."""
+        await self._never_raise(
+            "stale_twice",
+            f"{len(payment_ids)} payment(s) stale on two full verify runs in a row:"
+            f" {', '.join(payment_ids)}",
+        )
 
     async def _never_raise(self, kind: AlertKind, text: str) -> None:
         try:

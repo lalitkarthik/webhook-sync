@@ -1,0 +1,128 @@
+[
+  {
+    "recorded_at": "2026-10-03T07:53:30+00:00",
+    "request": "GET /v1/payments?count=0",
+    "http": 400,
+    "elapsed_ms": 1119,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:53:29 GMT",
+      "content-type": "application/json"
+    },
+    "body": {
+      "error": {
+        "code": "BAD_REQUEST_ERROR",
+        "description": "The count must be at least 1.",
+        "source": "internal",
+        "step": "payment_initiation",
+        "reason": "input_validation_failed",
+        "metadata": {},
+        "field": "count"
+      }
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:53:31+00:00",
+    "request": "GET /v1/payments?count=101",
+    "http": 400,
+    "elapsed_ms": 1145,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:53:31 GMT",
+      "content-type": "application/json"
+    },
+    "body": {
+      "error": {
+        "code": "BAD_REQUEST_ERROR",
+        "description": "The count may not be greater than 100.",
+        "source": "internal",
+        "step": "payment_initiation",
+        "reason": "input_validation_failed",
+        "metadata": {},
+        "field": "count"
+      }
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:53:33+00:00",
+    "request": "GET /v1/payments?count=-1",
+    "http": 400,
+    "elapsed_ms": 1061,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:53:33 GMT",
+      "content-type": "application/json"
+    },
+    "body": {
+      "error": {
+        "code": "BAD_REQUEST_ERROR",
+        "description": "The count must be at least 1.",
+        "source": "internal",
+        "step": "payment_initiation",
+        "reason": "input_validation_failed",
+        "metadata": {},
+        "field": "count"
+      }
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:53:35+00:00",
+    "request": "GET /v1/payments?count=abc",
+    "http": 400,
+    "elapsed_ms": 1199,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:53:34 GMT",
+      "content-type": "application/json"
+    },
+    "body": {
+      "error": {
+        "code": "BAD_REQUEST_ERROR",
+        "description": "The count must be an integer.",
+        "source": "internal",
+        "step": "payment_initiation",
+        "reason": "input_validation_failed",
+        "metadata": {},
+        "field": "count"
+      }
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:53:36+00:00",
+    "request": "GET /v1/payments?skip=-1",
+    "http": 400,
+    "elapsed_ms": 1088,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:53:35 GMT",
+      "content-type": "application/json"
+    },
+    "body": {
+      "error": {
+        "code": "BAD_REQUEST_ERROR",
+        "description": "The skip must be at least 0.",
+        "source": "internal",
+        "step": "payment_initiation",
+        "reason": "input_validation_failed",
+        "metadata": {},
+        "field": "skip"
+      }
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:53:37+00:00",
+    "request": "GET /v1/payments?skip=abc",
+    "http": 400,
+    "elapsed_ms": 1086,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:53:37 GMT",
+      "content-type": "application/json"
+    },
+    "body": {
+      "error": {
+        "code": "BAD_REQUEST_ERROR",
+        "description": "The skip must be an integer.",
+        "source": "internal",
+        "step": "payment_initiation",
+        "reason": "input_validation_failed",
+        "metadata": {},
+        "field": "skip"
+      }
+    }
+  }
+]

@@ -1,8 +1,9 @@
 """The public app: `POST /webhooks/razorpay` and `GET /health` (receiver.md).
 
 Built from a config object and a data directory. Its lifespan opens the writer and applies
-pending migrations before the first request, starts the stage runners and the reaper, and closes
-the writer at the end. `shut_down` runs the shutdown's steps while the app still answers.
+pending migrations before the first request, starts the stage runners, the sweeper, the hourly
+verify, the nightly full verify and the reaper, and closes the writer at the end. `shut_down`
+runs the shutdown's steps while the app still answers.
 """
 
 import asyncio
@@ -45,6 +46,8 @@ from webhook_sync.sinks.sheets import sheets_runner
 from webhook_sync.sinks.sheets_client import ServiceAccountTokens, SheetsClient
 from webhook_sync.sources.base import EventDescription, Rejection, SourceAdapter, VerifiedDelivery
 from webhook_sync.sources.razorpay import EVENT_ID_HEADER, RazorpayAdapter, api_client
+from webhook_sync.sweeper import Sweeper
+from webhook_sync.verify import FullVerify, SheetVerify
 
 log = logging.getLogger("webhook_sync.receiver")
 
@@ -85,16 +88,11 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
             applied = await apply_pending(writer)
             if applied:
                 log.info("migrations applied: %s", ", ".join(f"{v:04d}" for v in applied))
+            razorpay = razorpay_adapter(config, razorpay_api)
             receiver = Receiver(
                 config=config,
                 writer=writer,
-                razorpay=RazorpayAdapter(
-                    mode=config.razorpay.mode,
-                    account=config.razorpay.account,
-                    webhook_secrets=config.razorpay_secrets.webhook_secrets,
-                    api=razorpay_api,
-                    metadata_keys=config.razorpay.metadata_keys,
-                ),
+                razorpay=razorpay,
                 rate_cap=RateCap(),
                 rejections=RejectionCounters(),
                 fail_first=FailFirst(demo_fail_first) if demo_fail_first is not None else None,
@@ -116,25 +114,37 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
                 retry_profile=config.service.retry_profile,
             )
             stages: list[StageRunner | BatchStageRunner] = [ledger]
+            sheet_verify: SheetVerify | None = None
             if SHEETS_SINK in config.sinks:
-                sheets = SheetsClient(
-                    sheets_http,
-                    config.sheets.spreadsheet_id,
-                    ServiceAccountTokens(config.google_secrets.service_account),
+                sheets = sheets_client(config, sheets_http)
+                flusher = sheets_runner(
+                    writer,
+                    sheets,
+                    config,
+                    claimed_by=claimed_by,
+                    pauses=pauses,
+                    alerter=alerter,
                 )
-                stages.append(
-                    sheets_runner(
-                        writer,
-                        sheets,
-                        config,
-                        claimed_by=claimed_by,
-                        pauses=pauses,
-                        alerter=alerter,
-                    )
+                stages.append(flusher)
+                sheet_verify = SheetVerify(
+                    writer, sheets, config, pauses=pauses, request_flush=flusher.request
                 )
             runners = Runners(writer, stages)
             app.state.runners = runners
             runners.start()
+            # The sweeper shares the fetch's adapter, so lists and fetches share one bucket.
+            sweeper = Sweeper(writer, razorpay, config, pauses=pauses, alerter=alerter)
+            app.state.sweeper = sweeper  # backfill and sweep on demand
+            loops = [asyncio.create_task(sweeper.run())]
+            if sheet_verify is not None:
+                loops.append(asyncio.create_task(sheet_verify.run_hourly()))
+            full_verify = FullVerify(
+                writer, razorpay, config, pauses=pauses, alerter=alerter, sheet=sheet_verify
+            )
+            loops.append(asyncio.create_task(full_verify.run_nightly()))
+            app.state.loops = loops  # runs by hand join them, so the shutdown stops them too
+            app.state.full_verify = full_verify  # verify on demand
+            app.state.sheet_verify = sheet_verify
             minutely = asyncio.create_task(_write_rejection_counts_every_minute(receiver))
             dead_jobs_check = asyncio.create_task(alerter.run_dead_jobs_check())  # A17
             reaper = asyncio.create_task(
@@ -251,6 +261,26 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
     return app
 
 
+def razorpay_adapter(config: Config, api: httpx.AsyncClient) -> RazorpayAdapter:
+    """The configured account's Razorpay adapter, calling Razorpay through `api`."""
+    return RazorpayAdapter(
+        mode=config.razorpay.mode,
+        account=config.razorpay.account,
+        webhook_secrets=config.razorpay_secrets.webhook_secrets,
+        api=api,
+        metadata_keys=config.razorpay.metadata_keys,
+    )
+
+
+def sheets_client(config: Config, http: httpx.AsyncClient) -> SheetsClient:
+    """The configured spreadsheet's client, calling Google through `http`."""
+    return SheetsClient(
+        http,
+        config.sheets.spreadsheet_id,
+        ServiceAccountTokens(config.google_secrets.service_account),
+    )
+
+
 def configured_names(config: Config) -> dict[str, PauseTarget]:
     """Every configured source and sink, as `sinks` names them."""
     names: dict[str, PauseTarget] = {RazorpayAdapter.name: "source"}
@@ -277,11 +307,18 @@ def instance_id() -> str:
 
 async def shut_down(app: FastAPI) -> None:
     """The shutdown's steps before the listener closes (operations.md): answer 503 to new
-    deliveries → stop claiming → up to 20 s for running jobs → release unfinished leases →
-    write the rejection counts, the open minute's included. The caller then stops listening
-    and releases the lock."""
+    deliveries → stop the sweeper, verify and runs by hand → stop claiming → up to 20 s for
+    running jobs → release unfinished leases → write the rejection counts, the open minute's
+    included. The caller then stops listening and releases the lock."""
     receiver: Receiver = app.state.receiver
     receiver.shutting_down = True
+    loops: list[asyncio.Task[None]] = app.state.loops
+    for loop in list(loops):  # a run by hand leaves the list as it ends
+        # A slice cut short is re-read by the next start's sweep; a verify run cut short
+        # stored nothing, and the next one runs on the hour.
+        loop.cancel()
+        with suppress(asyncio.CancelledError):
+            await loop
     runners: Runners = app.state.runners
     await runners.stop()
     await write_all_rejection_counts(receiver)

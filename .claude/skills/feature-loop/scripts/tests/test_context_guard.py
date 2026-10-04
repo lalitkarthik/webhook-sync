@@ -12,14 +12,13 @@ guard = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(guard)
 
 
-@pytest.mark.parametrize("pct, level", [(0, None), (34.9, None), (35, "warn"), (39.9, "warn"),
-                                        (40, "handoff"), (44.9, "handoff"), (45, "hard"), (80, "hard")])
-def test_warns_at_35_hands_off_at_40_and_is_over_the_limit_at_45(pct, level):
+@pytest.mark.parametrize("pct, level", [(0, None), (35, None), (39.9, None), (40, "handoff"),
+                                        (44.9, "handoff"), (45, "hard"), (80, "hard")])
+def test_says_nothing_below_40_hands_off_at_40_and_is_over_the_limit_at_45(pct, level):
     assert guard.level_for(pct) == level
 
 
 def test_notices_state_the_budget_and_never_round_up_to_the_next_level():
-    assert "40%" in guard.notice("warn", 36, "x") and "45%" in guard.notice("warn", 36, "x")
     text = guard.notice("handoff", 44.9, "x")
     assert "used 44%" in text and "hand-off point is 40%" in text and "hard limit is 45%" in text
     assert "no session goes past 45%" in guard.notice("hard", 45.2, "x")
@@ -44,7 +43,7 @@ def hook(tmp_path, monkeypatch, capsys, tokens):
 
 
 def test_hook_hands_off_at_40_percent_of_the_window(tmp_path, monkeypatch, capsys):
-    assert hook(tmp_path, monkeypatch, capsys, 340_000) is None
-    assert "get ready to hand off" in hook(tmp_path, monkeypatch, capsys, 350_000)
+    assert hook(tmp_path, monkeypatch, capsys, 350_000) is None
+    assert hook(tmp_path, monkeypatch, capsys, 399_000) is None
     assert "Hand off now" in hook(tmp_path, monkeypatch, capsys, 400_000)
     assert "OVER THE HARD LIMIT" in hook(tmp_path, monkeypatch, capsys, 450_000)

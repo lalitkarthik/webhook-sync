@@ -19,9 +19,10 @@ import asyncio
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import httpx
 from razorpay import Utility  # pyright: ignore[reportMissingTypeStubs]
@@ -29,7 +30,8 @@ from razorpay.errors import SignatureVerificationError  # pyright: ignore[report
 
 from webhook_sync.clock import utc_now
 from webhook_sync.config import Mode
-from webhook_sync.queue import Failure
+from webhook_sync.db.writer import Writer
+from webhook_sync.queue import Failure, Pauses, pause
 from webhook_sync.receiver.rate_cap import RateCap
 from webhook_sync.sources.base import (
     BusinessRow,
@@ -121,6 +123,53 @@ REFUNDS_PAGE = 100
 """Refunds asked for per page of `GET /v1/payments/{id}/refunds`, the most Razorpay allows."""
 
 
+LIST_PAGE = 100
+"""Items asked for per page of a payments or refunds list, the most Razorpay allows."""
+
+FIRST_SECOND = 946684800
+LAST_SECOND = 4765046400
+"""The Unix seconds Razorpay's payments list accepts as a bound (G71); a millisecond time is
+far past the last."""
+
+
+@dataclass(frozen=True)
+class Listed:
+    """Every item a list returned for a range, newest first, and Razorpay's time from the
+    first page's `Date` header: the sweeper's clock is Razorpay's, never ours (A14)."""
+
+    items: tuple[dict[str, Any], ...]
+    source_now: datetime
+
+
+def _check_bounds(start: int, end: int) -> None:
+    """Refuse bounds that aren't Unix seconds, or a `start` after `end`, before any call."""
+    for name, bound in (("start", start), ("end", end)):
+        if type(bound) is not int:  # a bool or a float slips past the type checker
+            raise ValueError(f"a list's {name} must be Unix seconds, not {bound!r}")
+        if not FIRST_SECOND <= bound <= LAST_SECOND:
+            raise ValueError(f"a list's {name} {bound} is not Unix seconds (milliseconds?)")
+    if start > end:
+        raise ValueError(f"a list's start {start} is after its end {end}")
+
+
+def _date(value: str | None) -> datetime | None:
+    """An HTTP `Date` header as a UTC time, or None when absent or unreadable."""
+    if value is None:
+        return None
+    try:
+        when = parsedate_to_datetime(value)
+    except TypeError, ValueError:
+        return None
+    return when.replace(tzinfo=UTC) if when.tzinfo is None else when.astimezone(UTC)
+
+
+def _list_failure(answer: NotFound | Failure) -> Failure:
+    """A list's failure: as the fetch's, except that a list has no id to be unknown."""
+    if isinstance(answer, Failure):
+        return answer
+    return Failure(f"Razorpay answered HTTP {answer.http_status} to a list", "dead")
+
+
 UNKNOWN_ID = "The id provided does not exist"
 """Razorpay's 400 description for a payment id it doesn't know: not found at source (A5)."""
 
@@ -207,11 +256,81 @@ class RazorpayAdapter:
             if len(page) < REFUNDS_PAGE:
                 return refunds
 
+    async def list_payments(
+        self, start: int, end: int, *, writer: Writer, pauses: Pauses
+    ) -> Listed | Failure:
+        """Every payment created from `start` to `end`, both inclusive, newest first. A 401 or
+        403 pauses the source in `sinks` and `pauses`, with the `paused` alert."""
+        return await self._paused_on_refusal(
+            await self._list("/v1/payments", start, end), writer, pauses
+        )
+
+    async def list_refunds(
+        self, start: int, end: int, *, writer: Writer, pauses: Pauses
+    ) -> Listed | Failure:
+        """Every refund created from `start` to `end`, as `list_payments`. The `status` filter
+        is never sent: Razorpay accepts it and doesn't filter (G73)."""
+        return await self._paused_on_refusal(
+            await self._list("/v1/refunds", start, end), writer, pauses
+        )
+
+    async def _paused_on_refusal(
+        self, answer: Listed | Failure, writer: Writer, pauses: Pauses
+    ) -> Listed | Failure:
+        """A list runs in no job, so a `pause` failure pauses the source here (A12)."""
+        if isinstance(answer, Failure) and answer.error_class == "pause":
+            await pause(writer, pauses, "source", self.name, answer.error, now=utc_now())
+        return answer
+
+    async def _list(self, path: str, start: int, end: int) -> Listed | Failure:
+        """Page a list by creation time (sweeper.md, "Razorpay: polling").
+
+        Both bounds are always sent, in Unix seconds: a missing bound means unbounded, and the
+        refunds list reads a millisecond `to` as no bound at all (G71, G73). Each next page
+        moves `to` to the oldest `created_at` seen plus one and drops ids already seen; a page
+        that can't move `to` down (over 100 items in two seconds) is paged on with `skip`. That
+        doesn't rely on the order of items created in the same second. A short page is the
+        end: skip past the end is a 200 with no items."""
+        _check_bounds(start, end)
+        items: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        source_now: datetime | None = None
+        upper, skip = end, 0
+        while True:
+            params = [("from", str(start)), ("to", str(upper)), ("count", str(LIST_PAGE))]
+            if skip:
+                params.append(("skip", str(skip)))
+            answer = await self._call(path, params)
+            if not isinstance(answer, tuple):
+                return _list_failure(answer)
+            body, headers = answer
+            if source_now is None:
+                source_now = _date(headers.get("date"))
+                if source_now is None:
+                    return Failure("Razorpay answered a list with no readable Date", "retry")
+            page = cast(list[dict[str, Any]], body.get("items") or [])
+            items.extend(item for item in page if item["id"] not in seen)
+            seen.update(item["id"] for item in page)
+            if len(page) < LIST_PAGE:
+                return Listed(tuple(items), source_now)
+            oldest = min(item["created_at"] for item in page)
+            if oldest + 1 < upper:
+                upper, skip = oldest + 1, 0
+            else:
+                skip += len(page)
+
     async def _get(
         self, path: str, params: Sequence[tuple[str, str]]
     ) -> dict[str, Any] | NotFound | Failure:
-        """One API call, once the bucket gives a token: the answer's JSON object, or what its
-        failure means (A12)."""
+        """One API call: the answer's JSON object, or what its failure means (A12)."""
+        answer = await self._call(path, params)
+        return answer[0] if isinstance(answer, tuple) else answer
+
+    async def _call(
+        self, path: str, params: Sequence[tuple[str, str]]
+    ) -> tuple[dict[str, Any], httpx.Headers] | NotFound | Failure:
+        """One API call, once the bucket gives a token: the answer's JSON object and headers,
+        or what its failure means (A12)."""
         # The bucket refills with the one clock's time, so it is polled, a token's time apart.
         while True:
             if self._bucket.allow(self.name):
@@ -258,7 +377,7 @@ class RazorpayAdapter:
                 "dead",
                 http_status=status,
             )
-        return cast(dict[str, Any], body)
+        return cast(dict[str, Any], body), response.headers
 
     def to_row(self, state: Mapping[str, Any]) -> BusinessRow | None:
         return payment_row(state, metadata_keys=self._metadata_keys)
@@ -358,6 +477,79 @@ class RazorpayAdapter:
             ignore_reason=ignore_reason,
             payload=_allow_listed(body),
         )
+
+    def describe_listed(
+        self, entity: ListedEntity, item: Mapping[str, Any], *, origin: SweptOrigin
+    ) -> tuple[str, EventDescription] | None:
+        """A listed payment or refund as its synthetic event: its id
+        `<origin>:<entity id>:<state hash>` and what is stored about it (Q146). None when its
+        state makes no event: a `created` payment, or a status with no synthetic type.
+
+        The item is described as a delivery of its synthetic type would be, so the type, the
+        fingerprint (Q117, with the entity's `created_at`), the payment key, `source_created_at`
+        and the allow-listed payload (Q119) are the receiver's own."""
+        event_type = SYNTHETIC_TYPES[entity].get(item.get("status"))
+        if event_type is None:
+            return None
+        body = {
+            "entity": "event",
+            "account_id": self._account,
+            "event": event_type,
+            "contains": [entity],
+            "payload": {entity: {"entity": dict(item)}},
+            "created_at": item.get("created_at"),
+        }
+        description = self._describe(body)
+        if isinstance(description, Rejection):
+            return None  # no id: nothing to key an event by
+        return f"{origin}:{item['id']}:{self.state_hash(entity, item)}", description
+
+    def state_hash(self, entity: ListedEntity, item: Mapping[str, Any]) -> str:
+        """SHA-256 of the canonical JSON of the fields that can change the row (sources.md):
+        a payment's `notes` only for the configured metadata keys; never `acquirer_data`."""
+        state = {name: item.get(name) for name in _STATE_FIELDS[entity]}
+        if entity == "payment" and self._metadata_keys:
+            notes = _object(item.get("notes"))
+            state["notes"] = {key: notes[key] for key in self._metadata_keys if key in notes}
+        canonical = json.dumps(state, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+type ListedEntity = Literal["payment", "refund"]
+"""What a Razorpay list holds: the payments list's items, or the refunds list's."""
+
+type SweptOrigin = Literal["sweep", "backfill"]
+"""The origin of a synthetic event, and its id's prefix."""
+
+SYNTHETIC_TYPES: dict[ListedEntity, dict[object, str]] = {
+    "payment": {
+        "authorized": "payment.authorized",
+        "captured": "payment.captured",
+        "refunded": "payment.captured",
+        "failed": "payment.failed",
+    },
+    "refund": {
+        "pending": "refund.created",
+        "processed": "refund.processed",
+        "failed": "refund.failed",
+    },
+}
+"""A listed state's synthetic event type (sources.md); a `created` payment has none."""
+
+_STATE_FIELDS: dict[ListedEntity, tuple[str, ...]] = {
+    "payment": (
+        "status",
+        "captured",
+        "amount",
+        "amount_refunded",
+        "refund_status",
+        "fee",
+        "tax",
+        "error_code",
+        "error_reason",
+    ),
+    "refund": ("status", "amount", "speed_processed"),
+}
 
 
 def _allow_listed(body: Mapping[str, Any]) -> dict[str, Any]:

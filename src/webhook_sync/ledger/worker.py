@@ -172,7 +172,7 @@ async def write_row(
         columns = {name: stored[name] for name in HASHED_COLUMNS}
         columns["not_found_at"] = stored["not_found_at"] or to_db_text(now)
     else:
-        columns = _business_columns(row)
+        columns = business_columns(row)
         columns["dispute_status"] = stored["dispute_status"] if stored else None
     new_hash = row_hash(columns)
     if stored is not None and stored["row_hash"] == new_hash:
@@ -221,7 +221,7 @@ async def _stored_row(tx: Transaction, job: ClaimedJob) -> Mapping[str, Any] | N
     return dict(rows[0]) if rows else None
 
 
-def _business_columns(row: BusinessRow) -> dict[str, Any]:
+def business_columns(row: BusinessRow) -> dict[str, Any]:
     """The row's business columns as stored: times as text, metadata as canonical JSON."""
     return {
         "status": row.status,

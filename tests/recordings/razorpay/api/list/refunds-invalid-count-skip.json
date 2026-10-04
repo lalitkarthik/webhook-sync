@@ -1,0 +1,82 @@
+[
+  {
+    "recorded_at": "2026-10-03T07:54:50+00:00",
+    "request": "GET /v1/refunds?count=0",
+    "http": 400,
+    "elapsed_ms": 789,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:54:50 GMT",
+      "content-type": "application/json; charset=utf-8"
+    },
+    "body": {
+      "error": {
+        "code": "BAD_REQUEST_ERROR",
+        "description": "The count must be at least 1.",
+        "metadata": {},
+        "reason": "input_validation_failed",
+        "source": "business",
+        "step": "payment_initiation"
+      }
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:54:50+00:00",
+    "request": "GET /v1/refunds?count=101",
+    "http": 400,
+    "elapsed_ms": 783,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:54:50 GMT",
+      "content-type": "application/json; charset=utf-8"
+    },
+    "body": {
+      "error": {
+        "code": "BAD_REQUEST_ERROR",
+        "description": "The count must be no greater than 100.",
+        "metadata": {},
+        "reason": "input_validation_failed",
+        "source": "business",
+        "step": "payment_initiation"
+      }
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:54:51+00:00",
+    "request": "GET /v1/refunds?count=-1",
+    "http": 400,
+    "elapsed_ms": 763,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:54:51 GMT",
+      "content-type": "application/json; charset=utf-8"
+    },
+    "body": {
+      "error": {
+        "code": "BAD_REQUEST_ERROR",
+        "description": "The count must be no less than 1.",
+        "metadata": {},
+        "reason": "input_validation_failed",
+        "source": "business",
+        "step": "payment_initiation"
+      }
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:54:52+00:00",
+    "request": "GET /v1/refunds?skip=-1",
+    "http": 400,
+    "elapsed_ms": 754,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:54:52 GMT",
+      "content-type": "application/json; charset=utf-8"
+    },
+    "body": {
+      "error": {
+        "code": "BAD_REQUEST_ERROR",
+        "description": "The skip must be no less than 0.",
+        "metadata": {},
+        "reason": "input_validation_failed",
+        "source": "business",
+        "step": "payment_initiation"
+      }
+    }
+  }
+]

@@ -1,0 +1,142 @@
+[
+  {
+    "recorded_at": "2026-10-03T07:55:17+00:00",
+    "request": "GET /v1/payments?after=pay_Tj9rKBOXWcsMeE",
+    "http": 400,
+    "elapsed_ms": 1277,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:55:17 GMT",
+      "content-type": "application/json"
+    },
+    "body": {
+      "error": {
+        "code": "BAD_REQUEST_ERROR",
+        "description": "after is/are not required and should not be sent",
+        "source": "provider",
+        "step": "payment_authorization",
+        "reason": "extra_field_sent",
+        "metadata": {}
+      }
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:55:18+00:00",
+    "request": "GET /v1/payments?before=pay_Tj9rKBOXWcsMeE",
+    "http": 400,
+    "elapsed_ms": 1082,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:55:18 GMT",
+      "content-type": "application/json"
+    },
+    "body": {
+      "error": {
+        "code": "BAD_REQUEST_ERROR",
+        "description": "before is/are not required and should not be sent",
+        "source": "provider",
+        "step": "payment_authorization",
+        "reason": "extra_field_sent",
+        "metadata": {}
+      }
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:55:19+00:00",
+    "request": "GET /v1/payments?starting_after=pay_Tj9rKBOXWcsMeE",
+    "http": 400,
+    "elapsed_ms": 1098,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:55:19 GMT",
+      "content-type": "application/json"
+    },
+    "body": {
+      "error": {
+        "code": "BAD_REQUEST_ERROR",
+        "description": "starting_after is/are not required and should not be sent",
+        "source": "provider",
+        "step": "payment_authorization",
+        "reason": "extra_field_sent",
+        "metadata": {}
+      }
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:55:20+00:00",
+    "request": "GET /v1/payments?ending_before=pay_Tj9rKBOXWcsMeE",
+    "http": 400,
+    "elapsed_ms": 1077,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:55:20 GMT",
+      "content-type": "application/json"
+    },
+    "body": {
+      "error": {
+        "code": "BAD_REQUEST_ERROR",
+        "description": "ending_before is/are not required and should not be sent",
+        "source": "provider",
+        "step": "payment_authorization",
+        "reason": "extra_field_sent",
+        "metadata": {}
+      }
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:55:21+00:00",
+    "request": "GET /v1/payments?cursor=x",
+    "http": 400,
+    "elapsed_ms": 1083,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:55:21 GMT",
+      "content-type": "application/json"
+    },
+    "body": {
+      "error": {
+        "code": "BAD_REQUEST_ERROR",
+        "description": "cursor is/are not required and should not be sent",
+        "source": "provider",
+        "step": "payment_authorization",
+        "reason": "extra_field_sent",
+        "metadata": {}
+      }
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:55:23+00:00",
+    "request": "GET /v1/payments?sort=asc",
+    "http": 400,
+    "elapsed_ms": 1419,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:55:22 GMT",
+      "content-type": "application/json"
+    },
+    "body": {
+      "error": {
+        "code": "BAD_REQUEST_ERROR",
+        "description": "sort is/are not required and should not be sent",
+        "source": "provider",
+        "step": "payment_authorization",
+        "reason": "extra_field_sent",
+        "metadata": {}
+      }
+    }
+  },
+  {
+    "recorded_at": "2026-10-03T07:55:24+00:00",
+    "request": "GET /v1/payments?order=asc",
+    "http": 400,
+    "elapsed_ms": 1077,
+    "headers": {
+      "date": "Sat, 03 Oct 2026 07:55:24 GMT",
+      "content-type": "application/json"
+    },
+    "body": {
+      "error": {
+        "code": "BAD_REQUEST_ERROR",
+        "description": "order is/are not required and should not be sent",
+        "source": "provider",
+        "step": "payment_authorization",
+        "reason": "extra_field_sent",
+        "metadata": {}
+      }
+    }
+  }
+]
