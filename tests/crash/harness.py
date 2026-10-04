@@ -9,20 +9,23 @@ crash test that never crashed proves nothing (A15). `crash.server()` then starts
 on the same database; the test settles it and, while it still runs, reads what it left and ends
 with `crash.check()`, the nine invariants. Not after it stops: on Windows `stop` returns once the
 `wsync.exe` launcher has died, and the server under it may still hold the database's files, so a
-read then fails with a disk I/O error. The fixture is in `conftest.py`.
+read then fails with a disk I/O error. The fixture is in `conftest.py`; the load checks run
+their servers on the same `served_run`.
 """
 
 import asyncio
 import subprocess
 import time
-from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncGenerator, Generator
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
+from fakes.over_http import FakesOverHttp
 from fakes.razorpay import FakeRazorpay
 from fakes.sheets import FakeSheets, Tab
 from invariants import (
@@ -34,13 +37,26 @@ from invariants import (
     observe,
     settle,
 )
-from processes import stop, wait_until_healthy, wsync_path
+from processes import (
+    fixture_environment,
+    free_port,
+    stop,
+    wait_until_healthy,
+    write_serve_config,
+    wsync_path,
+)
+from support import RECORDED_ACCOUNT, TEST_SPREADSHEET_ID
 
-from webhook_sync.config import Config
+from webhook_sync.config import Config, load_config
 from webhook_sync.crashpoints import CRASH_EXIT_CODE, VARIABLE
 
 CRASH_WAIT = 15.0
 """Real seconds a server armed at a crash point gets to reach it, once driven there."""
+A_CONNECTION_EACH = httpx.Limits(max_connections=None, max_keepalive_connections=0)
+"""A server's client sends every request on a connection of its own: a load check's thousand
+concurrent deliveries are a thousand connections, none waiting in the client's pool, and a
+delivery sent again never goes on a connection the server kept alive and is closing by then,
+which would lose it with no answer."""
 
 
 @dataclass
@@ -129,7 +145,9 @@ class CrashRun:
                 admin_url = f"http://127.0.0.1:{self.admin_port}"
                 async with (
                     self.watch,
-                    httpx.AsyncClient(base_url=base_url, trust_env=False, timeout=30) as client,
+                    httpx.AsyncClient(
+                        base_url=base_url, trust_env=False, timeout=30, limits=A_CONNECTION_EACH
+                    ) as client,
                     httpx.AsyncClient(base_url=admin_url, trust_env=False, timeout=30) as admin,
                 ):
                     yield Server(process, client, admin, log)
@@ -151,3 +169,27 @@ class CrashRun:
             watch=self.watch,
         )
         assert_invariants(outcome, self.on_purpose)
+
+
+@contextmanager
+def served_run(data_dir: Path, *, lookback_days: int = 0, extra: str = "") -> Generator[CrashRun]:
+    """A config on `data_dir` for the recordings' account, its first sweep reading
+    `lookback_days` back, with `extra` TOML at its end, and FakeRazorpay and FakeSheets served
+    over HTTP. With no days to read back the first sweep starts empty, so only what a test
+    sends arrives."""
+    razorpay = FakeRazorpay(now=datetime.now(UTC))
+    sheets = FakeSheets(TEST_SPREADSHEET_ID)
+    with FakesOverHttp(razorpay, sheets) as fakes:
+        port, admin_port = free_port(), free_port()
+        config_path = write_serve_config(
+            data_dir.parent,
+            port,
+            admin_port,
+            account=RECORDED_ACCOUNT,
+            api_url=fakes.url,
+            extra=f"\n[sweeper]\ninitial_lookback_days = {lookback_days}\n{extra}",
+        )
+        environ = fakes.environ(fixture_environment())
+        config = load_config(config_path, environ)
+        assert config.service.data_dir == data_dir
+        yield CrashRun(config, config_path, environ, port, admin_port, razorpay, sheets)

@@ -4,6 +4,8 @@
 
 **How to read it.** The invariants are the heart of the page. The first section explains the audit finding that reshaped the rest (F21).
 
+*Updated 2026-10-04 after #53 measured the load checks: the storm runs against the rate cap and re-sends what it refused, its bar is the server-side p99, and the burst runs only under `-m load` (Q171-Q173).*
+
 ## Why the fakes replay recordings
 
 A **fake** built from the design's own beliefs agrees with the design's bugs. The audit found five bugs that fakes written that way would have passed: Stripe resending an event with different bytes (F02), listing events newest first (F03), a sort landing between our read and write (F05), Sheets naming tabs by title (F08), and fetches taking real time (F19). So before any code, a **recording spike** captures what the real services do, and the fakes replay it ([Q82](grilling-log.md)). Razorpay is the first source; what its test mode can't produce is replayed from Razorpay's own documented samples, marked `unrecorded` ([Q113](grilling-log.md)).
@@ -84,8 +86,8 @@ In the pitch-ready cut: `after_event_commit`, `after_sheet_write_before_done` an
 
 | Check | Asserts |
 |---|---|
-| **Duplicate storm:** 1,000 concurrent replays of one recorded, signed delivery, some under a different `x-razorpay-event-id` (caught by the signed-body hash) | every request answered 2xx with **zero** 503s and a p99 under 2 s on the development laptop; then one event, one row, one sheet row, 999 duplicates logged ([Q83](grilling-log.md)) |
-| **Burst:** 200 payments whose fetches take recorded real time | 200 rows; Sheets calls at most three per flush, and flushes no more than one per 3 s of work arriving. The count is printed for the README (F19) |
+| **Duplicate storm:** 1,000 concurrent replays of one recorded, signed delivery, some under a different `x-razorpay-event-id` (caught by the signed-body hash), against the default 50-a-second cap | every reply 2xx or 429 `rate_capped`, with **zero** 503s; each delivery that got a 429 sent again under the cap, as Razorpay's retries would, until answered 2xx; then one event, one row, one sheet row, 999 duplicates logged. The server-side p99 (its own handling time of the deliveries it accepted) under 2 s on the development laptop; the client-side p99 printed, never asserted ([Q83](grilling-log.md), [Q171](grilling-log.md), [Q172](grilling-log.md)) |
+| **Burst:** 200 payments whose fetches take recorded real time | 200 rows; Sheets calls at most three per flush, and flushes no more than one per 3 s of work arriving. The count and the time taken are printed for the README (F19). It takes minutes, so it runs only under `-m load` ([Q173](grilling-log.md)) |
 
 ## What CI runs
 

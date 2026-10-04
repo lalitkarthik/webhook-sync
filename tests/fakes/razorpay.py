@@ -126,6 +126,8 @@ class Sent:
     delivery: Delivery
     status_code: int
     answer: Any
+    elapsed: float = 0.0
+    """Seconds from sending the delivery to its answer."""
 
 
 @dataclass
@@ -315,7 +317,7 @@ class FakeRazorpay:
             except httpx.TransportError:
                 self.unanswered.append(delivery)
                 return None
-            sent = Sent(delivery, answer.status_code, answer.json())
+            sent = Sent(delivery, answer.status_code, answer.json(), answer.elapsed.total_seconds())
             self.sent.append(sent)
             return sent
 

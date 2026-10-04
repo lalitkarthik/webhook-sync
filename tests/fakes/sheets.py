@@ -397,6 +397,8 @@ class FakeSheets:
         self.tabs: list[Tab] = []
         self.calls: list[str] = []
         """Every Sheets call answered, by name: `get`, `getByDataFilter`, `batchUpdate`."""
+        self.called_at: list[datetime] = []
+        """When each call in `calls` was answered, on the one clock."""
         self.written: list[list[Json]] = []
         """The requests of every `batchUpdate` applied, in order: what each write said."""
         self.token_requests = 0
@@ -615,6 +617,7 @@ class FakeSheets:
         try:
             self._admit(kind, request, sid)
             self.calls.append(name)
+            self.called_at.append(utc_now())
             response = httpx.Response(200, json=answer())
         except SheetsError as error:
             return httpx.Response(error.code, json=error.body())
