@@ -5,8 +5,10 @@ on the same database (Q159, Q164).
 and FakeSheets over HTTP (`fakes.over_http`); the test drives it through `server.client`, as
 Razorpay does, and `server.crashed()` fails unless the process exited with the crash code: a
 crash test that never crashed proves nothing (A15). `crash.server()` then starts a new server
-on the same database; the test settles it and ends with `crash.check()`, the nine invariants.
-The fixture is in `conftest.py`.
+on the same database; the test settles it and, while it still runs, reads what it left and ends
+with `crash.check()`, the nine invariants. Not after it stops: on Windows `stop` returns once the
+`wsync.exe` launcher has died, and the server under it may still hold the database's files, so a
+read then fails with a disk I/O error. The fixture is in `conftest.py`.
 """
 
 import asyncio
