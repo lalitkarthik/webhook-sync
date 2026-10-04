@@ -37,7 +37,8 @@ def quick_loops(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 def scenario(config: Config, data_dir: Path, clock: TimeMachineFixture) -> Iterator[Scenario]:
     """Razorpay, Google and the alerts webhook faked through one respx router, and the config
-    the recordings need. The first sweep starts empty, so only what a scenario sends arrives."""
+    the recordings need. The first sweep starts empty, so only what a scenario sends arrives.
+    The sheet holds the buyer's own tab and cells, for invariant 6 (Q168)."""
     scenario_config = replace(
         config,
         razorpay=replace(config.razorpay, account=RECORDED_ACCOUNT, api_url=RAZORPAY_API),
@@ -46,6 +47,7 @@ def scenario(config: Config, data_dir: Path, clock: TimeMachineFixture) -> Itera
     )
     razorpay = FakeRazorpay(now=NOW)
     sheets = FakeSheets(TEST_SPREADSHEET_ID)
+    sheets.add_buyers_own()
     with respx.mock(assert_all_called=False) as router:
         razorpay.mount(router)
         sheets.mount(router)
