@@ -20,9 +20,15 @@ dependencies = [
 [project.scripts]
 wsync = "webhook_sync.cli.main:main"
 
+[project.optional-dependencies]
+demo = [
+    "playwright>=1.56",
+]
+
 [dependency-groups]
 dev = [
     "import-linter>=2.15",
+    "playwright>=1.56",
     "pyright>=1.1.405",
     "pytest>=8.4",
     "pytest-asyncio>=1.2",
@@ -66,6 +72,7 @@ asyncio_default_fixture_loop_scope = "function"
 
 [tool.importlinter]
 root_package = "webhook_sync"
+include_external_packages = true
 
 [[tool.importlinter.contracts]]
 name = "Layers: entry points over workers over queue over storage over primitives"
@@ -77,6 +84,7 @@ type = "layers"
 # stores through receiver.store while the receiver's lifespan starts the sweeper (and verify).
 layers = [
     "webhook_sync.cli",
+    "webhook_sync.demo",
     "webhook_sync.admin",
     "webhook_sync.receiver : webhook_sync.ledger : webhook_sync.sources : webhook_sync.sweeper : webhook_sync.verify",
     "webhook_sync.sinks",
@@ -85,3 +93,25 @@ layers = [
     "webhook_sync.db | webhook_sync.logs | webhook_sync.crashpoints",
     "webhook_sync.config | webhook_sync.clock",
 ]
+
+[[tool.importlinter.contracts]]
+name = "Only the demo payer imports the browser (Q181)"
+type = "forbidden"
+# The payer imports Playwright only when it pays; `wsync demo` reaches it, nothing else may.
+source_modules = [
+    "webhook_sync.admin",
+    "webhook_sync.receiver",
+    "webhook_sync.ledger",
+    "webhook_sync.sources",
+    "webhook_sync.sweeper",
+    "webhook_sync.verify",
+    "webhook_sync.sinks",
+    "webhook_sync.alerts",
+    "webhook_sync.queue",
+    "webhook_sync.db",
+    "webhook_sync.logs",
+    "webhook_sync.crashpoints",
+    "webhook_sync.config",
+    "webhook_sync.clock",
+]
+forbidden_modules = ["playwright", "webhook_sync.demo"]

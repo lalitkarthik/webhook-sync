@@ -8,15 +8,21 @@ code, the ledger, the sheet and the config file.
 """
 
 import asyncio
+import queue
 import re
 import subprocess
+import time
 from collections.abc import Iterator
+from datetime import timedelta
 from pathlib import Path
+from threading import Thread
 
+import httpx
 import pytest
 from crash.harness import CrashRun, served_run
+from fakes.payer import FAILING_PAYER, FAKE_PAYER
 from invariants import buyers_tabs
-from processes import fixture_environment, free_port, write_serve_config, wsync_path
+from processes import fixture_environment, free_port, stop, write_serve_config, wsync_path
 from support import (
     TEST_ACCOUNT,
     TEST_KEY_ID,
@@ -29,6 +35,7 @@ from support import (
 
 from webhook_sync.cli.demo import set_demo_retry_profile
 from webhook_sync.config import load_settings
+from webhook_sync.demo.payer import CHECKOUT_JS, PAYER_VARIABLE
 from webhook_sync.sinks.encoding import payment_columns
 from webhook_sync.sinks.sheets import (
     DAILY_SUMMARY,
@@ -227,3 +234,135 @@ async def test_verify_prints_the_full_verify_line_on_its_own_and_through_a_serve
         assert re.search(r"Verified .*: last 30 days, 2 payments, 0 differences", output), output
     assert "(on the database: no server is running)" in alone
     assert "(through the running server)" in served
+
+
+# -- demo outage -----------------------------------------------------------------------------
+
+TESTS = Path(__file__).parent
+PAGE_URL = re.compile(r"http://127\.0\.0\.1:\d+/pay/(order_\w+)")
+SCENE_LIMIT = 120.0
+"""Real seconds a scene gets to end."""
+
+
+class Scene:
+    """A `wsync demo` subprocess, its lines read as it prints them."""
+
+    def __init__(self, run: CrashRun, scene: str, *args: str, payer: str) -> None:
+        environ = run.environ | {PAYER_VARIABLE: payer, "PYTHONPATH": str(TESTS)}
+        self.process = subprocess.Popen(
+            [wsync_path(), "demo", scene, *args, "--config", str(run.config_path)],
+            env=environ,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+        )
+        self.lines: list[str] = []
+        self._new: queue.Queue[str | None] = queue.Queue()
+        Thread(target=self._read, daemon=True).start()
+
+    def _read(self) -> None:
+        assert self.process.stdout is not None
+        for line in self.process.stdout:
+            self._new.put(line.rstrip("\n"))
+        self._new.put(None)
+
+    async def until(self, text: str, *, within: float = SCENE_LIMIT) -> str:
+        """The first line from now on that holds `text`."""
+        deadline = time.monotonic() + within
+        while time.monotonic() < deadline:
+            try:
+                line = await asyncio.to_thread(self._new.get, True, 0.5)
+            except queue.Empty:
+                continue
+            if line is None:
+                break
+            self.lines.append(line)
+            if text in line:
+                return line
+        pytest.fail(f"no line held {text!r}:\n" + "\n".join(self.lines))
+
+    async def ended(self, *, within: float = SCENE_LIMIT) -> tuple[int, str]:
+        try:
+            code = await asyncio.to_thread(self.process.wait, within)
+        except subprocess.TimeoutExpired:
+            stop(self.process)
+            pytest.fail("the scene did not end:\n" + "\n".join(self.lines))
+        while (line := await asyncio.to_thread(self._new.get)) is not None:
+            self.lines.append(line)
+        output = "\n".join(self.lines)
+        assert [value for value in SECRET_VALUES if value in output] == []
+        return code, output
+
+
+async def settled_at_razorpay(run: CrashRun, scene: Scene) -> None:
+    """Once the sweep finds the payments too new to list, Razorpay's clock moves two minutes
+    on, as it would while the scene waits."""
+    await scene.until("not listed yet")
+    run.razorpay.now += timedelta(minutes=2)
+
+
+async def assert_swept_once(run: CrashRun, read_rows: ReadRows, paid: list[str]) -> None:
+    """Each payment has one ledger row and one sheet row with Via = sweep, and no delivery."""
+    assert await read_rows("SELECT payment_id, via FROM payments ORDER BY payment_id") == [
+        {"payment_id": payment_id, "via": "sweep"} for payment_id in sorted(paid)
+    ]
+    assert {row["origin"] for row in await read_rows("SELECT origin FROM events")} == {"sweep"}
+    header, *rows = run.sheets.tab(PAYMENTS).values()
+    via = header.index("Via")
+    assert sorted((row[0], row[via]) for row in rows) == [(p, "sweep") for p in sorted(paid)]
+
+
+async def test_outage_pays_orders_while_stopped_and_the_sweep_brings_each_back_once(
+    run: CrashRun, read_rows: ReadRows
+) -> None:
+    scene = Scene(run, "outage", "--orders", "2", payer=FAKE_PAYER)
+    await settled_at_razorpay(run, scene)
+
+    code, output = await scene.ended()
+
+    assert code == 0, output
+    paid = run.razorpay.orders_paid()
+    assert len(paid) == 2
+    assert [order["amount"] for order in run.razorpay.orders.values()] == [50000, 50000]
+    assert "the receiver is stopped" in scene.lines[0]
+    for order_id, payment_id in zip(run.razorpay.orders, paid, strict=True):
+        assert f"{order_id} made for INR 500.00" in output
+        assert f"{payment_id} captured" in output
+        assert f"{payment_id}: one ledger row and one sheet row, Via = sweep" in output
+    assert "waiting for Razorpay to capture the payment" in output
+    assert "starting the receiver" in output
+    assert scene.lines[-1] == "the receiver is stopped"
+    await assert_swept_once(run, read_rows, paid)
+
+
+async def test_when_the_payer_fails_outage_prints_the_page_to_pay_by_hand_and_waits(
+    run: CrashRun, read_rows: ReadRows
+) -> None:
+    scene = Scene(run, "outage", "--orders", "1", payer=FAILING_PAYER)
+
+    line = await scene.until("pay it by hand at")
+    found = PAGE_URL.search(line)
+    assert found is not None, line
+    page = await asyncio.to_thread(httpx.get, found[0], trust_env=False)
+    await scene.until("waiting for Razorpay to capture the payment")
+    payment_id = run.razorpay.pay(found[1])  # a person pays at the page
+    await settled_at_razorpay(run, scene)
+    code, output = await scene.ended()
+
+    assert code == 0, output
+    assert "Checkout showed a captcha" in line
+    assert page.status_code == 200
+    assert found[1] in page.text
+    assert CHECKOUT_JS in page.text
+    assert f"{payment_id}: one ledger row and one sheet row, Via = sweep" in output
+    await assert_swept_once(run, read_rows, [payment_id])
+
+
+async def test_outage_refuses_while_a_server_runs(run: CrashRun) -> None:
+    async with run.server():
+        code, output = await wsync_demo(run, "outage")
+
+    assert code == 2
+    assert "a server is running: stop wsync serve first" in output
+    assert run.razorpay.orders == {}

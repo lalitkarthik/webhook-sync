@@ -153,7 +153,7 @@ def status_command(args: argparse.Namespace) -> int:
 
 def sweep_command(args: argparse.Namespace) -> int:
     try:
-        result, way = _run_by_hand(args.config, "/admin/sweep", None, runs.sweep)
+        result, way = run_by_hand(args.config, "/admin/sweep", None, runs.sweep)
     except CommandFailed as failed:
         print(f"wsync sweep: {failed}", file=sys.stderr)
         return failed.exit_code
@@ -177,7 +177,7 @@ def backfill_command(args: argparse.Namespace) -> int:
         print(f"wsync backfill: --from {first} is after --to {last}", file=sys.stderr)
         return EXIT_REFUSED
     try:
-        result, way = _run_by_hand(
+        result, way = run_by_hand(
             args.config,
             "/admin/backfill",
             {"from": first.isoformat(), "to": last.isoformat()},
@@ -200,7 +200,7 @@ def verify_command(args: argparse.Namespace) -> int:
         print("wsync verify: --days applies to a full run only; add --full", file=sys.stderr)
         return EXIT_REFUSED
     try:
-        result, way = _run_by_hand(
+        result, way = run_by_hand(
             args.config,
             "/admin/verify",
             {"full": full, "repair": repair, "days": days},
@@ -229,7 +229,7 @@ def verify_command(args: argparse.Namespace) -> int:
     return 0
 
 
-def _run_by_hand(
+def run_by_hand(
     config_path: Path,
     path: str,
     body: object,

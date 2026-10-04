@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -76,7 +77,7 @@ def wait_until_healthy(base_url: str, process: subprocess.Popen[bytes]) -> None:
     pytest.fail("wsync serve did not answer /health in time")
 
 
-def stop(process: subprocess.Popen[bytes]) -> None:
+def stop(process: subprocess.Popen[Any]) -> None:
     """Stop the server and every process under it: on Windows `wsync.exe` is a launcher with
     the server as its grandchild, and `terminate` would only end the launcher."""
     if sys.platform == "win32":
