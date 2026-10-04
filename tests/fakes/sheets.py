@@ -397,6 +397,8 @@ class FakeSheets:
         self.tabs: list[Tab] = []
         self.calls: list[str] = []
         """Every Sheets call answered, by name: `get`, `getByDataFilter`, `batchUpdate`."""
+        self.written: list[list[Json]] = []
+        """The requests of every `batchUpdate` applied, in order: what each write said."""
         self.token_requests = 0
         self.refuse_tokens = False
         self._sheet_ids = list(sheet_ids)
@@ -589,6 +591,7 @@ class FakeSheets:
             if self.access != "edit":
                 raise _DENIED
             replies = self.apply(body.get("requests", []))
+            self.written.append(copy.deepcopy(body.get("requests", [])))
             out: Json = {"spreadsheetId": self.spreadsheet_id, "replies": replies}
             if body.get("includeSpreadsheetInResponse"):
                 out["updatedSpreadsheet"] = {
