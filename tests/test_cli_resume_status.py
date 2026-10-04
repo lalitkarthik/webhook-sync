@@ -118,6 +118,8 @@ def test_without_a_server_status_reads_and_resume_updates_the_database(tmp_path:
         "sheets (sink): active",
         "jobs: ledger 1 waiting, 1 dead; mirror 2 waiting, 0 dead",
         "last flush: never",
+        "last sweep: never",
+        "last verify: never",
     ]
     assert resume_code == 0
     assert resumed.strip() == (
