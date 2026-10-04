@@ -1031,3 +1031,90 @@ async def test_sweeps_storing_events_with_a_recent_delivery_raise_no_alert(
 
     assert await read_rows("SELECT count(*) AS n FROM events WHERE origin = 'sweep'") == [{"n": 1}]
     assert alert_texts(outside.router) == []
+
+
+CROWDED = at(NOW - timedelta(hours=2))
+"""A second in the day's last slice in which more than a page of payments is created."""
+
+
+def crowd(fake: FakeRazorpay, count: int) -> list[str]:
+    """`count` payments created in the second `CROWDED`: more than one list page can hold."""
+    made = [f"pay_Crowd{n:09d}" for n in range(count)]
+    for payment_id in made:
+        fake.make(payment_id, CROWDED)
+    return made
+
+
+SWEPT_PER_PAYMENT = (
+    "SELECT payment_key, count(*) AS n FROM events WHERE origin = 'sweep'"
+    " GROUP BY payment_key ORDER BY payment_key"
+)
+
+
+async def test_over_a_page_created_in_one_second_in_a_shifting_order_is_each_stored_once(
+    swept_config: Config, data_dir: Path, outside: Outside, read_rows: ReadRows
+) -> None:
+    fake = outside.razorpay
+    fake.shifting = True  # Razorpay doesn't document the order of same-second items (Q186)
+    made = crowd(fake, 150)
+
+    async with running(swept_config, data_dir):
+        await wait_for(read_rows, CAUGHT_UP, [{"n": 2}])
+
+    assert await read_rows(SWEPT_PER_PAYMENT) == [
+        {"payment_key": payment_id, "n": 1} for payment_id in sorted(made)
+    ]
+    # The crowded window was walked with skip more than once, until a walk brought nothing new.
+    walks = [q for q in fake.calls_to("/v1/payments") if q.get("skip") is None]
+    assert len([q for q in walks if int(q["to"]) == CROWDED + 1]) >= 2
+
+
+async def test_a_window_that_never_settles_fails_its_slice_and_the_next_pass_walks_it_again(
+    swept_config: Config,
+    data_dir: Path,
+    outside: Outside,
+    read_rows: ReadRows,
+    sweeper_logs: pytest.LogCaptureFixture,
+) -> None:
+    fake = outside.razorpay
+    made = crowd(fake, 150)
+    # Each full page makes one more payment in the crowded second: every walk finds a new id.
+    late = [fake.made(f"pay_Late{n:010d}", CROWDED) for n in range(10)]
+    fake.arriving.extend(late)
+
+    async with running(swept_config, data_dir):
+        await passes_ended(sweeper_logs, 1)
+    stopped = [
+        r for r in sweeper_logs.records if r.getMessage() == "sweep stopped: the list failed"
+    ]
+    stuck_at = await checkpoint(read_rows, "payments")
+
+    fake.arriving.clear()
+    async with running(swept_config, data_dir):
+        await wait_for(read_rows, CAUGHT_UP, [{"n": 2}])
+
+    assert [(r.levelname, getattr(r, "list")) for r in stopped] == [("WARNING", "payments")]
+    assert "settle" in getattr(stopped[0], "error")
+    assert stuck_at is not None and stuck_at <= to_db_text(datetime.fromtimestamp(CROWDED, UTC))
+    crowded = [q for q in fake.calls_to("/v1/payments") if int(q["to"]) == CROWDED + 1]
+    assert len([q for q in crowded if q.get("skip") is None]) == 5 + 2  # five walks, then two
+    # One late payment per full page of the first pass: the call that narrowed to the crowded
+    # window, then the first page of each of the five walks.
+    stored = sorted([*made, *(payment.listed["id"] for payment in late[:6])])
+    assert await read_rows(SWEPT_PER_PAYMENT) == [
+        {"payment_key": payment_id, "n": 1} for payment_id in stored
+    ]
+
+
+async def test_a_slice_under_a_page_is_one_list_call_with_no_skip(
+    swept_config: Config, data_dir: Path, outside: Outside, read_rows: ReadRows
+) -> None:
+    fake = outside.razorpay
+    crowd(fake, 99)
+
+    async with running(swept_config, data_dir):
+        await wait_for(read_rows, CAUGHT_UP, [{"n": 2}])
+
+    calls = fake.calls_to("/v1/payments")
+    assert all("skip" not in query for query in calls)
+    assert len(calls) == 1 + 4  # Razorpay's now, then a day back in four slices
