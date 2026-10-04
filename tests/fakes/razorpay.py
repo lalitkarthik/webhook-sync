@@ -1,13 +1,15 @@
 """FakeRazorpay: Razorpay's API and its webhook deliveries, replaying the P0 recordings (Q163).
 
-The one fake of Razorpay every in-process test uses, served through respx. It answers the
-payments and refunds lists and the payment fetch as Razorpay does, on Razorpay's own clock, and
+The one fake of Razorpay every test uses, served through respx in process and over HTTP to a
+`wsync serve` subprocess (`fakes.over_http`). It answers the payments and refunds lists and the
+payment fetch as Razorpay does, on Razorpay's own clock, taking `latency` seconds a call, and
 sends recorded deliveries to the receiver: once, many times, under a different event id, or with
 a different body under the same id. What it knows is what the invariants hold the ledger to.
 """
 
 import asyncio
 import json
+import statistics
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from email.utils import format_datetime
@@ -18,6 +20,13 @@ import respx
 from support import RAZORPAY_RECORDINGS, recorded_delivery, recorded_fetch, sign_razorpay
 
 RAZORPAY_API = "https://api.razorpay.test"
+
+
+def recorded_latency() -> float:
+    """The median time, in seconds, one of Razorpay's API calls took when recorded (Q167)."""
+    path = RAZORPAY_RECORDINGS / "api" / "list" / "headers-timing.json"
+    timings: list[int] = json.loads(path.read_text())["payments_sequential_ms"]
+    return statistics.median(timings) / 1000
 
 
 def recorded_listed_payments() -> dict[str, dict[str, Any]]:
@@ -113,6 +122,11 @@ class FakeRazorpay:
         default_factory=dict[str, list[dict[str, Any]]]
     )
     """The states each changed payment had before its current one in `fetches`, oldest first."""
+    unanswered: list[Delivery] = field(default_factory=list[Delivery])
+    """Every delivery sent whose connection closed with no answer: the server died."""
+    latency: float = 0.0
+    """Seconds each list call and fetch takes before it answers; `recorded_latency()` is
+    Razorpay's own."""
 
     def mount(self, router: respx.MockRouter) -> None:
         router.get(f"{RAZORPAY_API}/v1/payments").mock(side_effect=self._list_payments)
@@ -149,22 +163,28 @@ class FakeRazorpay:
         self, client: httpx.AsyncClient, delivery: Delivery, *, times: int = 1
     ) -> list[Sent]:
         """Send `delivery` to the receiver `times` times at once, as Razorpay's retries and a
-        replay storm do; the answers, also kept in `sent`. The payment it names exists at
-        Razorpay from now on: it joins `payments`, from the recorded list or its fetch."""
+        replay storm do; the answers, also kept in `sent`. A delivery the server never answers
+        is kept in `unanswered` instead. The payment it names exists at Razorpay from now on:
+        it joins `payments`, from the recorded list or its fetch."""
         payment_id = delivery.payment_id
         if payment_id is not None and payment_id not in self.payments:
             listed = recorded_listed_payments()
             self.payments[payment_id] = listed.get(payment_id) or self.fetches[payment_id]
 
-        async def send() -> Sent:
-            answer = await client.post(
-                "/webhooks/razorpay", content=delivery.body, headers=delivery.headers
-            )
+        async def send() -> Sent | None:
+            try:
+                answer = await client.post(
+                    "/webhooks/razorpay", content=delivery.body, headers=delivery.headers
+                )
+            except httpx.TransportError:
+                self.unanswered.append(delivery)
+                return None
             sent = Sent(delivery, answer.status_code, answer.json())
             self.sent.append(sent)
             return sent
 
-        return list(await asyncio.gather(*(send() for _ in range(times))))
+        answers = await asyncio.gather(*(send() for _ in range(times)))
+        return [sent for sent in answers if sent is not None]
 
     def calls_to(self, path: str) -> list[dict[str, str]]:
         return [query for called, query in self.list_calls if called == path]
@@ -178,6 +198,7 @@ class FakeRazorpay:
     async def _list(self, request: httpx.Request, items: list[dict[str, Any]]) -> httpx.Response:
         query = dict(request.url.params)
         self.list_calls.append((request.url.path, query))
+        await asyncio.sleep(self.latency)
         start, end = int(query["from"]), int(query["to"])
         if start == self.fail_at:
             self.fail_at = None
@@ -194,5 +215,8 @@ class FakeRazorpay:
             headers={"date": format_datetime(self.now, usegmt=True)},
         )
 
-    def _fetch(self, request: httpx.Request, payment_id: str) -> httpx.Response:
+    async def _fetch(self, request: httpx.Request, payment_id: str) -> httpx.Response:
+        await asyncio.sleep(self.latency)
+        if payment_id not in self.fetches:
+            return httpx.Response(400, json=recorded_fetch("not-found-well-formed"))
         return httpx.Response(200, json=self.fetches[payment_id])

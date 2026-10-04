@@ -110,6 +110,12 @@ class _Server(ThreadingHTTPServer):
         self.fakes = fakes
         self.tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 
+    @override
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        if isinstance(sys.exception(), (ConnectionError, ssl.SSLError)):
+            return  # a server killed mid-call: what a crash test does
+        super().handle_error(request, client_address)
+
 
 class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
