@@ -8,18 +8,21 @@ crash test that never crashed proves nothing (A15). `crash.server()` then starts
 on the same database; the test settles it and, while it still runs, reads what it left and ends
 with `crash.check()`, the nine invariants. Not after it stops: on Windows `stop` returns once the
 `wsync.exe` launcher has died, and the server under it may still hold the database's files, so a
-read then fails with a disk I/O error. The fixture is in `conftest.py`.
+read then fails with a disk I/O error. The fixture is in `conftest.py`; the load checks run
+their servers on the same `served_run`.
 """
 
 import asyncio
 import subprocess
-from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncGenerator, Generator
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
 import pytest
+from fakes.over_http import FakesOverHttp
 from fakes.razorpay import FakeRazorpay
 from fakes.sheets import FakeSheets, Tab
 from invariants import (
@@ -31,13 +34,24 @@ from invariants import (
     observe,
     settle,
 )
-from processes import stop, wait_until_healthy, wsync_path
+from processes import (
+    fixture_environment,
+    free_port,
+    stop,
+    wait_until_healthy,
+    write_serve_config,
+    wsync_path,
+)
+from support import RECORDED_ACCOUNT, TEST_SPREADSHEET_ID
 
-from webhook_sync.config import Config
+from webhook_sync.config import Config, load_config
 from webhook_sync.crashpoints import CRASH_EXIT_CODE, VARIABLE
 
 CRASH_WAIT = 15.0
 """Real seconds a server armed at a crash point gets to reach it, once driven there."""
+NO_LIMITS = httpx.Limits(max_connections=None, max_keepalive_connections=None)
+"""A server's client opens as many connections as requests sent at once: a load check's
+thousand concurrent deliveries are a thousand connections, none waiting in the client's pool."""
 
 
 @dataclass
@@ -106,7 +120,9 @@ class CrashRun:
                 await asyncio.to_thread(wait_until_healthy, base_url, process)
                 async with (
                     self.watch,
-                    httpx.AsyncClient(base_url=base_url, trust_env=False, timeout=30) as client,
+                    httpx.AsyncClient(
+                        base_url=base_url, trust_env=False, timeout=30, limits=NO_LIMITS
+                    ) as client,
                 ):
                     yield Server(process, client, log)
             finally:
@@ -127,3 +143,24 @@ class CrashRun:
             watch=self.watch,
         )
         assert_invariants(outcome, self.on_purpose)
+
+
+@contextmanager
+def served_run(data_dir: Path) -> Generator[CrashRun]:
+    """A config on `data_dir` for the recordings' account, with FakeRazorpay and FakeSheets
+    served over HTTP. The first sweep starts empty, so only what a test sends arrives."""
+    razorpay = FakeRazorpay(now=datetime.now(UTC))
+    sheets = FakeSheets(TEST_SPREADSHEET_ID)
+    with FakesOverHttp(razorpay, sheets) as fakes:
+        port = free_port()
+        config_path = write_serve_config(
+            data_dir.parent,
+            port,
+            account=RECORDED_ACCOUNT,
+            api_url=fakes.url,
+            extra="\n[sweeper]\ninitial_lookback_days = 0\n",
+        )
+        environ = fakes.environ(fixture_environment())
+        config = load_config(config_path, environ)
+        assert config.service.data_dir == data_dir
+        yield CrashRun(config, config_path, environ, port, razorpay, sheets)
