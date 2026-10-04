@@ -10,16 +10,17 @@ A scenario scripts what the outside world does through `scenario.razorpay` and
 import asyncio
 import time
 from collections.abc import AsyncGenerator
-from typing import Any
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import httpx
 import respx
 from fakes.razorpay import FakeRazorpay
 from fakes.sheets import FakeSheets, Tab
+from fastapi import FastAPI
 from invariants import (
     SETTLE_LIMIT,
     LedgerWatch,
@@ -30,7 +31,6 @@ from invariants import (
     observe,
     settle,
 )
-from fastapi import FastAPI
 from time_machine import TimeMachineFixture
 
 from webhook_sync.admin.app import BY_HEADER, create_admin_app
@@ -89,10 +89,12 @@ class Scenario:
             yield admin
 
     async def resume(self, name: str) -> None:
-        """`wsync resume <name>` on the running app, through its admin listener."""
+        """`wsync resume <name>` on the running app, through its admin listener. The pause
+        declared in `on_purpose.paused` ends here, so its jobs must settle again."""
         async with self._admin() as admin:
             answer = await admin.post(f"/admin/resume/{name}", headers={BY_HEADER: "cli"})
         assert answer.json() == {"name": name, "result": "resumed"}, answer.text
+        self.on_purpose.paused.discard(name)
 
     async def status(self) -> dict[str, Any]:
         """What `wsync status` reads from the running app's admin listener."""
