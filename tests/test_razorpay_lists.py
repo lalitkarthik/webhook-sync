@@ -143,8 +143,33 @@ async def test_150_payments_created_in_one_second_all_come_back_each_once(
     assert [(call["to"], call.get("skip")) for call in calls] == [
         ("1790980000", None),
         ("1790970001", None),  # to = the oldest created_at seen + 1: nothing new
-        ("1790970001", "100"),  # so that two-second window is paged with skip
+        ("1790970001", "100"),  # so that two-second window is walked with skip
+        ("1790970001", None),  # and walked again: a walk that brings no new id settles it
+        ("1790970001", "100"),
     ]
+
+
+@pytest.mark.parametrize("path", ["/v1/payments", "/v1/refunds"])
+async def test_a_window_whose_walks_keep_finding_new_ids_fails_after_five_walks_to_be_retried(
+    adapter: RazorpayAdapter, razorpay: respx.MockRouter, writer: Writer, path: str
+) -> None:
+    calls: list[dict[str, str]] = []
+    growing = payments_in_one_second(150, 1790970000)
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        # Each call finds one item more in the crowded second: no walk ever settles.
+        growing.append({"id": f"pay_new{len(calls):06d}", "created_at": 1790970000})
+        return answers_like_razorpay(growing, DATE, calls)(request)
+
+    razorpay.get(path).mock(side_effect=answer)
+    lister = adapter.list_payments if path == "/v1/payments" else adapter.list_refunds
+
+    failed = await lister(1790960000, 1790980000, writer=writer, pauses=Pauses())
+
+    assert isinstance(failed, Failure)
+    assert failed.error_class == "retry"
+    assert "did not settle in 5 walks" in failed.error
+    assert len([call for call in calls if call.get("skip") is None]) == 1 + 5
 
 
 @pytest.mark.parametrize(
