@@ -34,7 +34,7 @@ from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any, Literal, cast
 
 import httpx
@@ -503,7 +503,7 @@ def not_local(data_dir: Path) -> str | None:
     return f"on a network drive ({kind})" if kind is not None else None
 
 
-def network_filesystem(path: Path, mounts: str) -> str | None:
+def network_filesystem(path: PurePath, mounts: str) -> str | None:
     """The filesystem type of the mount holding `path` when it is a network one, read from a
     mount table in `/proc/mounts` form; None for a local one."""
     best, kind = "", ""
@@ -538,8 +538,8 @@ async def _public_url(url: str) -> Line:
     except httpx.UnsupportedProtocol, httpx.InvalidURL:
         return Line("fail", check, "not a URL: it must start http:// or https://")
     except httpx.TransportError as error:
-        if _dns_failed(error):
-            host = httpx.URL(url).host
+        host = httpx.URL(url).host
+        if not await _resolves(host):
             return Line("fail", check, f"the name {host} does not resolve (DNS): is the tunnel up?")
         return Line("fail", check, f"could not connect ({type(error).__name__}): is the tunnel up?")
     status = response.status_code
@@ -582,11 +582,11 @@ async def _public_url(url: str) -> Line:
     )
 
 
-def _dns_failed(error: BaseException) -> bool:
-    """Whether a name lookup is what failed, anywhere in the error's chain of causes."""
-    seen: BaseException | None = error
-    while seen is not None:
-        if isinstance(seen, socket.gaierror):
-            return True
-        seen = seen.__cause__ or seen.__context__
-    return False
+async def _resolves(host: str) -> bool:
+    """Whether the name has an address: asked again after a failed connection, since the error
+    itself doesn't reliably say that the lookup is what failed."""
+    try:
+        await asyncio.get_running_loop().getaddrinfo(host, None)
+    except socket.gaierror:
+        return False
+    return True

@@ -204,6 +204,8 @@ class FakeRazorpay:
     webhooks: list[dict[str, Any]] = field(default_factory=lambda: [listed_webhook()])
     """What `GET /v1/webhooks` lists (see `listed_webhook`)."""
     webhooks_status: int = 200
+    key_refused: bool = False
+    """Every list call answers 401, as Razorpay does to a key it doesn't know."""
     """What the webhook list answers: Razorpay documents it only for partners, so a merchant
     key may get a 4xx."""
 
@@ -402,6 +404,14 @@ class FakeRazorpay:
         query = dict(request.url.params)
         self.list_calls.append((request.url.path, query))
         await asyncio.sleep(self.latency)
+        if self.key_refused:
+            return httpx.Response(
+                401,
+                json={
+                    "error": {"code": "BAD_REQUEST_ERROR", "description": "Authentication failed"}
+                },
+                headers={"date": format_datetime(self.now, usegmt=True)},
+            )
         start, end = int(query["from"]), int(query["to"])
         if start == self.fail_at:
             self.fail_at = None
