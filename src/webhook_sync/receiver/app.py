@@ -22,9 +22,9 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from webhook_sync.alerts import Alerter
-from webhook_sync.crashpoints import crash_point
 from webhook_sync.clock import to_db_text, utc_now
 from webhook_sync.config import Config
+from webhook_sync.crashpoints import crash_point
 from webhook_sync.db.migrations import apply_pending
 from webhook_sync.db.writer import Writer
 from webhook_sync.ledger import ledger_runner

@@ -19,9 +19,9 @@ from typing import override
 import uvicorn
 from fastapi import FastAPI
 
+from webhook_sync import crashpoints
 from webhook_sync.admin.app import create_admin_app
 from webhook_sync.clock import utc_now
-from webhook_sync import crashpoints
 from webhook_sync.config import Config, ConfigError, load_config, locate_data_dir
 from webhook_sync.db.lock import LockHeld, hold_lock
 from webhook_sync.db.migrations import SchemaTooNew, apply_pending
