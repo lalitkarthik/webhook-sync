@@ -188,10 +188,7 @@ class FakeRazorpay:
         self.change(payment_id, failed | cleared | {"status": "authorized"})
         self.change(payment_id, failed | cleared | fee | {"status": "captured", "captured": True})
         self.payments[payment_id] = (
-            self.payments[payment_id]
-            | cleared
-            | fee
-            | {"status": "captured", "captured": True, "amount_captured": failed["amount"]}
+            self.payments[payment_id] | cleared | fee | {"status": "captured", "captured": True}
         )
 
     def states(self, payment_id: str) -> list[dict[str, Any]]:
