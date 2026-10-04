@@ -181,6 +181,8 @@ class FakeRazorpay:
     )
     fail_at: int | None = None
     """A list call whose `from` is this answers 503, once."""
+    lists_down: bool = False
+    """While set, every list call answers 503: Razorpay's lists down for a while."""
     hold_at: int | None = None
     """A list call whose `from` is this waits until `release` is set."""
     release: asyncio.Event = field(default_factory=asyncio.Event)
@@ -208,6 +210,11 @@ class FakeRazorpay:
     key may get a 4xx."""
     key_refused: bool = False
     """Every list call answers 401, as Razorpay does to a key it doesn't know."""
+    orders: dict[str, dict[str, Any]] = field(default_factory=dict[str, dict[str, Any]])
+    """Every order made with `POST /v1/orders`, by id."""
+    orders_busy: int = 0
+    """The next this many calls for an order's payments answer 429, as Razorpay does to a
+    caller that asks too often (seen on the test account, 2026-10-04)."""
 
     def mount(self, router: respx.MockRouter) -> None:
         router.get(f"{RAZORPAY_API}/v1/payments").mock(side_effect=self._list_payments)
@@ -219,6 +226,32 @@ class FakeRazorpay:
         router.get(
             url__regex=rf"^{RAZORPAY_API}/v1/payments/(?P<payment_id>pay_\w+)/refunds(\?|$)"
         ).mock(side_effect=self._refunds)
+        router.post(f"{RAZORPAY_API}/v1/orders").mock(side_effect=self._create_order)
+        router.get(
+            url__regex=rf"^{RAZORPAY_API}/v1/orders/(?P<order_id>order_\w+)/payments(\?|$)"
+        ).mock(side_effect=self._order_payments)
+        router.post(f"{RAZORPAY_API}/v1/payments/create/checkout").mock(side_effect=self._checkout)
+
+    def pay(self, order_id: str) -> str:
+        """The order is paid at Checkout, now: a captured netbanking payment of its amount (a
+        copy of `LIKE`) on the order, known to the lists and the fetch, with no delivery. Its
+        id."""
+        order = self.orders[order_id]
+        payment_id = f"pay_Checkout{len(self.orders_paid()):04d}"
+        on_order = {"order_id": order_id, "amount": order["amount"]}
+        made = self.made(payment_id, int(self.now.timestamp()))
+        self._add(Payment(made.listed | on_order, made.fetched | on_order))
+        self.orders[order_id] = order | {
+            "status": "paid",
+            "amount_paid": order["amount"],
+            "amount_due": 0,
+            "attempts": order["attempts"] + 1,
+        }
+        return payment_id
+
+    def orders_paid(self) -> list[str]:
+        """The payments made on an order, oldest first."""
+        return [p for p, payment in self.payments.items() if payment.get("order_id")]
 
     def change(self, payment_id: str, state: dict[str, Any]) -> None:
         """The payment moves on at Razorpay: fetches answer `state` from now on."""
@@ -412,6 +445,8 @@ class FakeRazorpay:
                 headers={"date": format_datetime(self.now, usegmt=True)},
             )
         start, end = int(query["from"]), int(query["to"])
+        if self.lists_down:
+            return httpx.Response(503, json={"error": {"description": "down"}})
         if start == self.fail_at:
             self.fail_at = None
             return httpx.Response(503, json={"error": {"description": "down"}})
@@ -428,6 +463,46 @@ class FakeRazorpay:
             json={"entity": "collection", "count": len(page), "items": page},
             headers={"date": format_datetime(self.now, usegmt=True)},
         )
+
+    async def _create_order(self, request: httpx.Request) -> httpx.Response:
+        asked = json.loads(request.content)
+        order_id = f"order_Demo{len(self.orders):010d}"
+        self.orders[order_id] = {
+            "id": order_id,
+            "entity": "order",
+            "amount": asked["amount"],
+            "amount_paid": 0,
+            "amount_due": asked["amount"],
+            "currency": asked["currency"],
+            "receipt": asked.get("receipt"),
+            "status": "created",
+            "attempts": 0,
+            "notes": asked.get("notes", []),
+            "created_at": int(self.now.timestamp()),
+        }
+        return httpx.Response(200, json=self.orders[order_id])
+
+    async def _order_payments(self, request: httpx.Request, order_id: str) -> httpx.Response:
+        if self.orders_busy:
+            self.orders_busy -= 1
+            error = {"code": "BAD_REQUEST_ERROR", "description": "Too many requests"}
+            return httpx.Response(429, json={"error": error})
+        if order_id not in self.orders:
+            return httpx.Response(400, json=recorded_fetch("not-found-well-formed"))
+        items = [
+            self.fetches[payment_id]
+            for payment_id in self.orders_paid()
+            if self.payments[payment_id]["order_id"] == order_id
+        ]
+        return httpx.Response(
+            200, json={"entity": "collection", "count": len(items), "items": items}
+        )
+
+    async def _checkout(self, request: httpx.Request) -> httpx.Response:
+        """What Checkout's page asks of Razorpay once a person picks Success: the order paid.
+        Only the fake payer calls it; a real browser goes through Razorpay's own pages."""
+        order_id = dict(httpx.QueryParams(request.content.decode()))["order_id"]
+        return httpx.Response(200, json={"razorpay_payment_id": self.pay(order_id)})
 
     async def _fetch(self, request: httpx.Request, payment_id: str) -> httpx.Response:
         await asyncio.sleep(self.latency)

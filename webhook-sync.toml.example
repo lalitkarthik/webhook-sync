@@ -40,4 +40,4 @@ payload_days = 30
 url = ""                            # Slack or Discord incoming-webhook URL; empty = a warning log (Q139)
 
 [demo]
-spreadsheet_ids = []                # --demo-fail-first runs only against these sheets (Q120)
+spreadsheet_ids = []                # --demo-fail-first and wsync demo run only against these sheets (Q120)
