@@ -1,4 +1,4 @@
-Status: planned
+Status: implemented
 
 # P5: prove nothing is lost or written twice
 
