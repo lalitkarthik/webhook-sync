@@ -402,7 +402,8 @@ def nothing_stuck(outcome: Outcome, on_purpose: OnPurpose) -> list[str]:
 
 def nothing_moves_backwards(outcome: Outcome, on_purpose: OnPurpose) -> list[str]:
     """No ledger row takes a state of its payment older than one it already held, Razorpay's
-    states counted in the order the payment went through them."""
+    states counted in the order the payment went through them. A row state that is none of
+    Razorpay's (a partial step back, say) can't be ordered, so it fails too."""
     found: list[str] = []
     for payment_id, versions in sorted(outcome.ledger_seen.items()):
         states = outcome.razorpay.states(payment_id)
@@ -417,6 +418,10 @@ def nothing_moves_backwards(outcome: Outcome, on_purpose: OnPurpose) -> list[str
                 if columns is not None and all(row[c] == columns[c] for c in SOURCE_COLUMNS)
             ]
             if not held:
+                found.append(
+                    f"{payment_id} row version {version} holds no state Razorpay had"
+                    f" (status {row['status']}), so it may have moved back"
+                )
                 continue
             if newest is not None and max(held) < newest[1]:
                 found.append(
