@@ -101,5 +101,6 @@ async def test_p4s_tables_hold_a_checkpoint_per_list_and_verify_runs_with_their_
             "ignored_events",
             "outcome",
             "status_line",
+            "by_hand",
         ],
     }

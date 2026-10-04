@@ -190,6 +190,7 @@ verify_runs = sa.Table(
     sa.Column("ignored_events", sa.Integer, nullable=False),
     sa.Column("outcome", sa.Text),
     sa.Column("status_line", sa.Text),
+    sa.Column("by_hand", sa.Integer, nullable=False, server_default="0"),
 )
 
 

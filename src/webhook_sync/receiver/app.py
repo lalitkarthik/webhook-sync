@@ -88,13 +88,7 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
             applied = await apply_pending(writer)
             if applied:
                 log.info("migrations applied: %s", ", ".join(f"{v:04d}" for v in applied))
-            razorpay = RazorpayAdapter(
-                mode=config.razorpay.mode,
-                account=config.razorpay.account,
-                webhook_secrets=config.razorpay_secrets.webhook_secrets,
-                api=razorpay_api,
-                metadata_keys=config.razorpay.metadata_keys,
-            )
+            razorpay = razorpay_adapter(config, razorpay_api)
             receiver = Receiver(
                 config=config,
                 writer=writer,
@@ -122,11 +116,7 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
             stages: list[StageRunner | BatchStageRunner] = [ledger]
             sheet_verify: SheetVerify | None = None
             if SHEETS_SINK in config.sinks:
-                sheets = SheetsClient(
-                    sheets_http,
-                    config.sheets.spreadsheet_id,
-                    ServiceAccountTokens(config.google_secrets.service_account),
-                )
+                sheets = sheets_client(config, sheets_http)
                 flusher = sheets_runner(
                     writer,
                     sheets,
@@ -152,7 +142,9 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
                 writer, razorpay, config, pauses=pauses, alerter=alerter, sheet=sheet_verify
             )
             loops.append(asyncio.create_task(full_verify.run_nightly()))
-            app.state.loops = loops
+            app.state.loops = loops  # runs by hand join them, so the shutdown stops them too
+            app.state.full_verify = full_verify  # verify on demand
+            app.state.sheet_verify = sheet_verify
             minutely = asyncio.create_task(_write_rejection_counts_every_minute(receiver))
             dead_jobs_check = asyncio.create_task(alerter.run_dead_jobs_check())  # A17
             reaper = asyncio.create_task(
@@ -269,6 +261,26 @@ def create_app(config: Config, data_dir: Path, demo_fail_first: int | None = Non
     return app
 
 
+def razorpay_adapter(config: Config, api: httpx.AsyncClient) -> RazorpayAdapter:
+    """The configured account's Razorpay adapter, calling Razorpay through `api`."""
+    return RazorpayAdapter(
+        mode=config.razorpay.mode,
+        account=config.razorpay.account,
+        webhook_secrets=config.razorpay_secrets.webhook_secrets,
+        api=api,
+        metadata_keys=config.razorpay.metadata_keys,
+    )
+
+
+def sheets_client(config: Config, http: httpx.AsyncClient) -> SheetsClient:
+    """The configured spreadsheet's client, calling Google through `http`."""
+    return SheetsClient(
+        http,
+        config.sheets.spreadsheet_id,
+        ServiceAccountTokens(config.google_secrets.service_account),
+    )
+
+
 def configured_names(config: Config) -> dict[str, PauseTarget]:
     """Every configured source and sink, as `sinks` names them."""
     names: dict[str, PauseTarget] = {RazorpayAdapter.name: "source"}
@@ -295,13 +307,13 @@ def instance_id() -> str:
 
 async def shut_down(app: FastAPI) -> None:
     """The shutdown's steps before the listener closes (operations.md): answer 503 to new
-    deliveries → stop the sweeper and verify → stop claiming → up to 20 s for running jobs → release
-    unfinished leases → write the rejection counts, the open minute's included. The caller then
-    stops listening and releases the lock."""
+    deliveries → stop the sweeper, verify and runs by hand → stop claiming → up to 20 s for
+    running jobs → release unfinished leases → write the rejection counts, the open minute's
+    included. The caller then stops listening and releases the lock."""
     receiver: Receiver = app.state.receiver
     receiver.shutting_down = True
     loops: list[asyncio.Task[None]] = app.state.loops
-    for loop in loops:
+    for loop in list(loops):  # a run by hand leaves the list as it ends
         # A slice cut short is re-read by the next start's sweep; a verify run cut short
         # stored nothing, and the next one runs on the hour.
         loop.cancel()

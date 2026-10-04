@@ -86,6 +86,8 @@ async def test_status_lists_sinks_and_sources_jobs_by_stage_and_the_last_flush(
         ],
         "jobs": {"ledger": {"waiting": 1, "dead": 1}, "mirror": {"waiting": 2, "dead": 0}},
         "last_flush": {"at": None, "rows_written": 0},
+        "sweeps": [],
+        "last_verify": None,
     }
 
 
@@ -121,3 +123,50 @@ async def test_resume_of_an_active_name_changes_nothing_and_an_unknown_one_is_40
 
     assert (active.status_code, active.json()["result"]) == (200, "active")
     assert (unknown.status_code, unknown.json()["result"]) == (404, "unknown")
+
+
+async def test_status_shows_the_last_sweep_of_each_list_and_the_last_verify_line(
+    running: tuple[FastAPI, httpx.AsyncClient],
+    data_dir: Path,
+) -> None:
+    _, admin = running
+    for list_name, stored in (("payments", 3), ("refunds", 0)):
+        await execute_aside(
+            data_dir,
+            "INSERT INTO checkpoints (source, account, list, checkpoint_at, last_sweep_at,"
+            " last_sweep_stored, last_relist_at, relist_floor_at, first_start_at) VALUES"
+            f" ('razorpay', '{TEST_ACCOUNT}', '{list_name}', '2026-10-02T20:19:00.000000Z',"
+            f" '{EARLIER}', {stored}, NULL, '{EARLIER}', '{EARLIER}')",
+        )
+    for kind, line in (
+        ("full", "Verified 03 Oct 02:00 IST: last 30 days, 7 payments, 0 differences"),
+        ("quick", "Sheet checked 03 Oct 01:00 IST: 7 payments, 1 difference"),
+    ):
+        await execute_aside(
+            data_dir,
+            "INSERT INTO verify_runs (kind, started_at, finished_at, window_days, local_date,"
+            " payments_checked, findings_count, repaired_count, ignored_events, outcome,"
+            f" status_line) VALUES ('{kind}', '{EARLIER}', '{EARLIER}', 30, '2026-10-03', 7, 0,"
+            f" 0, 0, 'clean', '{line}')",
+        )
+
+    answer = await admin.get("/admin/status")
+
+    assert answer.status_code == 200
+    assert answer.json()["sweeps"] == [
+        {
+            "list": "payments",
+            "checkpoint_at": "2026-10-02T20:19:00.000000Z",
+            "last_sweep_at": EARLIER,
+            "stored": 3,
+        },
+        {
+            "list": "refunds",
+            "checkpoint_at": "2026-10-02T20:19:00.000000Z",
+            "last_sweep_at": EARLIER,
+            "stored": 0,
+        },
+    ]
+    assert answer.json()["last_verify"] == (
+        "Sheet checked 03 Oct 01:00 IST: 7 payments, 1 difference"
+    )

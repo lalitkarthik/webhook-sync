@@ -76,10 +76,10 @@ class RazorpayVerify:
         self._config = config
         self._pauses = pauses
 
-    async def check(self, started: datetime) -> SourceCheck | Failure:
-        """Every payment created in the window before `started` against its row; a list's
+    async def check(self, started: datetime, days: int) -> SourceCheck | Failure:
+        """Every payment created in the `days` before `started` against its row; a list's
         failure as it came."""
-        window = timedelta(days=self._config.verify.days)
+        window = timedelta(days=days)
         end = _seconds_of(started)
         start = end - _seconds(window)
         listed = await self._razorpay.list_payments(

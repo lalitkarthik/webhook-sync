@@ -42,9 +42,10 @@ def write_serve_config(
     *,
     account: str = TEST_ACCOUNT,
     api_url: str = UNREACHABLE_API,
+    extra: str = "",
 ) -> Path:
     """A valid test-mode `webhook-sync.toml` in `config_dir`, listening on `port`, its admin
-    listener on `admin_port` (a free port if not given).
+    listener on `admin_port` (a free port if not given), with `extra` TOML at the end.
 
     Its Razorpay API address is unreachable unless `api_url` names a fake: the ledger worker's
     fetches fail to connect and retry, and never reach Razorpay."""
@@ -56,7 +57,7 @@ def write_serve_config(
         f'timezone = "Asia/Kolkata"\n\n'
         f'[sources.razorpay]\nmode = "test"\naccount = "{account}"\n'
         f'api_url = "{api_url}"\n\n'
-        f'[sinks.sheets]\nspreadsheet_id = "{TEST_SPREADSHEET_ID}"\n',
+        f'[sinks.sheets]\nspreadsheet_id = "{TEST_SPREADSHEET_ID}"\n{extra}',
         encoding="utf-8",
     )
     return path

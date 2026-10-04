@@ -100,8 +100,10 @@ async def record_run(
     line: str,
     repair: bool,
     ignored_events: int = 0,
+    by_hand: bool = False,
 ) -> Recorded:
-    """The run, its findings and, when `repair`, their repair jobs, in one transaction."""
+    """The run, its findings and, when `repair`, their repair jobs, in one transaction;
+    `by_hand` marks a run asked for by a person, never a scheduled one."""
     account = config.razorpay.account
     now = utc_now()
     repaired = sum(1 for f in findings if repair and f.repair is not None)
@@ -120,6 +122,7 @@ async def record_run(
                 ignored_events=ignored_events,
                 outcome="differences" if findings else "clean",
                 status_line=line,
+                by_hand=by_hand,
             )
             .returning(verify_runs.c.id)
         )
