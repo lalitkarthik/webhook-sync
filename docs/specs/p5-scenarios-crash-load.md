@@ -142,3 +142,4 @@ Five **scenarios** run in the test's own process, each followed by the invariant
 - #51: the outage scenario expects the `silent_webhook` alert — under Q149 the sweep's payments more than 10 minutes old with no delivery raise it.
 - #51: made payments copy the recorded capture of `pay_Tj9rKBOXWcsMeE` under a new id; the late capture takes that payment's recorded fee and tax (both INR 500 netbanking).
 - #51 (open, for the owner): with more than 100 payments inside two seconds, the fallback `skip` paging depends on the order of same-second items, which sweeper.md says it does not; the design leaves the right behaviour open, so it is unchanged.
+- #52: `mid_slice` fires only in a slice that listed at least one item (the ticket's "after some of a slice's items are stored"); the sweeper stores a slice in one transaction, so the crash comes after the whole slice is stored.
