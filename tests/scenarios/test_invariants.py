@@ -158,6 +158,17 @@ async def test_2_the_daily_summary_has_a_row_for_each_day(healthy: Scenario) -> 
     assert found == ["the Daily summary has no row for 2026-10-03 INR/INR"]
 
 
+async def test_2_the_daily_summary_has_one_row_per_day(healthy: Scenario) -> None:
+    summary_tab = healthy.sheets.tab("Daily summary")
+    row = [summary_tab.cell(1, column) for column in range(summary_tab.column_count)]
+    append = {"sheetId": summary_tab.sheet_id, "rows": [{"values": row}], "fields": "*"}
+    healthy.sheets.apply([{"appendCells": append}])
+
+    found = sheet_equals_ledger(await healthy.outcome(), healthy.on_purpose)
+
+    assert found == ["the Daily summary has rows 2, 3 for 2026-10-03 INR/INR"]
+
+
 async def test_3_every_delivery_is_logged_exactly_once(healthy: Scenario) -> None:
     await execute_aside(healthy.data_dir, "DELETE FROM deliveries WHERE result = 'duplicate'")
 

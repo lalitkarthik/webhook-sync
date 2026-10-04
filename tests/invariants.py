@@ -295,22 +295,27 @@ def _summary_differs(outcome: Outcome) -> list[str]:
         return []
     if tab_id is None or not outcome.sheets.has_tab(tab_id):
         return ["the Daily summary tab was never written"]
-    on_sheet: dict[Any, list[Json]] = {}
-    for _, cells in _rows(outcome.sheets.tab(tab_id), len(DAILY_SUMMARY_HEADER)):
+    on_sheet: dict[Any, list[tuple[int, list[Json]]]] = {}
+    for at, cells in _rows(outcome.sheets.tab(tab_id), len(DAILY_SUMMARY_HEADER)):
         key = read_key([{"effectiveValue": cell.get("userEnteredValue", {})} for cell in cells])
         if key is not None:
-            on_sheet.setdefault(key, cells)
+            on_sheet.setdefault(key, []).append((at, cells))
     found: list[str] = []
     for key in sorted(set(wanted) | set(on_sheet)):
         expected = summary_cells(key, wanted.get(key, Totals()))
         if expected is None:
             continue
-        cells = on_sheet.get(key)
+        rows = on_sheet.get(key, [])
         day, currency, paid_out = key
         named = f"{day.isoformat()} {currency}/{paid_out}"
-        if cells is None:
+        if not rows:
             found.append(f"the Daily summary has no row for {named}")
-        elif [_written(c) for c in cells[: len(expected)]] != [_written(c) for c in expected]:
+            continue
+        if len(rows) > 1:
+            numbers = ", ".join(str(at + 1) for at, _ in rows)
+            found.append(f"the Daily summary has rows {numbers} for {named}")
+        cells = rows[0][1]
+        if [_written(c) for c in cells[: len(expected)]] != [_written(c) for c in expected]:
             found.append(f"the Daily summary's {named} differs from its sums")
     return found
 
