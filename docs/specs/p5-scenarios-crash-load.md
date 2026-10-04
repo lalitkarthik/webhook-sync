@@ -149,3 +149,5 @@ Five **scenarios** run in the test's own process, each followed by the invariant
 - #55: FakeRazorpay's `amount_refunded` and `refund_status` count pending refunds and drop failed ones; Razorpay does not document this (G65), and it is the reading that is harder on the product, which never reads those fields (Q127).
 - #55: the failed refund and the refund of the rest are Razorpay's documented sample refunds placed on the recorded payment; their deliveries are the documented sample events carrying the fake's current state under a made-up event id `unrecorded-<type>-<refund id>`, and their tests are marked `unrecorded`.
 - #55: the partial refund is both recorded refunds (200 of 500); the scenario is delivery-driven and the sweeper lists nothing in it.
+- #53: the tests' client for a real server sends every request on a connection of its own, so a delivery sent again is never lost on a connection the server is closing.
+- #53: a run with `CI` set asserts no load timing, the weekly Windows run included; it still runs the burst and prints both p99s (Q172).
