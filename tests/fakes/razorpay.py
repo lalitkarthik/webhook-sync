@@ -9,6 +9,7 @@ a different body under the same id. What it knows is what the invariants hold th
 
 import asyncio
 import json
+import random
 import statistics
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -20,6 +21,9 @@ import respx
 from support import RAZORPAY_RECORDINGS, recorded_delivery, recorded_fetch, sign_razorpay
 
 RAZORPAY_API = "https://api.razorpay.test"
+LIKE = "pay_Tj9rKBOXWcsMeE"
+"""The recorded capture a made payment copies: netbanking, INR 500, its fee set."""
+ERROR_FIELDS = ("error_code", "error_description", "error_reason", "error_source", "error_step")
 
 
 def recorded_latency() -> float:
@@ -88,6 +92,14 @@ class Delivery:
 
 
 @dataclass(frozen=True)
+class Payment:
+    """A payment as Razorpay lists it and as it answers its fetch."""
+
+    listed: dict[str, Any]
+    fetched: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class Sent:
     """A delivery sent to the receiver, and its answer."""
 
@@ -128,6 +140,12 @@ class FakeRazorpay:
     latency: float = 0.0
     """Seconds each list call and fetch takes before it answers; `recorded_latency()` is
     Razorpay's own."""
+    shifting: bool = False
+    """Items created in the same second come back in another order on every list call:
+    Razorpay doesn't document their order (razorpay-list-facts.md)."""
+    arriving: list[Payment] = field(default_factory=list[Payment])
+    """Payments made between two page calls: each is made once a payments list call has
+    answered a full page."""
 
     def mount(self, router: respx.MockRouter) -> None:
         router.get(f"{RAZORPAY_API}/v1/payments").mock(side_effect=self._list_payments)
@@ -143,6 +161,38 @@ class FakeRazorpay:
         """The payment moves on at Razorpay: fetches answer `state` from now on."""
         self.earlier.setdefault(payment_id, []).append(self.fetches[payment_id])
         self.fetches[payment_id] = state
+
+    def never(self, delivery: Delivery) -> None:
+        """Razorpay makes the delivery's payment and the delivery never arrives: the payment is
+        known from now on, and nothing is sent."""
+        self._know(delivery.payment_id)
+
+    def made(self, payment_id: str, created_at: int) -> Payment:
+        """A payment created at `created_at`: a copy of the recorded capture `LIKE` under
+        another id, as listed and as fetched."""
+        moved = {"id": payment_id, "created_at": created_at}
+        return Payment(recorded_listed_payments()[LIKE] | moved, recorded_fetches()[LIKE] | moved)
+
+    def make(self, payment_id: str, created_at: int) -> None:
+        """Razorpay makes the payment (see `made`), and sends no delivery."""
+        self._add(self.made(payment_id, created_at))
+
+    def authorise_late(self, payment_id: str) -> None:
+        """A failed payment is authorised late and then captured (C13), with no delivery: its
+        fetch goes through `authorized` to `captured`, and the list shows it captured. The fee
+        is the recorded capture's of the same amount and method (`LIKE`)."""
+        failed = self.fetches[payment_id]
+        assert failed["status"] == "failed", failed["status"]
+        fee = {name: recorded_fetches()[LIKE][name] for name in ("fee", "tax")}
+        cleared = dict.fromkeys(ERROR_FIELDS)
+        self.change(payment_id, failed | cleared | {"status": "authorized"})
+        self.change(payment_id, failed | cleared | fee | {"status": "captured", "captured": True})
+        self.payments[payment_id] = (
+            self.payments[payment_id]
+            | cleared
+            | fee
+            | {"status": "captured", "captured": True, "amount_captured": failed["amount"]}
+        )
 
     def states(self, payment_id: str) -> list[dict[str, Any]]:
         """Every state the payment has had at Razorpay, oldest first; the last is current."""
@@ -170,10 +220,7 @@ class FakeRazorpay:
         replay storm do; the answers, also kept in `sent`. A delivery the server never answers
         is kept in `unanswered` instead. The payment it names exists at Razorpay from now on:
         it joins `payments`, from the recorded list or its fetch."""
-        payment_id = delivery.payment_id
-        if payment_id is not None and payment_id not in self.payments:
-            listed = recorded_listed_payments()
-            self.payments[payment_id] = listed.get(payment_id) or self.fetches[payment_id]
+        self._know(delivery.payment_id)
 
         async def send() -> Sent | None:
             try:
@@ -190,11 +237,29 @@ class FakeRazorpay:
         answers = await asyncio.gather(*(send() for _ in range(times)))
         return [sent for sent in answers if sent is not None]
 
+    def _know(self, payment_id: str | None) -> None:
+        """The payment exists at Razorpay: it joins `payments`, from the recorded list or its
+        fetch."""
+        if payment_id is not None and payment_id not in self.payments:
+            listed = recorded_listed_payments()
+            self.payments[payment_id] = listed.get(payment_id) or self.fetches[payment_id]
+
+    def _add(self, payment: Payment) -> None:
+        self.payments[payment.listed["id"]] = payment.listed
+        self.fetches[payment.fetched["id"]] = payment.fetched
+
     def calls_to(self, path: str) -> list[dict[str, str]]:
         return [query for called, query in self.list_calls if called == path]
 
     async def _list_payments(self, request: httpx.Request) -> httpx.Response:
-        return await self._list(request, list(self.payments.values()))
+        answer = await self._list(request, list(self.payments.values()))
+        full = answer.status_code == 200 and answer.json()["count"] == int(
+            request.url.params.get("count", "10")
+        )
+        if full:
+            while self.arriving:
+                self._add(self.arriving.pop(0))
+        return answer
 
     async def _list_refunds(self, request: httpx.Request) -> httpx.Response:
         return await self._list(request, self.refunds)
@@ -210,6 +275,8 @@ class FakeRazorpay:
         if start == self.hold_at:
             await self.release.wait()
         count, skip = int(query.get("count", "10")), int(query.get("skip", "0"))
+        if self.shifting:
+            items = random.Random(len(self.list_calls)).sample(items, len(items))
         newest_first = sorted(items, key=lambda item: item["created_at"], reverse=True)
         inside = [item for item in newest_first if start <= item["created_at"] <= end]
         page = inside[skip : skip + count]
