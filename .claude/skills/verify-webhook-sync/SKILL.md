@@ -39,12 +39,14 @@ What it does, so nothing is hidden:
   `.verify/run/admin_port`, `.verify/run/upstreams_port`; use them as `$(cat .verify/port)`
   (the harness refuses `source`).
 - Secrets: the fixture ones from `tests/support.py`, never `.env` (no `.env` sits next to the
-  config, and real `RAZORPAY_*`/`GOOGLE_*` variables are dropped). The service account's
-  `token_uri` points at the fakes.
-- Fakes (`tests/fakes/upstreams.py`): Razorpay's API answering `GET /v1/payments/{id}` with the
-  recorded fetch (`tests/recordings/razorpay/fetch/payment-*-<id>.json`, else the recorded 400
-  "does not exist") and empty refunds pages; Google's token endpoint answering 400
-  `invalid_grant`. Nothing leaves 127.0.0.1.
+  config, and real `RAZORPAY_*`/`GOOGLE_*` variables are dropped). The server reaches Google
+  through the fakes, its `HTTPS_PROXY`, trusting only their made-up authority (`SSL_CERT_FILE`).
+- Fakes (`tests/fakes/over_http.py`, the tests' own FakeRazorpay and FakeSheets over HTTP):
+  Razorpay's API answering `GET /v1/payments/{id}` with the recorded fetch
+  (`tests/recordings/razorpay/fetch/payment-*-<id>.json`, else the recorded 400 "does not
+  exist"), a payment's refunds pages, and the payments and refunds lists, empty: an account
+  with no payments; Google's token endpoint answering 400 `invalid_grant`. Nothing leaves
+  127.0.0.1.
 - Process: one detached tree, top PID in `.verify/pid`: a supervisor (it hosts the fakes) whose
   child is the installed `wsync serve --config .verify/run/webhook-sync.toml`. On Windows the
   tree is python (venv shim) > python > wsync.exe > python > python; the real server's PID is in

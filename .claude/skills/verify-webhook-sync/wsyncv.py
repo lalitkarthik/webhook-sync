@@ -11,8 +11,8 @@ object would take the detached server down when uv exits):
     $PY .claude/skills/verify-webhook-sync/wsyncv.py cleanup
 
 `launch` starts one detached process tree whose top PID goes to `.verify/pid`: a supervisor
-serving the fake upstreams (`tests/fakes/upstreams.py`: Razorpay's API replaying the recordings,
-and a Google token endpoint that refuses the key) and its child, the installed `wsync serve`.
+serving the fakes over HTTP (`tests/fakes/over_http.py`: FakeRazorpay replaying the recordings,
+and FakeSheets, its token endpoint refusing the key) and its child, the installed `wsync serve`.
 Fixture secrets only (`tests/support.py`); no call leaves 127.0.0.1. Everything it writes is
 under `.verify/run/`; `cleanup` kills that PID tree only and keeps any evidence folder.
 """
@@ -29,6 +29,7 @@ import subprocess
 import sys
 import time
 from contextlib import closing
+from datetime import UTC, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -42,7 +43,7 @@ SERVE_LOG = RUN / "serve.log"
 UPSTREAMS_LOG = RUN / "upstreams.log"
 WINDOWS = sys.platform == "win32"
 
-sys.path[:0] = [str(ROOT / "tests"), str(ROOT / "tests" / "fakes")]
+sys.path[:0] = [str(ROOT / "tests")]
 
 
 def _wsync() -> str:
@@ -122,9 +123,6 @@ def launch(args: argparse.Namespace) -> int:
     (RUN / "admin_port").write_text(str(admin_port), encoding="utf-8")
     (RUN / "upstreams_port").write_text(str(upstreams_port), encoding="utf-8")
     environ = processes.fixture_environment()
-    environ["GOOGLE_SERVICE_ACCOUNT_B64"] = support.fixture_service_account_b64(
-        token_uri=f"http://127.0.0.1:{upstreams_port}/token"
-    )
     flags: dict[str, object] = (
         {"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP}
         if WINDOWS
@@ -154,7 +152,7 @@ def launch(args: argparse.Namespace) -> int:
             print(f"ready: PID {supervisor.pid} (.verify/pid)")
             print(f"public  http://127.0.0.1:{port}  (POST /webhooks/razorpay, GET /health)")
             print(f"admin   http://127.0.0.1:{admin_port}  (GET /admin/status, POST /admin/resume/<name>)")
-            print(f"fakes   http://127.0.0.1:{upstreams_port}  (Razorpay API, Google token)")
+            print(f"fakes   http://127.0.0.1:{upstreams_port}  (Razorpay API; Google's proxy)")
             print(f"config  {state['config']}")
             print("ports   .verify/port, .verify/run/admin_port, .verify/run/upstreams_port")
             return 0
@@ -164,23 +162,29 @@ def launch(args: argparse.Namespace) -> int:
 
 
 def supervise(_: argparse.Namespace) -> int:
-    """The detached top of the tree: the fake upstreams in a thread, `wsync serve` as a child."""
-    from upstreams import start_upstreams
+    """The detached top of the tree: the fakes over HTTP in threads, `wsync serve` as a child
+    reaching Google through them. Offline, Google refuses the key: the sheets sink pauses."""
+    import support
+    from fakes.over_http import FakesOverHttp
+    from fakes.razorpay import FakeRazorpay
+    from fakes.sheets import FakeSheets
 
     state = _state()
-    upstreams = start_upstreams(int(state["upstreams_port"]))
-    with SERVE_LOG.open("wb") as log:
-        server = subprocess.Popen(
-            [_wsync(), "serve", "--config", str(CONFIG)]
-            + (["--demo-fail-first", str(n)] if (n := int(state["demo_fail_first"])) else []),
-            cwd=ROOT,
-            stdin=subprocess.DEVNULL,
-            stdout=log,
-            stderr=log,
-        )
-        code = server.wait()
-    upstreams.shutdown()
-    return code
+    sheets = FakeSheets(support.TEST_SPREADSHEET_ID)
+    sheets.refuse_tokens = True
+    razorpay = FakeRazorpay(now=datetime.now(UTC))
+    with FakesOverHttp(razorpay, sheets, port=int(state["upstreams_port"])) as fakes:
+        with SERVE_LOG.open("wb") as log:
+            server = subprocess.Popen(
+                [_wsync(), "serve", "--config", str(CONFIG)]
+                + (["--demo-fail-first", str(n)] if (n := int(state["demo_fail_first"])) else []),
+                cwd=ROOT,
+                env=fakes.environ(os.environ),
+                stdin=subprocess.DEVNULL,
+                stdout=log,
+                stderr=log,
+            )
+            return server.wait()
 
 
 def doctor(_: argparse.Namespace) -> int:

@@ -1,7 +1,7 @@
 """The sweeper: payments that exist only at Razorpay come back through the sweep (#39).
 
 Seam: the running app. Its lifespan starts the sweeper beside the ledger stage and the flusher;
-Razorpay's lists and fetches are answered by respx from the recordings (`FakeRazorpay`, whose
+Razorpay's lists and fetches are answered by respx from the recordings (`fakes.razorpay`, whose
 clock is its own, as Razorpay's is), and Google by P3's fake Sheets. What comes out is what an
 outsider sees: events with their origin, `payments` rows, checkpoints and the sheet. SQLite is
 real; our clock is moved with time-machine and keeps ticking, so the API's token bucket refills.
@@ -13,9 +13,8 @@ import logging
 import time
 from collections.abc import AsyncGenerator, Callable, Iterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
-from email.utils import format_datetime
 from pathlib import Path
 from typing import Any, cast
 from zoneinfo import ZoneInfo
@@ -24,16 +23,20 @@ import httpx
 import pytest
 import respx
 import sqlalchemy as sa
+from fakes.razorpay import (
+    RAZORPAY_API,
+    FakeRazorpay,
+    recorded_listed_payments,
+    recorded_listed_refunds,
+)
 from fakes.sheets import FakeSheets
 from fastapi import FastAPI
 from support import (
-    RAZORPAY_RECORDINGS,
     RECORDED_ACCOUNT,
     TEST_SPREADSHEET_ID,
     ReadRows,
     recorded_api_answer,
     recorded_delivery,
-    recorded_fetch,
     sign_razorpay,
 )
 from time_machine import TimeMachineFixture
@@ -50,91 +53,9 @@ from webhook_sync.sinks import sheets as sheets_module
 from webhook_sync.sinks.sheets import PAYMENTS
 from webhook_sync.sweeper import sweep as sweeper_module
 
-RAZORPAY_API = "https://api.razorpay.test"
 NOW = datetime(2026, 10, 2, 20, 0, tzinfo=UTC)  # after every recorded payment was created
 OUTAGE = ("pay_Tj64grZUMO3PEj", "pay_Tj66x2JuEXjIdB", "pay_Tj9rKBOXWcsMeE")
 NEVER_ATTEMPTED = "pay_Tj63Ohj3DwqGru"  # `created`: no event, no row
-
-
-def recorded_listed_payments() -> dict[str, dict[str, Any]]:
-    """The recorded payments list's items by id, as Razorpay lists them (no refunds expanded)."""
-    path = RAZORPAY_RECORDINGS / "api" / "list" / "payments-list-count100.json"
-    items = json.loads(path.read_text())["body"]["items"]
-    return {item["id"]: item for item in items}
-
-
-def recorded_listed_refunds() -> list[dict[str, Any]]:
-    path = RAZORPAY_RECORDINGS / "api" / "list" / "refunds-list-count100.json"
-    return json.loads(path.read_text())["body"]["items"]
-
-
-def recorded_fetches() -> dict[str, dict[str, Any]]:
-    """Each recorded payment fetch (refunds and card expanded), by payment id."""
-    fetched: dict[str, dict[str, Any]] = {}
-    for path in (RAZORPAY_RECORDINGS / "fetch").glob("payment-*-pay_*.json"):
-        body = recorded_fetch(path.stem)
-        fetched[body["id"]] = body
-    return fetched
-
-
-@dataclass
-class FakeRazorpay:
-    """Razorpay's payments and refunds lists and its payment fetch, on Razorpay's own clock.
-
-    A list answers as Razorpay does: newest first, `from` and `to` both inclusive, `count` items
-    after `skip`, with `now` in the `Date` header. A fetch answers the payment's recorded state.
-    `hold_at` makes a list call wait while `release` is clear (a sweep caught mid-slice)."""
-
-    now: datetime
-    payments: dict[str, dict[str, Any]] = field(default_factory=dict[str, dict[str, Any]])
-    refunds: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
-    fetches: dict[str, dict[str, Any]] = field(default_factory=recorded_fetches)
-    list_calls: list[tuple[str, dict[str, str]]] = field(
-        default_factory=list[tuple[str, dict[str, str]]]
-    )
-    fail_at: int | None = None
-    """A list call whose `from` is this answers 503, once."""
-    hold_at: int | None = None
-    """A list call whose `from` is this waits until `release` is set."""
-    release: asyncio.Event = field(default_factory=asyncio.Event)
-
-    def mount(self, router: respx.MockRouter) -> None:
-        router.get(f"{RAZORPAY_API}/v1/payments").mock(side_effect=self._list_payments)
-        router.get(f"{RAZORPAY_API}/v1/refunds").mock(side_effect=self._list_refunds)
-        router.get(url__regex=rf"^{RAZORPAY_API}/v1/payments/(?P<payment_id>pay_\w+)(\?|$)").mock(
-            side_effect=self._fetch
-        )
-
-    def calls_to(self, path: str) -> list[dict[str, str]]:
-        return [query for called, query in self.list_calls if called == path]
-
-    async def _list_payments(self, request: httpx.Request) -> httpx.Response:
-        return await self._list(request, list(self.payments.values()))
-
-    async def _list_refunds(self, request: httpx.Request) -> httpx.Response:
-        return await self._list(request, self.refunds)
-
-    async def _list(self, request: httpx.Request, items: list[dict[str, Any]]) -> httpx.Response:
-        query = dict(request.url.params)
-        self.list_calls.append((request.url.path, query))
-        start, end = int(query["from"]), int(query["to"])
-        if start == self.fail_at:
-            self.fail_at = None
-            return httpx.Response(503, json={"error": {"description": "down"}})
-        if start == self.hold_at:
-            await self.release.wait()
-        count, skip = int(query.get("count", "10")), int(query.get("skip", "0"))
-        newest_first = sorted(items, key=lambda item: item["created_at"], reverse=True)
-        inside = [item for item in newest_first if start <= item["created_at"] <= end]
-        page = inside[skip : skip + count]
-        return httpx.Response(
-            200,
-            json={"entity": "collection", "count": len(page), "items": page},
-            headers={"date": format_datetime(self.now, usegmt=True)},
-        )
-
-    def _fetch(self, request: httpx.Request, payment_id: str) -> httpx.Response:
-        return httpx.Response(200, json=self.fetches[payment_id])
 
 
 @pytest.fixture(autouse=True)

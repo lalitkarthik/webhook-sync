@@ -53,6 +53,7 @@ from sqlalchemy.dialects import sqlite
 from webhook_sync.alerts import Alerter
 from webhook_sync.clock import to_db_text, utc_now
 from webhook_sync.config import Config, RetryProfile
+from webhook_sync.crashpoints import crash_point
 from webhook_sync.db.schema import jobs, payments, sheet_state, sinks, verify_runs
 from webhook_sync.db.writer import Transaction, Writer
 from webhook_sync.queue import ClaimedJob, Done, Failure, Pauses, StageFailed, enqueue
@@ -268,6 +269,7 @@ class Flusher:
                 )
             )
 
+        crash_point("after_sheet_write_before_done")  # written and checked, jobs not completed
         return Done(writes=writes, failed=failed)
 
     # -- the post-write check ---------------------------------------------------------------

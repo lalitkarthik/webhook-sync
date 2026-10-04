@@ -1,5 +1,12 @@
 # Changelog
 
+## P5: prove nothing is lost or written twice — 2026-10-04
+
+- `WSYNC_CRASH_AT=<name>` makes `wsync serve` exit with code 86 at a named place (`after_event_commit`, `after_sheet_write_before_done`, `mid_slice`); it is refused without an `rzp_test_` key or for an unknown name, and logs one warning when armed. Restarting on the same database loses nothing and writes nothing twice.
+- The test suite now proves it: five scripted scenarios (the duplicate storm, the outage and catch-up, the late authorisation, Sheets answering 429 while a person edits the sheet, the partial and failed refund) each end with the nine invariants, and three crash tests kill and restart the real server.
+- `uv run pytest -m load` runs the load checks: 1,000 concurrent replays of one delivery are answered 2xx or 429, never 503, with the server's own p99 at 0.8 s on the laptop, and 200 payments reach the sheet in at most three Sheets calls a flush. `synchronous=FULL` stays.
+- The tests run on Windows once a week; no behaviour of P1-P4 changed, and no bug was found in it.
+
 ## P4: catch what webhooks missed, and prove the sheet is right — 2026-10-04
 
 - The sweeper lists Razorpay's payments and refunds on Razorpay's own clock, at startup and every 10 minutes, so payments made while the server was down reach the ledger and the sheet with Via = sweep; an hourly re-list catches later captures, fees and refunds, and `heartbeat_url` gets one ping per healthy pass.

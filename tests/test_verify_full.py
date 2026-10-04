@@ -3,7 +3,7 @@
 Seam: the running app. Its lifespan runs the full verify once per local date at `[verify]
 nightly_at` in `service.timezone`, caught up at start when the server was down then, beside the
 sweeper, the ledger stage and the flusher. Razorpay's lists and fetches are answered by respx from
-the recordings (the sweeper tests' `FakeRazorpay`), Google by P3's fake Sheets and the alerts
+the recordings (the fakes' `FakeRazorpay`), Google by P3's fake Sheets and the alerts
 webhook by respx. Every payment was created ten days before the night, so neither the sweep nor
 an hourly re-list brings it in: only verify can. What comes out is what an outsider sees:
 `verify_runs`, `verify_findings`, `payments`, the sheet and the alerts. SQLite is real; our
@@ -24,15 +24,15 @@ from typing import Any
 import httpx
 import pytest
 import respx
-from fakes.sheets import FakeSheets
-from respx import Route
-from support import RECORDED_ACCOUNT, TEST_SPREADSHEET_ID, ReadRows, execute_aside
-from test_sweeper import (
+from fakes.razorpay import (
     RAZORPAY_API,
     FakeRazorpay,
     recorded_listed_payments,
     recorded_listed_refunds,
 )
+from fakes.sheets import FakeSheets
+from respx import Route
+from support import RECORDED_ACCOUNT, TEST_SPREADSHEET_ID, ReadRows, execute_aside
 from time_machine import TimeMachineFixture
 
 from webhook_sync.admin.app import create_admin_app

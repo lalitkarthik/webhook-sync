@@ -74,3 +74,15 @@ def wait_until_healthy(base_url: str, process: subprocess.Popen[bytes]) -> None:
             pass
         time.sleep(0.05)
     pytest.fail("wsync serve did not answer /health in time")
+
+
+def stop(process: subprocess.Popen[bytes]) -> None:
+    """Stop the server and every process under it: on Windows `wsync.exe` is a launcher with
+    the server as its grandchild, and `terminate` would only end the launcher."""
+    if sys.platform == "win32":
+        subprocess.run(
+            ["taskkill", "/T", "/F", "/PID", str(process.pid)], capture_output=True, check=False
+        )
+    else:
+        process.terminate()
+    process.wait(timeout=30)

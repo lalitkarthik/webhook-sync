@@ -59,6 +59,7 @@ markers = [
     "unrecorded: uses Razorpay's documented samples, not recorded deliveries (Q113)",
     "posix: needs POSIX signals and a direct child process; skipped on Windows (deploys run Linux)",
     "smoke: drives the real wsync serve end to end (uv run pytest -m smoke)",
+    "load: a load check against the real wsync serve; its timing is asserted only under -m load",
 ]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
@@ -81,6 +82,6 @@ layers = [
     "webhook_sync.sinks",
     "webhook_sync.alerts",
     "webhook_sync.queue",
-    "webhook_sync.db | webhook_sync.logs",
+    "webhook_sync.db | webhook_sync.logs | webhook_sync.crashpoints",
     "webhook_sync.config | webhook_sync.clock",
 ]

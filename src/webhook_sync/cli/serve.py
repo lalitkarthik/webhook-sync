@@ -7,6 +7,7 @@ A refusal prints one line naming the key or variable and exits non-zero.
 import argparse
 import asyncio
 import logging
+import os
 import random
 import signal
 import sys
@@ -18,6 +19,7 @@ from typing import override
 import uvicorn
 from fastapi import FastAPI
 
+from webhook_sync import crashpoints
 from webhook_sync.admin.app import create_admin_app
 from webhook_sync.clock import utc_now
 from webhook_sync.config import Config, ConfigError, load_config, locate_data_dir
@@ -173,11 +175,12 @@ def start(
 ) -> Generator[Config]:
     """Run the startup sequence and yield the config, holding the lock until the block ends.
 
-    Order (operations.md): take the lock → validate the config → refuse a newer schema → apply
-    migrations → reclaim jobs left running (A13) → the caller starts listening, its lifespan
-    starting the reaper. The lock file lives in the data directory, so only `[service]
-    data_dir` is read before the lock. Raises StartRefused, holding nothing, if any step finds
-    starting unsafe.
+    Order (operations.md): take the lock → validate the config, and arm the crash point
+    `WSYNC_CRASH_AT` names (Q159) → refuse a newer schema → apply migrations → reclaim jobs left
+    running (A13) → the caller starts listening, its lifespan starting the reaper. The lock file
+    lives in the data directory, so only `[service] data_dir` is read before the lock. Raises
+    StartRefused, holding nothing, if any step finds starting unsafe. The crash point is
+    disarmed when the block ends.
     """
     with ExitStack() as held:
         try:
@@ -192,6 +195,8 @@ def start(
             config = load_config(config_path, environ)
             if demo_fail_first is not None:  # part of validating the config (A6)
                 check_demo_switch(config)
+            crashpoints.arm(config, os.environ if environ is None else environ)
+            held.callback(crashpoints.disarm)
             asyncio.run(_prepare_database(config))
         except (ConfigError, LockHeld, SchemaTooNew) as error:
             raise StartRefused(str(error)) from None

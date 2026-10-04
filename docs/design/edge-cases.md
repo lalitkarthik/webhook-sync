@@ -6,6 +6,8 @@
 
 **How to read it.** The diagram shows where each section sits on the path. Each row is one case. "Decided in" links the question in the [grilling log](grilling-log.md), the ADR or the part page that settles it. "Proved by" names a kind from [testing.md](testing.md): **unit**; **integration** (real SQLite, with FakeRazorpay and FakeSheets replaying the recording spike; Stripe-only rows use FakeStripe, parked with Stripe); **scenario** (a scripted scenario checked against the nine invariants, "inv. N" naming one); **crash point** (a subprocess killed at that named place); **load** (the duplicate storm or the burst); **doctor**. Razorpay rows use signed sample payloads and are built after pitching, as are probes, rebuild and the admin pages ([build-order.md](build-order.md)). Words in **bold** are defined in [CONTEXT.md](../../CONTEXT.md).
 
+*Updated 2026-10-04 after #53 measured the duplicate storm: B2's replies are 2xx or 429 under the rate cap, and its 2 s bar is the server's own handling time (Q171, Q172).*
+
 ```mermaid
 flowchart TD
   SRC["Source<br/>(Stripe, Razorpay later)"] -->|"delivery"| RCV["Receiver: rate cap, checks, fingerprint<br/>A, B"]
@@ -46,7 +48,7 @@ flowchart TD
 | # | Case | What happens | Decided in | Proved by |
 |---|---|---|---|---|
 | B1 | Same delivery sent 5 times; the same event id from two different sources | One event per `(source, event_id)`. Each resend with the same **fingerprint** is a **duplicate**: 200, delivery logged, nothing changes. | [Q14](grilling-log.md), [Q71](grilling-log.md) | scenario (duplicate storm), inv. 3 |
-| B2 | 1,000 concurrent deliveries of one event | They queue in order on the one writer, not on SQLite's lock. Every request gets 2xx, with zero 503s and a p99 under 2 s on the development laptop; then one event, one row, one sheet row, 999 duplicates logged. | [Q83](grilling-log.md), [testing.md](testing.md) | load (duplicate storm) |
+| B2 | 1,000 concurrent deliveries of one event | The 50-a-second cap answers what it can't take 429 `rate_capped` before any database work; the rest queue in order on the one writer, not on SQLite's lock. Every reply is 2xx or 429, with zero 503s; each delivery that got a 429 is answered 2xx when the source sends it again. Then one event, one row, one sheet row, 999 duplicates logged. The server's own handling time has a p99 under 2 s on the development laptop. | [Q83](grilling-log.md), [Q171](grilling-log.md), [Q172](grilling-log.md), [testing.md](testing.md) | load (duplicate storm) |
 | B3 | Same event id, different bytes, same meaning (Stripe renders a resend for another API version, or with a changed `pending_webhooks`) | A duplicate. The comparison is on the fingerprint (type, object id, creation time, mode), never on raw bytes. | [Q71](grilling-log.md), [receiver.md](receiver.md) | integration (FakeStripe replaying recorded resends), inv. 7 |
 | B4 | Same event id, different fingerprint | **Conflict**: the first event is kept, the delivery is answered 200 and logged `conflict`, and an alert names both. | [Q71](grilling-log.md), [receiver.md](receiver.md) | unit |
 | B5 | Process dies before the event commits; after the commit but before the 202 leaves; a power cut just after the 202 | Before: nothing stored, and the source's retry stores it once. After: the retry is a duplicate. `synchronous=FULL` means a committed event survives a power cut. | [Q50](grilling-log.md), [Q83](grilling-log.md), [operations.md](operations.md) | crash points `before_event_commit`, `after_event_commit` |
