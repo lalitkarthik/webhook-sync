@@ -97,7 +97,7 @@ Five **scenarios** run in the test's own process, each followed by the invariant
 - **Each new fake ability has a contract test** against the recordings where a recording exists, so the fake can't drift from the real service.
 - **A crash test fails if the crash point was never reached**: the first process must exit with the crash point's exit code.
 - **Prior art:** the sweeper and verify tests (in-process app, respx, time-machine, FakeRazorpay); the smoke test and the process helpers (a real server, upstreams over HTTP); the fake Sheets contract test; the `unrecorded` and `posix` markers.
-- **Suite time.** The scenarios, the crash tests and the storm run in the default suite; the storm takes about 40 s on the laptop, 20 s of it the cap taking 1,000 deliveries. The burst takes over 5 minutes (one ledger worker, a recorded fetch of about 1.6 s), so it runs only under `-m load`, locally and in the weekly workflow ([Q173](../design/grilling-log.md)).
+- **Suite time.** The scenarios, the crash tests and the storm run in the default suite; the storm takes about half a minute on the laptop, 20 s of it the cap taking 1,000 deliveries. The burst takes over 5 minutes (one ledger worker, a recorded fetch of about 1.6 s), so it runs only under `-m load`, locally and in the weekly workflow ([Q173](../design/grilling-log.md)).
 
 ## Out of Scope
 
@@ -130,7 +130,7 @@ Five **scenarios** run in the test's own process, each followed by the invariant
 - A13 [INTERNAL] P5 adds the weekly Windows job only (Q170) — the real run needs P6's `demo`.
 - A14 [INTERNAL] The three crash points sit after the event's commit and before the answer, after the flusher's post-write check and before its jobs complete, and inside a sweep slice before the checkpoint moves — the places testing.md's "proves" column describes.
 - A15 [INTERNAL] The crash exit uses one fixed non-zero exit code, and a crash test fails unless the first process exited with it — otherwise a test could pass without crashing.
-- A16 [INTERNAL] The storm runs in the default suite, about 40 s on the laptop; the burst, over 5 minutes, runs only under `-m load` (Q173) — the suite already includes the smoke tests.
+- A16 [INTERNAL] The storm runs in the default suite, about half a minute on the laptop; the burst, over 5 minutes, runs only under `-m load` (Q173) — the suite already includes the smoke tests.
 - A17 [INTERNAL] No research step: the design route skips it, and G33 is measured by the storm itself.
 
 ## Decisions made during the build

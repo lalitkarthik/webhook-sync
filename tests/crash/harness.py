@@ -52,9 +52,11 @@ from webhook_sync.crashpoints import CRASH_EXIT_CODE, VARIABLE
 
 CRASH_WAIT = 15.0
 """Real seconds a server armed at a crash point gets to reach it, once driven there."""
-NO_LIMITS = httpx.Limits(max_connections=None, max_keepalive_connections=None)
-"""A server's client opens as many connections as requests sent at once: a load check's
-thousand concurrent deliveries are a thousand connections, none waiting in the client's pool."""
+A_CONNECTION_EACH = httpx.Limits(max_connections=None, max_keepalive_connections=0)
+"""A server's client sends every request on a connection of its own: a load check's thousand
+concurrent deliveries are a thousand connections, none waiting in the client's pool, and a
+delivery sent again never goes on a connection the server kept alive and is closing by then,
+which would lose it with no answer."""
 
 
 @dataclass
@@ -144,7 +146,7 @@ class CrashRun:
                 async with (
                     self.watch,
                     httpx.AsyncClient(
-                        base_url=base_url, trust_env=False, timeout=30, limits=NO_LIMITS
+                        base_url=base_url, trust_env=False, timeout=30, limits=A_CONNECTION_EACH
                     ) as client,
                     httpx.AsyncClient(base_url=admin_url, trust_env=False, timeout=30) as admin,
                 ):
