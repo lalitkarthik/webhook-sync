@@ -1,0 +1,25 @@
+name: Weekly
+
+# The tests on Windows, where the service is developed, once a week (Q170): the default suite,
+# then the load checks by themselves, the burst included (Q173). P6 adds the real-services job.
+on:
+  schedule:
+    - cron: "30 3 * * 1"  # Mondays 03:30 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+      # .python-version says 3.14, so this installs the newest final 3.14 release.
+      - run: uv python install
+      - run: uv sync --locked
+      - name: Tests
+        run: uv run pytest -m "not load"
+      - name: Load checks
+        run: uv run pytest -m load
