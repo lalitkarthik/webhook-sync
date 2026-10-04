@@ -83,43 +83,47 @@ class FullVerify:
 
     async def run_nightly(self) -> None:
         """A full run once per local date at `nightly_at`, caught up at start, until
-        cancelled."""
+        cancelled. A pass that raises is logged and the loop carries on."""
         server_started = utc_now()
         done: date | None = None  # a night run with Razorpay paused stores no full run
         failing: tuple[date, str] | None = None  # a night still to store, and why it failed
         at_start = True
         while True:
-            now = utc_now()
-            night = now.astimezone(self._zone).date()
-            if failing is not None and failing[0] < night:
-                log.warning(
-                    "nightly verify given up: its date is over",
-                    extra={"local_date": failing[0].isoformat(), "error": failing[1]},
-                )
-                failing = None
-            if night == done or await self._ran_on(night):
-                night += timedelta(days=1)
-            due = nightly_due(night, self._config.verify.nightly_at, self._zone)
-            if due > now:
-                log.info(
-                    "nightly verify waiting",
-                    extra={"local_date": night.isoformat(), "due_at": to_db_text(due)},
-                )
-                await self._sleep((due - now).total_seconds())
-            if at_start:  # caught up at start, or due soon after it: the sweep goes first
-                await self._first_sweep(server_started)
-            at_start = False
-            failed = await self._try(night)
-            if failed is None:
-                done, failing = night, None
-            else:
-                retry_in, error = failed
-                failing = (night, error)
-                log.warning(
-                    "nightly verify failed; trying again",
-                    extra={"local_date": night.isoformat(), "retry_in_s": retry_in},
-                )
-                await self._sleep(retry_in)
+            try:
+                now = utc_now()
+                night = now.astimezone(self._zone).date()
+                if failing is not None and failing[0] < night:
+                    log.warning(
+                        "nightly verify given up: its date is over",
+                        extra={"local_date": failing[0].isoformat(), "error": failing[1]},
+                    )
+                    failing = None
+                if night == done or await self._ran_on(night):
+                    night += timedelta(days=1)
+                due = nightly_due(night, self._config.verify.nightly_at, self._zone)
+                if due > now:
+                    log.info(
+                        "nightly verify waiting",
+                        extra={"local_date": night.isoformat(), "due_at": to_db_text(due)},
+                    )
+                    await self._sleep((due - now).total_seconds())
+                if at_start:  # caught up at start, or due soon after it: the sweep goes first
+                    await self._first_sweep(server_started)
+                at_start = False
+                failed = await self._try(night)
+                if failed is None:
+                    done, failing = night, None
+                else:
+                    retry_in, error = failed
+                    failing = (night, error)
+                    log.warning(
+                        "nightly verify failed; trying again",
+                        extra={"local_date": night.isoformat(), "retry_in_s": retry_in},
+                    )
+                    await self._sleep(retry_in)
+            except Exception:  # a database error, say: the next pass tries again
+                log.exception("nightly verify pass failed; trying again")
+                await self._sleep(RETRY_EVERY.total_seconds())
 
     async def _try(self, night: date) -> tuple[float, str] | None:
         """One nightly run; None when the night is done, else the seconds to wait before
@@ -137,10 +141,11 @@ class FullVerify:
     async def _first_sweep(self, server_started: datetime) -> None:
         """Wait, `FIRST_SWEEP_WAIT` at most, until both lists' checkpoints have reached the
         server's start; not while Razorpay is paused, when there is no sweep to wait for."""
-        give_up = utc_now() + FIRST_SWEEP_WAIT
+        loop = asyncio.get_running_loop()
+        give_up = loop.time() + FIRST_SWEEP_WAIT.total_seconds()  # real time, whatever the clock
         caught_up = to_db_text(server_started - FIRST_SWEEP_LAG)
         source, account = self._razorpay.name, self._config.razorpay.account
-        while self._razorpay.name not in self._pauses.sources and utc_now() < give_up:
+        while self._razorpay.name not in self._pauses.sources and loop.time() < give_up:
             async with self._writer.transaction() as tx:
                 rows = await tx.execute(
                     sa.select(checkpoints.c.list).where(
