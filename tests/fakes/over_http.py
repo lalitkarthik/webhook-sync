@@ -49,9 +49,9 @@ class Mountable(Protocol):
 
 
 class FakesOverHttp:
-    """`fakes`, served on 127.0.0.1 at `url` while the block runs."""
+    """`fakes`, served on 127.0.0.1 at `url` (on `port`; 0: a free one) while the block runs."""
 
-    def __init__(self, *fakes: Mountable) -> None:
+    def __init__(self, *fakes: Mountable, port: int = 0) -> None:
         router = respx.MockRouter(assert_all_called=False)
         for fake in fakes:
             fake.mount(router)
@@ -60,7 +60,7 @@ class FakesOverHttp:
         self._loop_thread = Thread(target=self._loop.run_forever, daemon=True)
         self._files = tempfile.TemporaryDirectory(prefix="wsync-fakes-")
         self.ca_file = Path(self._files.name) / "authority.pem"
-        self._server = _Server(self)
+        self._server = _Server(self, port)
         self.url = f"http://127.0.0.1:{self._server.server_address[1]}"
 
     def __enter__(self) -> Self:
@@ -106,8 +106,8 @@ class FakesOverHttp:
 
 
 class _Server(ThreadingHTTPServer):
-    def __init__(self, fakes: FakesOverHttp) -> None:
-        super().__init__(("127.0.0.1", 0), _Handler)
+    def __init__(self, fakes: FakesOverHttp, port: int) -> None:
+        super().__init__(("127.0.0.1", port), _Handler)
         self.fakes = fakes
         self.tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 
