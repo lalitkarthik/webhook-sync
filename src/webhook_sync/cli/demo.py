@@ -341,25 +341,31 @@ def _stop(process: subprocess.Popen[bytes], data_dir: Path) -> None:
 
 def _sweep_until_stored(config_path: Path, data_dir: Path, paid: list[str]) -> None:
     """Sweeps through the receiver until each payment is stored. Razorpay's list gives a sweep
-    only payments a minute old (sweeper.md), so a payment just made waits for a later one."""
+    only payments a minute old (sweeper.md), so a payment just made waits for a later one; a
+    sweep that stops short, a list call failing, is tried again too."""
     deadline = time.monotonic() + STORED_WITHIN
-    told = False
+    say("sweeping Razorpay's payments since the checkpoint")
     while True:
-        say("sweeping Razorpay's payments since the checkpoint" if not told else "sweeping again")
         result, _ = run_by_hand(config_path, "/admin/sweep", None, runs.sweep)
-        if not result["finished"]:
-            raise CommandFailed("the sweep stopped before catching up; see wsync status")
-        stored = asyncio.run(_stored(data_dir, paid))
-        if len(stored) == len(paid):
+        missing = len(paid) - len(asyncio.run(_stored(data_dir, paid)))
+        if not missing:
             say(f"swept: all {len(paid)} payments stored, each as a sweep event")
             return
         if time.monotonic() > deadline:
-            raise CommandFailed(f"{len(paid) - len(stored)} payments still not listed by Razorpay")
-        say(
-            f"{len(paid) - len(stored)} of {len(paid)} payments not listed yet: a sweep reads "
-            f"only payments a minute old at Razorpay; waiting {SWEEP_AGAIN_AFTER:.0f} s"
-        )
-        told = True
+            raise CommandFailed(
+                f"{missing} of {len(paid)} payments still not stored after "
+                f"{STORED_WITHIN / 60:.0f} minutes of sweeps; see wsync status"
+            )
+        if result["finished"]:
+            say(
+                f"{missing} of {len(paid)} payments not listed yet: a sweep reads only payments "
+                f"a minute old at Razorpay; sweeping again in {SWEEP_AGAIN_AFTER:.0f} s"
+            )
+        else:
+            say(
+                "the sweep stopped before catching up: a list call to Razorpay failed; "
+                f"sweeping again in {SWEEP_AGAIN_AFTER:.0f} s"
+            )
         time.sleep(SWEEP_AGAIN_AFTER)
 
 

@@ -30,8 +30,9 @@ PAYER_VARIABLE = "WSYNC_DEMO_PAYER"
 CHECKOUT_JS = "https://checkout.razorpay.com/v1/checkout.js"
 STEP_MS = 30_000
 """How long the browser payer waits for any one step of Checkout."""
-BANKS = re.compile(r"State Bank|SBI|HDFC|ICICI|Axis|Kotak")
-"""The banks Checkout's Netbanking tab lists first: any one leads to the mock bank page."""
+BANKS = re.compile(r"^(Canara Bank|IDBI|Yes Bank|Karnataka Bank)$")
+"""Banks Checkout's Netbanking tab listed in test mode (seen 2026-10-04): picking one opens the
+mock bank page at once."""
 
 
 class PayerFailed(Exception):

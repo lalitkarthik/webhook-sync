@@ -181,6 +181,8 @@ class FakeRazorpay:
     )
     fail_at: int | None = None
     """A list call whose `from` is this answers 503, once."""
+    lists_down: bool = False
+    """While set, every list call answers 503: Razorpay's lists down for a while."""
     hold_at: int | None = None
     """A list call whose `from` is this waits until `release` is set."""
     release: asyncio.Event = field(default_factory=asyncio.Event)
@@ -441,6 +443,8 @@ class FakeRazorpay:
                 headers={"date": format_datetime(self.now, usegmt=True)},
             )
         start, end = int(query["from"]), int(query["to"])
+        if self.lists_down:
+            return httpx.Response(503, json={"error": {"description": "down"}})
         if start == self.fail_at:
             self.fail_at = None
             return httpx.Response(503, json={"error": {"description": "down"}})

@@ -361,6 +361,21 @@ async def test_when_the_payer_fails_outage_prints_the_page_to_pay_by_hand_and_wa
     await assert_swept_once(run, read_rows, [payment_id])
 
 
+async def test_outage_sweeps_again_when_a_sweep_stops_short(
+    run: CrashRun, read_rows: ReadRows
+) -> None:
+    run.razorpay.lists_down = True
+    scene = Scene(run, "outage", "--orders", "1", payer=FAKE_PAYER)
+
+    await scene.until("the sweep stopped before catching up")
+    run.razorpay.lists_down = False
+    run.razorpay.now += timedelta(minutes=2)
+    code, output = await scene.ended()
+
+    assert code == 0, output
+    await assert_swept_once(run, read_rows, run.razorpay.orders_paid())
+
+
 async def test_outage_refuses_while_a_server_runs(run: CrashRun) -> None:
     async with run.server():
         code, output = await wsync_demo(run, "outage")
