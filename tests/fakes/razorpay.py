@@ -8,14 +8,14 @@ a different body under the same id. What it knows is what the invariants hold th
 
 import asyncio
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from email.utils import format_datetime
 from typing import Any
 
 import httpx
 import respx
-from support import RAZORPAY_RECORDINGS, recorded_fetch
+from support import RAZORPAY_RECORDINGS, recorded_delivery, recorded_fetch, sign_razorpay
 
 RAZORPAY_API = "https://api.razorpay.test"
 
@@ -41,6 +41,52 @@ def recorded_fetches() -> dict[str, dict[str, Any]]:
     return fetched
 
 
+@dataclass(frozen=True)
+class Delivery:
+    """One webhook delivery as Razorpay sends it: the raw body, and the recorded headers with
+    the body signed by the fixture webhook secret (the recording's own signature used the real
+    one)."""
+
+    body: bytes
+    headers: dict[str, str]
+
+    @property
+    def event_id(self) -> str:
+        return self.headers["x-razorpay-event-id"]
+
+    @property
+    def signature(self) -> str:
+        return self.headers["x-razorpay-signature"]
+
+    @property
+    def payment_id(self) -> str | None:
+        """The payment the event names, or None."""
+        payload: dict[str, Any] = json.loads(self.body).get("payload", {})
+        payment: dict[str, Any] = payload.get("payment", {}).get("entity", {})
+        return payment.get("id")
+
+    def under(self, event_id: str) -> Delivery:
+        """The same bytes and signature under another `x-razorpay-event-id`: the header is not
+        signed (F12), so only the signed-body hash can tell it is the same event."""
+        return replace(
+            self, headers=self.headers | {"x-razorpay-event-id": event_id, "request-id": event_id}
+        )
+
+    def with_body(self, body: dict[str, Any] | bytes) -> Delivery:
+        """Another body under the same event id, signed with the fixture secret."""
+        raw, signed = sign_razorpay(body, event_id=self.event_id)
+        return replace(self, body=raw, headers=self.headers | signed)
+
+
+@dataclass(frozen=True)
+class Sent:
+    """A delivery sent to the receiver, and its answer."""
+
+    delivery: Delivery
+    status_code: int
+    answer: Any
+
+
 @dataclass
 class FakeRazorpay:
     """Razorpay's payments and refunds lists and its payment fetch, on Razorpay's own clock.
@@ -61,6 +107,8 @@ class FakeRazorpay:
     hold_at: int | None = None
     """A list call whose `from` is this waits until `release` is set."""
     release: asyncio.Event = field(default_factory=asyncio.Event)
+    sent: list[Sent] = field(default_factory=list[Sent])
+    """Every delivery sent to the receiver so far, in the order answered."""
 
     def mount(self, router: respx.MockRouter) -> None:
         router.get(f"{RAZORPAY_API}/v1/payments").mock(side_effect=self._list_payments)
@@ -68,6 +116,41 @@ class FakeRazorpay:
         router.get(url__regex=rf"^{RAZORPAY_API}/v1/payments/(?P<payment_id>pay_\w+)(\?|$)").mock(
             side_effect=self._fetch
         )
+
+    def delivery(self, event_id: str, attempt: int = 1) -> Delivery:
+        """The delivery P0 recorded (`tests/recordings/razorpay/<id>-<attempt>.json`), its body
+        re-signed with the fixture webhook secret. The config's account must be
+        RECORDED_ACCOUNT."""
+        path = RAZORPAY_RECORDINGS / f"{event_id}-{attempt}.json"
+        recorded: dict[str, str] = json.loads(path.read_text())["headers"]
+        body, signed = sign_razorpay(recorded_delivery(event_id, attempt), event_id=event_id)
+        headers = {
+            "user-agent": recorded["User-Agent"],
+            "request-id": recorded["Request-Id"],
+            **signed,
+        }
+        return Delivery(body, headers)
+
+    async def deliver(
+        self, client: httpx.AsyncClient, delivery: Delivery, *, times: int = 1
+    ) -> list[Sent]:
+        """Send `delivery` to the receiver `times` times at once, as Razorpay's retries and a
+        replay storm do; the answers, also kept in `sent`. The payment it names exists at
+        Razorpay from now on: it joins `payments`, from the recorded list or its fetch."""
+        payment_id = delivery.payment_id
+        if payment_id is not None and payment_id not in self.payments:
+            listed = recorded_listed_payments()
+            self.payments[payment_id] = listed.get(payment_id) or self.fetches[payment_id]
+
+        async def send() -> Sent:
+            answer = await client.post(
+                "/webhooks/razorpay", content=delivery.body, headers=delivery.headers
+            )
+            sent = Sent(delivery, answer.status_code, answer.json())
+            self.sent.append(sent)
+            return sent
+
+        return list(await asyncio.gather(*(send() for _ in range(times))))
 
     def calls_to(self, path: str) -> list[dict[str, str]]:
         return [query for called, query in self.list_calls if called == path]
