@@ -265,8 +265,19 @@ A statement that must hold once everything settles, whatever happened on the way
 _Avoid_: assertion, property (Hypothesis's word for the test itself)
 
 **Crash point**:
-A named place in the code where a test can kill the worker mid-flight, to prove that restarting loses nothing and duplicates nothing.
+A named place in the code where a test can kill the worker mid-flight, to prove that restarting loses nothing and duplicates nothing. Armed by `WSYNC_CRASH_AT=<name>`, which the server accepts only with a test-mode key.
 _Avoid_: fault injection point, kill switch
+
+**Scenario**:
+A scripted sequence of payments, deliveries and failures run against the fakes, followed by the invariants: the duplicate storm, the outage and catch-up, the Sheets 429, the late authorisation, the partial and failed refund.
+_Avoid_: scene (that is one demonstration for the video)
+
+**Settle**:
+To wait until no job is waiting or running, so the invariants can be checked.
+
+**Load check**:
+A test of many requests at once against the real server process: the duplicate storm (1,000 replays of one delivery) and the burst (200 payments).
+_Avoid_: benchmark, stress test
 
 **Scene**:
 One scripted demonstration for the video, driven by `wsync demo <scene>`.
