@@ -26,7 +26,7 @@ import pytest
 import respx
 from fakes.sheets import FakeSheets
 from respx import Route
-from support import RECORDED_ACCOUNT, TEST_SPREADSHEET_ID, ReadRows
+from support import RECORDED_ACCOUNT, TEST_SPREADSHEET_ID, ReadRows, execute_aside
 from test_sweeper import (
     RAZORPAY_API,
     FakeRazorpay,
@@ -73,12 +73,14 @@ def quick_loops(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def verified_config(config: Config) -> Config:
-    """The test config as the recordings need it; the sweep starts empty, so it stays quiet."""
+    """The test config as the recordings need it, with the nightly run at its default 02:00;
+    the sweep starts empty, so it stays quiet."""
     return replace(
         config,
         razorpay=replace(config.razorpay, account=RECORDED_ACCOUNT, api_url=RAZORPAY_API),
         sweeper=SweeperConfig(initial_lookback_days=0),
         alerts=AlertsConfig(url=HOOK),
+        verify=VerifyConfig(),
     )
 
 
@@ -655,3 +657,33 @@ async def test_while_razorpay_is_paused_the_night_checks_only_the_sheet(
         }
     ]
     assert len(fake.list_calls) == calls_before
+
+
+async def test_a_database_error_in_the_nightly_pass_is_logged_and_the_loop_carries_on(
+    verified_config: Config,
+    data_dir: Path,
+    writer: Writer,
+    outside: Outside,
+    read_rows: ReadRows,
+    clock: TimeMachineFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = replace(verified_config, sinks=())  # no flusher, which reads verify_runs too
+    monkeypatch.setattr(full_module, "RETRY_EVERY", timedelta(milliseconds=50))
+    await execute_aside(data_dir, "ALTER TABLE verify_runs RENAME TO verify_runs_aside")
+
+    failed = "nightly verify pass failed; trying again"
+    async with back_at(config, data_dir, clock, outside, LATE):
+        await until(
+            lambda: sum(r.getMessage() == failed for r in outside.logs.records) >= 2,
+            "the loop failing twice and carrying on",
+        )
+        await execute_aside(data_dir, "ALTER TABLE verify_runs_aside RENAME TO verify_runs")
+        await night_over(config, read_rows, outside, LATE)
+    # Shut down cleanly: leaving the block ran the whole shutdown without raising.
+
+    [error] = {r.exc_info[1].__class__.__name__ for r in outside.logs.records if r.exc_info}
+    assert error == "OperationalError"
+    assert await read_rows("SELECT kind, local_date FROM verify_runs") == [
+        {"kind": "full", "local_date": "2026-10-12"}
+    ]
