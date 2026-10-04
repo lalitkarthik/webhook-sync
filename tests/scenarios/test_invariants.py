@@ -8,9 +8,11 @@ the database, Razorpay moving on) and runs that invariant's check.
 
 import asyncio
 import time
+from collections.abc import Callable
 from typing import Any
 
 import pytest
+from fakes.sheets import BUYERS_TAB, Json, delete_tab, edit_cell, rename_tab
 from invariants import (
     assert_invariants,
     buyers_cells_untouched,
@@ -294,21 +296,38 @@ def sql_literal(value: Any) -> str:
 
 
 async def test_6_nothing_of_the_buyers_is_touched(healthy: Scenario) -> None:
-    healthy.sheets.apply(
-        [
-            {
-                "updateCells": {
-                    "rows": [{"values": [{"userEnteredValue": {"stringValue": "ours now"}}]}],
-                    "fields": "userEnteredValue",
-                    "start": {"sheetId": 0, "rowIndex": 1, "columnIndex": 2},
-                }
-            }
-        ]
-    )
+    outcome = await healthy.outcome()
+
+    assert [tab.title for tab in outcome.buyers_tabs] == ["Sheet1", BUYERS_TAB]
+    assert buyers_cells_untouched(outcome, healthy.on_purpose) == []
+
+
+async def test_6_a_write_to_the_buyers_cells_fails_it(healthy: Scenario) -> None:
+    budget = healthy.sheets.tab(BUYERS_TAB).sheet_id
+    healthy.sheets.apply([edit_cell(0, 1, 2, "ours now"), edit_cell(budget, 1, 1, "0")])
 
     found = buyers_cells_untouched(await healthy.outcome(), healthy.on_purpose)
 
-    assert found == ["the buyer's tab Sheet1: C2 changed"]
+    assert found == ["the buyer's tab Sheet1: C2 changed", "the buyer's tab Budget: B2 changed"]
+
+
+def renamed(sheet_id: int) -> Json:
+    return rename_tab(sheet_id, "Budget 2027")
+
+
+@pytest.mark.parametrize(
+    ("action", "finding"),
+    [
+        (renamed, "the buyer's tab Budget was renamed Budget 2027"),
+        (delete_tab, "the buyer's tab Budget was deleted"),
+    ],
+)
+async def test_6_a_renamed_or_deleted_buyers_tab_fails_it(
+    healthy: Scenario, action: Callable[[int], Json], finding: str
+) -> None:
+    healthy.sheets.apply([action(healthy.sheets.tab(BUYERS_TAB).sheet_id)])
+
+    assert buyers_cells_untouched(await healthy.outcome(), healthy.on_purpose) == [finding]
 
 
 async def test_7_no_false_conflict(healthy: Scenario) -> None:

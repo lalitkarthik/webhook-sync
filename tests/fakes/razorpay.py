@@ -4,7 +4,9 @@ The one fake of Razorpay every test uses, served through respx in process and ov
 `wsync serve` subprocess (`fakes.over_http`). It answers the payments and refunds lists and the
 payment fetch as Razorpay does, on Razorpay's own clock, taking `latency` seconds a call, and
 sends recorded deliveries to the receiver: once, many times, under a different event id, or with
-a different body under the same id. What it knows is what the invariants hold the ledger to.
+a different body under the same id. It replays the recorded refunds step by step, and a refund
+that fails from Razorpay's documented sample (Q166). What it knows is what the invariants hold
+the ledger to.
 """
 
 import asyncio
@@ -14,11 +16,18 @@ import statistics
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from email.utils import format_datetime
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 import respx
-from support import RAZORPAY_RECORDINGS, recorded_delivery, recorded_fetch, sign_razorpay
+from support import (
+    RAZORPAY_RECORDINGS,
+    RECORDED_ACCOUNT,
+    razorpay_sample,
+    recorded_delivery,
+    recorded_fetch,
+    sign_razorpay,
+)
 
 RAZORPAY_API = "https://api.razorpay.test"
 LIKE = "pay_Tj9rKBOXWcsMeE"
@@ -43,6 +52,17 @@ def recorded_listed_payments() -> dict[str, dict[str, Any]]:
 def recorded_listed_refunds() -> list[dict[str, Any]]:
     path = RAZORPAY_RECORDINGS / "api" / "list" / "refunds-list-count100.json"
     return json.loads(path.read_text())["body"]["items"]
+
+
+def recorded_refund(
+    refund_id: str, status: Literal["pending", "processed"] = "processed"
+) -> dict[str, Any]:
+    """A recorded refund as Razorpay lists it, `processed`; or `pending`, as it stood when
+    created: no bank reference yet."""
+    [refund] = [item for item in recorded_listed_refunds() if item["id"] == refund_id]
+    if status == "pending":
+        return refund | {"status": "pending", "acquirer_data": {"arn": None}}
+    return refund
 
 
 def recorded_fetches() -> dict[str, dict[str, Any]]:
@@ -192,6 +212,74 @@ class FakeRazorpay:
         self.payments[payment_id] = (
             self.payments[payment_id] | cleared | fee | {"status": "captured", "captured": True}
         )
+
+    def before_refunds(self, payment_id: str) -> None:
+        """A recorded payment as it stood before its refunds: captured, nothing refunded, and
+        known from now on. `refund` then replays each of its refunds."""
+        none = {"amount_refunded": 0, "refund_status": None}
+        refunds: dict[str, Any] = {"entity": "collection", "count": 0, "items": []}
+        self.fetches[payment_id] = self.fetches[payment_id] | none | {"refunds": refunds}
+        self.payments[payment_id] = recorded_listed_payments()[payment_id] | none
+
+    def refund(self, refund: dict[str, Any]) -> None:
+        """Razorpay creates the refund, or moves it on to this state, with no delivery: it is
+        on the refunds list and in its payment's fetch, newest first. The payment's
+        `amount_refunded` and `refund_status` count every refund that has not failed: whether
+        Razorpay's count a pending one is undocumented (G65), and the row must not follow them
+        either way. Once they add up to the amount the payment is `refunded`, `full`, as
+        Razorpay documents it (no recording shows one); below it, `captured` again."""
+        payment_id = refund["payment_id"]
+        state = self.fetches[payment_id]
+        others = [other for other in state["refunds"]["items"] if other["id"] != refund["id"]]
+        items = sorted([*others, refund], key=lambda item: item["created_at"], reverse=True)
+        counted = sum(item["amount"] for item in items if item["status"] != "failed")
+        full = counted >= state["amount"]
+        totals = {
+            "status": "refunded" if full else "captured",
+            "amount_refunded": counted,
+            "refund_status": "full" if full else "partial" if counted else None,
+        }
+        collection = {"entity": "collection", "count": len(items), "items": items}
+        self.change(payment_id, state | totals | {"refunds": collection})
+        self.payments[payment_id] = self.payments[payment_id] | totals
+        self.refunds = [other for other in self.refunds if other["id"] != refund["id"]] + [refund]
+
+    def documented_refund(
+        self,
+        payment_id: str,
+        *,
+        amount: int,
+        sample: Literal["refund.failed", "refund.processed"] = "refund.failed",
+    ) -> dict[str, Any]:
+        """A refund no recording holds: one that failed, which test mode can't make (Q166), or
+        a `processed` one. It is the refund of Razorpay's documented sample of that event,
+        placed on the payment (its id and currency, `amount`, created now). Unrecorded: mark
+        the test `unrecorded`."""
+        documented: dict[str, Any] = razorpay_sample(sample)["payload"]["refund"]["entity"]
+        return documented | {
+            "payment_id": payment_id,
+            "amount": amount,
+            "currency": self.fetches[payment_id]["currency"],
+            "created_at": int(self.now.timestamp()),
+        }
+
+    def documented_delivery(self, event_type: str, refund_id: str) -> Delivery:
+        """Razorpay's documented sample of a refund event, created now for the recorded account,
+        carrying the refund and its payment as they stand now, and signed with the fixture
+        webhook secret. Unrecorded (Q166): the sample has no headers, so the event id is made
+        up and the others are the recorded deliveries'."""
+        [refund] = [item for item in self.refunds if item["id"] == refund_id]
+        fetched = self.fetches[refund["payment_id"]]
+        payment = {name: value for name, value in fetched.items() if name != "refunds"}
+        event_id = f"unrecorded-{event_type}-{refund_id}"
+        body = razorpay_sample(event_type) | {
+            "account_id": RECORDED_ACCOUNT,
+            "created_at": int(self.now.timestamp()),
+            "payload": {"refund": {"entity": refund}, "payment": {"entity": payment}},
+        }
+        raw, signed = sign_razorpay(body, event_id=event_id)
+        headers = {"user-agent": "Razorpay-Webhook/v1", "request-id": event_id, **signed}
+        return Delivery(raw, headers)
 
     def states(self, payment_id: str) -> list[dict[str, Any]]:
         """Every state the payment has had at Razorpay, oldest first; the last is current."""

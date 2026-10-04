@@ -14,11 +14,13 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import httpx
 import respx
 from fakes.razorpay import FakeRazorpay
 from fakes.sheets import FakeSheets, Tab
+from fastapi import FastAPI
 from invariants import (
     SETTLE_LIMIT,
     LedgerWatch,
@@ -31,6 +33,7 @@ from invariants import (
 )
 from time_machine import TimeMachineFixture
 
+from webhook_sync.admin.app import BY_HEADER, create_admin_app
 from webhook_sync.clock import to_db_text
 from webhook_sync.config import Config
 from webhook_sync.db.reader import Reader
@@ -56,6 +59,7 @@ class Scenario:
     buyers_tabs: list[Tab] = field(default_factory=list[Tab])
     """The buyer's tabs as they stood before the app first ran."""
     watch: LedgerWatch = field(init=False)
+    _app: FastAPI | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         self.buyers_tabs = buyers_tabs(self.sheets)
@@ -67,9 +71,35 @@ class Scenario:
         public routes."""
         app = create_app(self.config, self.data_dir)
         async with app.router.lifespan_context(app), self.watch:
+            self._app = app
             transport = httpx.ASGITransport(app=app)
-            async with httpx.AsyncClient(transport=transport, base_url="http://wsync.test") as c:
-                yield c
+            try:
+                async with httpx.AsyncClient(
+                    transport=transport, base_url="http://wsync.test"
+                ) as c:
+                    yield c
+            finally:
+                self._app = None
+
+    @asynccontextmanager
+    async def _admin(self) -> AsyncGenerator[httpx.AsyncClient]:
+        assert self._app is not None, "the app is not running"
+        transport = httpx.ASGITransport(app=create_admin_app(self._app, self.data_dir))
+        async with httpx.AsyncClient(transport=transport, base_url="http://admin.test") as admin:
+            yield admin
+
+    async def resume(self, name: str) -> None:
+        """`wsync resume <name>` on the running app, through its admin listener. The pause
+        declared in `on_purpose.paused` ends here, so its jobs must settle again."""
+        async with self._admin() as admin:
+            answer = await admin.post(f"/admin/resume/{name}", headers={BY_HEADER: "cli"})
+        assert answer.json() == {"name": name, "result": "resumed"}, answer.text
+        self.on_purpose.paused.discard(name)
+
+    async def status(self) -> dict[str, Any]:
+        """What `wsync status` reads from the running app's admin listener."""
+        async with self._admin() as admin:
+            return (await admin.get("/admin/status")).json()
 
     def at(self, moment: datetime) -> None:
         """Our clock and Razorpay's both at `moment`, and ticking on."""
