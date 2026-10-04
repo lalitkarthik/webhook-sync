@@ -129,9 +129,12 @@ orchestrator picks each ticket's **tier** when it starts it:
 
 | Tier | Model / effort | The ticket |
 | --- | --- | --- |
-| `sonnet-high` | Sonnet high | stays in one area, is tightly scoped, and leaves no design choice open |
+| `sonnet-high` | Sonnet high | is tightly scoped and leaves no design choice open: the ticket and the spec already say what to build, and the code has a pattern to follow |
 | `opus-medium` | Opus medium | everything else |
-| `opus-high` | Opus high | touches more than one area, leaves a design choice open, or involves concurrency, a data migration, auth or money |
+| `opus-high` | Opus high | leaves a design choice open, or involves concurrency, a data migration, auth or money |
+
+The number of areas a ticket touches does not set its tier: a tightly scoped ticket that
+spans several areas is still `sonnet-high`.
 
 | Role | Runs as | Model / effort |
 | --- | --- | --- |
