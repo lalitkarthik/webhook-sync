@@ -47,7 +47,12 @@ def test_reset_outage_and_verify_pay_real_test_orders_and_end_on_0_differences(
     environ = {
         k: v for k, v in os.environ.items() if not k.startswith(("RAZORPAY_", "GOOGLE_"))
     } | secrets
-    hidden = [*(part for value in secrets.values() for part in value.split(",")), sheet]
+    hidden = {
+        f"{name} (part {n})": part.strip()
+        for name, value in (*secrets.items(), (SHEET, sheet))
+        for n, part in enumerate(value.split(","))
+        if part.strip()
+    }
 
     printed: list[str] = []
     for scene in SCENES:
@@ -61,8 +66,11 @@ def test_reset_outage_and_verify_pay_real_test_orders_and_end_on_0_differences(
             check=False,
         )
         output = result.stdout + result.stderr
-        assert not [value for value in hidden if value.strip() and value.strip() in output]
+        shown = [name for name, value in hidden.items() if value in output]
+        for name, value in hidden.items():
+            output = output.replace(value, f"<{name}>")
         print(f"\n$ wsync demo {' '.join(scene)}\n{output}", flush=True)
+        assert shown == [], f"wsync demo {scene[0]} printed {', '.join(shown)}"
         assert result.returncode == 0, output
         printed.append(output)
 

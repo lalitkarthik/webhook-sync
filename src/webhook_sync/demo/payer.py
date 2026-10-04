@@ -28,8 +28,9 @@ if TYPE_CHECKING:
 
 PAYER_VARIABLE = "WSYNC_DEMO_PAYER"
 CHECKOUT_JS = "https://checkout.razorpay.com/v1/checkout.js"
-STEP_MS = 30_000
-"""How long the browser payer waits for any one step of Checkout."""
+STEP_MS = 60_000
+"""How long the browser payer waits for any one step of Checkout: its script, its frame, the
+bank's page, the answer."""
 BANKS = re.compile(r"^(Canara Bank|IDBI|Yes Bank|Karnataka Bank)$")
 """Banks Checkout's Netbanking tab listed in test mode (seen 2026-10-04): picking one opens the
 mock bank page at once."""
@@ -182,7 +183,9 @@ class BrowserPayer:
 
 def _pay_on(page: Page, checkout: Checkout) -> None:
     page.set_default_timeout(STEP_MS)
-    page.goto(checkout.page_url)
+    # The page's load waits for Checkout's script, which can be slow: each step below waits
+    # for what it needs instead.
+    page.goto(checkout.page_url, wait_until="commit")
     frame = page.frame_locator("iframe.razorpay-checkout-frame")
     frame.get_by_text("Netbanking").first.click()
     with page.expect_popup() as opened:

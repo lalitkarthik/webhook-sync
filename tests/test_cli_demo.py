@@ -361,9 +361,10 @@ async def test_when_the_payer_fails_outage_prints_the_page_to_pay_by_hand_and_wa
     await assert_swept_once(run, read_rows, [payment_id])
 
 
-async def test_outage_sweeps_again_when_a_sweep_stops_short(
+async def test_outage_waits_out_a_429_and_sweeps_again_when_a_sweep_stops_short(
     run: CrashRun, read_rows: ReadRows
 ) -> None:
+    run.razorpay.orders_busy = 1
     run.razorpay.lists_down = True
     scene = Scene(run, "outage", "--orders", "1", payer=FAKE_PAYER)
 
@@ -373,6 +374,8 @@ async def test_outage_sweeps_again_when_a_sweep_stops_short(
     code, output = await scene.ended()
 
     assert code == 0, output
+    assert run.razorpay.orders_busy == 0
+    assert "Razorpay answered 429 (too many requests)" in output
     await assert_swept_once(run, read_rows, run.razorpay.orders_paid())
 
 

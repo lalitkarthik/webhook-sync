@@ -212,6 +212,9 @@ class FakeRazorpay:
     """Every list call answers 401, as Razorpay does to a key it doesn't know."""
     orders: dict[str, dict[str, Any]] = field(default_factory=dict[str, dict[str, Any]])
     """Every order made with `POST /v1/orders`, by id."""
+    orders_busy: int = 0
+    """The next this many calls for an order's payments answer 429, as Razorpay does to a
+    caller that asks too often (seen on the test account, 2026-10-04)."""
 
     def mount(self, router: respx.MockRouter) -> None:
         router.get(f"{RAZORPAY_API}/v1/payments").mock(side_effect=self._list_payments)
@@ -481,6 +484,10 @@ class FakeRazorpay:
         return httpx.Response(200, json=self.orders[order_id])
 
     async def _order_payments(self, request: httpx.Request, order_id: str) -> httpx.Response:
+        if self.orders_busy:
+            self.orders_busy -= 1
+            error = {"code": "BAD_REQUEST_ERROR", "description": "Too many requests"}
+            return httpx.Response(429, json={"error": error})
         if order_id not in self.orders:
             return httpx.Response(400, json=recorded_fetch("not-found-well-formed"))
         items = [

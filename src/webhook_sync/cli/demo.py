@@ -49,7 +49,9 @@ CURRENCY = "INR"
 RAZORPAY_TIMEOUT = 10.0
 CAPTURED_WITHIN = 15 * 60.0
 """Real seconds an order has to be paid and captured, a person paying by hand included."""
-POLL_EVERY = 2.0
+POLL_EVERY = 5.0
+"""Real seconds between two looks at an order's payments."""
+POLL_AT_MOST = 30.0
 HEALTHY_WITHIN = 30.0
 STOP_WITHIN = 30.0
 SWEEP_AGAIN_AFTER = 5.0
@@ -233,6 +235,8 @@ def _pay_orders(config: Config, count: int) -> list[str]:
                 "/v1/orders",
                 json={"amount": AMOUNT, "currency": CURRENCY, "receipt": f"wsync-demo-{n}"},
             )
+            if order is None:
+                raise CommandFailed("Razorpay answered 429 (too many requests) to a new order")
             checkout = pages.add(order["id"], AMOUNT, CURRENCY)
             say(
                 f"order {n} of {count}: {checkout.order_id} made for {CURRENCY} {AMOUNT / 100:.2f};"
@@ -253,10 +257,13 @@ def _pay_orders(config: Config, count: int) -> list[str]:
 
 
 def _razorpay(api: httpx.Client, method: str, path: str, **sent: Any) -> Any:
+    """Razorpay's answer to one call, or None when it answers 429: asked too often."""
     try:
         answer = api.request(method, path, **sent)
     except httpx.HTTPError as error:
         raise CommandFailed(f"Razorpay could not be reached: {type(error).__name__}") from None
+    if answer.status_code == 429:
+        return None
     if answer.status_code != 200:
         try:
             said = answer.json()["error"]["description"]
@@ -269,18 +276,24 @@ def _razorpay(api: httpx.Client, method: str, path: str, **sent: Any) -> Any:
 
 
 def _captured(api: httpx.Client, order_id: str) -> str:
-    """The id of the order's captured payment, once Razorpay has one."""
+    """The id of the order's captured payment, once Razorpay has one. A 429 doubles the time
+    between two looks, up to `POLL_AT_MOST`: a person paying by hand can take minutes."""
     deadline = time.monotonic() + CAPTURED_WITHIN
+    every = POLL_EVERY
     while True:
-        payments = _razorpay(api, "GET", f"/v1/orders/{order_id}/payments")["items"]
-        for payment in payments:
-            if payment["status"] == "captured":
-                return payment["id"]
+        listed = _razorpay(api, "GET", f"/v1/orders/{order_id}/payments")
+        if listed is None:
+            every = min(2 * every, POLL_AT_MOST)
+            say(f"Razorpay answered 429 (too many requests): asking every {every:.0f} s")
+        else:
+            for payment in listed["items"]:
+                if payment["status"] == "captured":
+                    return payment["id"]
         if time.monotonic() > deadline:
             raise CommandFailed(
                 f"no payment of {order_id} captured in {CAPTURED_WITHIN / 60:.0f} minutes"
             )
-        time.sleep(POLL_EVERY)
+        time.sleep(every)
 
 
 @contextmanager
