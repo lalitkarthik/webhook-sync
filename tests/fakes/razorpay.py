@@ -201,7 +201,7 @@ class FakeRazorpay:
     """Items created in the same second come back in another order on every list call:
     Razorpay doesn't document their order (razorpay-list-facts.md)."""
     arriving: list[Payment] = field(default_factory=list[Payment])
-    """Payments made between two page calls: each is made once a payments list call has
+    """Payments made between two page calls: one is made each time a payments list call has
     answered a full page."""
     webhooks: list[dict[str, Any]] = field(default_factory=lambda: [listed_webhook()])
     """What `GET /v1/webhooks` lists (see `listed_webhook`)."""
@@ -417,9 +417,8 @@ class FakeRazorpay:
         full = answer.status_code == 200 and answer.json()["count"] == int(
             request.url.params.get("count", "10")
         )
-        if full:
-            while self.arriving:
-                self._add(self.arriving.pop(0))
+        if full and self.arriving:
+            self._add(self.arriving.pop(0))
         return answer
 
     async def _list_webhooks(self, request: httpx.Request) -> httpx.Response:

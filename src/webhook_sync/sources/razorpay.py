@@ -126,6 +126,9 @@ REFUNDS_PAGE = 100
 LIST_PAGE = 100
 """Items asked for per page of a payments or refunds list, the most Razorpay allows."""
 
+SETTLE_WALKS = 5
+"""The most `skip` walks of a window that can't be narrowed before its list fails (Q186)."""
+
 FIRST_SECOND = 946684800
 LAST_SECOND = 4765046400
 """The Unix seconds Razorpay's payments list accepts as a bound (G71); a millisecond time is
@@ -150,6 +153,20 @@ def _check_bounds(start: int, end: int) -> None:
             raise ValueError(f"a list's {name} {bound} is not Unix seconds (milliseconds?)")
     if start > end:
         raise ValueError(f"a list's start {start} is after its end {end}")
+
+
+def _list_params(start: int, upper: int, skip: int) -> list[tuple[str, str]]:
+    """A list page's query: both bounds and a full page, with `skip` only when there is one."""
+    params = [("from", str(start)), ("to", str(upper)), ("count", str(LIST_PAGE))]
+    if skip:
+        params.append(("skip", str(skip)))
+    return params
+
+
+def _collect(found: dict[str, dict[str, Any]], page: Sequence[dict[str, Any]]) -> None:
+    """Add the page's items to `found` by id, each id once: the first answer is kept."""
+    for item in page:
+        found.setdefault(item["id"], item)
 
 
 def _date(value: str | None) -> datetime | None:
@@ -287,20 +304,16 @@ class RazorpayAdapter:
 
         Both bounds are always sent, in Unix seconds: a missing bound means unbounded, and the
         refunds list reads a millisecond `to` as no bound at all (G71, G73). Each next page
-        moves `to` to the oldest `created_at` seen plus one and drops ids already seen; a page
-        that can't move `to` down (over 100 items in two seconds) is paged on with `skip`. That
-        doesn't rely on the order of items created in the same second. A short page is the
-        end: skip past the end is a 200 with no items."""
+        moves `to` to the oldest `created_at` seen plus one and keeps each id once; a page that
+        can't move `to` down (over 100 items in two seconds) has its window walked with `skip`
+        (`_walk_until_settled`). A short page is the end: skip past the end is a 200 with no
+        items."""
         _check_bounds(start, end)
-        items: list[dict[str, Any]] = []
-        seen: set[str] = set()
+        found: dict[str, dict[str, Any]] = {}
         source_now: datetime | None = None
-        upper, skip = end, 0
+        upper = end
         while True:
-            params = [("from", str(start)), ("to", str(upper)), ("count", str(LIST_PAGE))]
-            if skip:
-                params.append(("skip", str(skip)))
-            answer = await self._call(path, params)
+            answer = await self._call(path, _list_params(start, upper, 0))
             if not isinstance(answer, tuple):
                 return _list_failure(answer)
             body, headers = answer
@@ -309,15 +322,45 @@ class RazorpayAdapter:
                 if source_now is None:
                     return Failure("Razorpay answered a list with no readable Date", "retry")
             page = cast(list[dict[str, Any]], body.get("items") or [])
-            items.extend(item for item in page if item["id"] not in seen)
-            seen.update(item["id"] for item in page)
-            if len(page) < LIST_PAGE:
-                return Listed(tuple(items), source_now)
-            oldest = min(item["created_at"] for item in page)
-            if oldest + 1 < upper:
-                upper, skip = oldest + 1, 0
-            else:
+            _collect(found, page)
+            if len(page) == LIST_PAGE:
+                oldest = min(item["created_at"] for item in page)
+                if oldest + 1 < upper:
+                    upper = oldest + 1
+                    continue
+                walked = await self._walk_until_settled(path, start, upper, found)
+                if walked is not None:
+                    return walked
+            items = sorted(found.values(), key=lambda item: item["created_at"], reverse=True)
+            return Listed(tuple(items), source_now)
+
+    async def _walk_until_settled(
+        self, path: str, start: int, upper: int, found: dict[str, dict[str, Any]]
+    ) -> Failure | None:
+        """Walk the window from `start` to `upper` with `skip` until one whole walk brings no
+        id `found` lacks (Q186): its pages depend on the order of items created in the same
+        second, which Razorpay doesn't document. The first walk goes on from the page at skip 0
+        already read. None once a walk settles; after `SETTLE_WALKS` walks that didn't, a retry
+        failure, so the slice's checkpoint stays and the next pass walks it again."""
+        skip = LIST_PAGE
+        for walk in range(SETTLE_WALKS):
+            before = len(found)
+            while True:
+                answer = await self._get(path, _list_params(start, upper, skip))
+                if not isinstance(answer, dict):
+                    return _list_failure(answer)
+                page = cast(list[dict[str, Any]], answer.get("items") or [])
+                _collect(found, page)
+                if len(page) < LIST_PAGE:
+                    break
                 skip += len(page)
+            if walk and len(found) == before:
+                return None
+            skip = 0
+        return Failure(
+            f"Razorpay's list from {start} to {upper} did not settle in {SETTLE_WALKS} walks",
+            "retry",
+        )
 
     async def _get(
         self, path: str, params: Sequence[tuple[str, str]]
