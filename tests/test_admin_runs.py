@@ -3,7 +3,7 @@
 reports the run's progress and, once it is over, its result.
 
 Seam: the admin app over the running public app. Razorpay's lists and fetches are answered by
-respx from the recordings (the sweeper tests' `FakeRazorpay`), Google by P3's fake Sheets. The
+respx from the recordings (the fakes' `FakeRazorpay`), Google by P3's fake Sheets. The
 background sweep is kept out of the way, so only the run by hand lists. What comes out is what
 an outsider sees: the run's answers, events with their origin, checkpoints and `verify_runs`.
 """
@@ -20,15 +20,15 @@ from typing import Any, override
 import httpx
 import pytest
 import respx
-from fakes.sheets import FakeSheets
-from support import RECORDED_ACCOUNT, TEST_SPREADSHEET_ID, ReadRows
-from test_sweeper import (
-    NOW,
+from fakes.razorpay import (
     RAZORPAY_API,
     FakeRazorpay,
     recorded_listed_payments,
     recorded_listed_refunds,
 )
+from fakes.sheets import FakeSheets
+from support import RECORDED_ACCOUNT, TEST_SPREADSHEET_ID, ReadRows
+from test_sweeper import NOW
 from time_machine import TimeMachineFixture
 
 from webhook_sync.admin.app import create_admin_app
