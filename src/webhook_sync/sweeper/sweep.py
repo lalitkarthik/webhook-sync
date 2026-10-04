@@ -40,6 +40,7 @@ from sqlalchemy.dialects import sqlite
 from webhook_sync.alerts import Alerter
 from webhook_sync.clock import to_db_text, utc_now
 from webhook_sync.config import Config
+from webhook_sync.crashpoints import crash_point
 from webhook_sync.db.schema import checkpoints, events
 from webhook_sync.db.writer import Writer
 from webhook_sync.queue import Failure, Pauses
@@ -230,6 +231,7 @@ class Sweeper:
                 unannounced.extend(
                     item["id"] for item in new if history <= item["created_at"] < old
                 )
+            crash_point("mid_slice")  # the slice's items stored, its checkpoint not moved
             await self._advance(list_name, end)
             log.info(
                 "sweep slice",

@@ -65,7 +65,8 @@ def test_an_unknown_crash_point_refuses_to_start_and_lists_the_names_it_knows(
     assert (code, output.strip()) == (
         EXIT_REFUSED,
         "wsync serve: WSYNC_CRASH_AT names no crash point the server knows:"
-        " 'after_event_comit'; it knows after_event_commit, after_sheet_write_before_done",
+        " 'after_event_comit'; it knows after_event_commit, after_sheet_write_before_done,"
+        " mid_slice",
     )
 
 
