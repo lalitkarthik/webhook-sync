@@ -288,6 +288,16 @@ _Avoid_: benchmark, stress test
 **Scene**:
 One scripted demonstration for the video, driven by `wsync demo <scene>`.
 
+**Doctor**:
+`wsync doctor`: checks a setup end to end (config, secrets, key and mode, the sheet, the database, and with `--url` the public webhook URL) and says in plain words what is wrong. It changes nothing.
+_Avoid_: health check (that is the `/health` endpoint), diagnostics
+
+**Payer**:
+The part of `wsync demo` that pays a test order: a headless browser driving Checkout's mock bank page. It lives in the optional `wsync[demo]` extra.
+
+**Live test**:
+A test that calls the real Razorpay test mode and the throwaway sheet. Marked `live` and left out of the default run.
+
 **Demo fail-first switch**:
 `wsync serve --demo-fail-first N`: stores each new event as usual, then answers 500 to its first N attempts, so the source's own retries make the duplicate-storm scene. Test mode and the demo allow-list only.
 _Avoid_: chaos mode, fault injection (crash points are the tests' fault injection)
