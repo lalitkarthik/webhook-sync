@@ -139,3 +139,6 @@ Five **scenarios** run in the test's own process, each followed by the invariant
 - #49: sending a delivery adds its payment to the fake's known payments, which are what invariant 1 holds the ledger to.
 - #49: scenarios run with `initial_lookback_days = 0`, so the sweeper adds nothing a scenario didn't send.
 - #49: invariants 2 and 5 compare against the product's own encoding and mapping (`payment_columns`, `payment_row`, `business_columns`).
+- #51: the outage scenario expects the `silent_webhook` alert — under Q149 the sweep's payments more than 10 minutes old with no delivery raise it.
+- #51: made payments copy the recorded capture of `pay_Tj9rKBOXWcsMeE` under a new id; the late capture takes that payment's recorded fee and tax (both INR 500 netbanking).
+- #51 (open, for the owner): with more than 100 payments inside two seconds, the fallback `skip` paging depends on the order of same-second items, which sweeper.md says it does not; the design leaves the right behaviour open, so it is unchanged.
