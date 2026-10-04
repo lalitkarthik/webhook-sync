@@ -3,11 +3,13 @@
 A load check runs a real `wsync serve` with FakeRazorpay and FakeSheets over HTTP, as a crash
 test does (`crash.harness.served_run`). Its counts are asserted on every run; its timing is
 asserted only when the run selects the load checks by themselves (`uv run pytest -m load`), on
-the development laptop, and printed otherwise; the burst runs only then (Q173). Every number a
-load check reports is printed at the end of the run, under "load numbers", for P6's README.
+the development laptop, and printed otherwise, as in the weekly CI run; the burst runs only
+under `-m load`, CI or not (Q173). Every number a load check reports is printed at the end of
+the run, under "load numbers", for P6's README.
 """
 
-from collections.abc import Callable, Iterator
+import os
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 
 import pytest
@@ -27,16 +29,31 @@ def load(data_dir: Path) -> Iterator[CrashRun]:
         yield run
 
 
+def selected_alone(markexpr: str) -> bool:
+    """Whether the run selects the load checks by themselves: `-m load`."""
+    return markexpr == "load"
+
+
+def asserts_timing(markexpr: str, environ: Mapping[str, str]) -> bool:
+    """Whether the run asserts the timing: only `-m load` on the laptop. A CI run, which sets
+    `CI`, prints the numbers and asserts none: a shared runner's timing fails at random (Q161)."""
+    return selected_alone(markexpr) and not environ.get("CI")
+
+
+def _markexpr(request: pytest.FixtureRequest) -> str:
+    return str(request.config.getoption("markexpr") or "")
+
+
 @pytest.fixture
 def timing_asserted(request: pytest.FixtureRequest) -> bool:
-    """Whether this run asserts the timing: only `-m load`, the load checks by themselves."""
-    return request.config.getoption("markexpr") == "load"
+    """Whether this run asserts the timing (`asserts_timing`)."""
+    return asserts_timing(_markexpr(request), os.environ)
 
 
 @pytest.fixture
-def only_under_load(timing_asserted: bool) -> None:
+def only_under_load(request: pytest.FixtureRequest) -> None:
     """Skip a load check too long for the default suite unless the run is `-m load` (Q173)."""
-    if not timing_asserted:
+    if not selected_alone(_markexpr(request)):
         pytest.skip("runs only under -m load (Q173)")
 
 
