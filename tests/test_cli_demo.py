@@ -9,8 +9,10 @@ code, the ledger, the sheet and the config file.
 
 import asyncio
 import copy
+import os
 import queue
 import re
+import stat
 import subprocess
 import sys
 import time
@@ -279,6 +281,28 @@ def test_reset_refuses_before_it_empties_anything_when_it_cannot_set_the_profile
     assert config_path.read_text(encoding="utf-8", newline="") == before
 
 
+def test_reset_refuses_before_it_empties_anything_when_the_config_is_read_only(
+    tmp_path: Path,
+) -> None:
+    config_path = write_serve_config(tmp_path, free_port(), extra=ON_THE_DEMO_LIST)
+    before = config_path.read_text(encoding="utf-8", newline="")
+    config_path.chmod(stat.S_IREAD)
+    try:
+        if os.access(config_path, os.W_OK):
+            pytest.skip("this user writes a read-only file (root)")
+
+        code, output = demo(config_path, "reset", fixture_environment())
+    finally:
+        config_path.chmod(stat.S_IREAD | stat.S_IWRITE)
+
+    assert code == 2
+    assert 'set retry_profile = "demo" in [service] of webhook-sync.toml by hand' in output
+    assert "cannot be written" in output
+    assert "Traceback" not in output
+    assert not (tmp_path / "data").exists()
+    assert config_path.read_text(encoding="utf-8", newline="") == before
+
+
 # -- demo reset and the tabs that are ours ---------------------------------------------------
 
 
@@ -345,6 +369,37 @@ async def test_reset_refuses_a_persons_tab_on_a_sheet_no_flush_has_written(
     assert "a tab named Payments is not ours: its header differs" in output
     assert run.sheets.tab(PAYMENTS).cells == theirs.cells
     assert not run.sheets.has_tab(DAILY_SUMMARY)
+
+
+async def test_a_refused_sheet_write_leaves_the_database_the_sheet_and_the_config_as_they_were(
+    run: CrashRun, read_rows: ReadRows
+) -> None:
+    await swept_in(run, "pay_DemoReset0001")
+    ours = run.sheets.tab(PAYMENTS).sheet_id
+    run.sheets.apply([rename_tab(ours, "Sales 2026")])
+    stored = await read_rows("SELECT payments_tab_id FROM sheet_state")
+    before = run.config_path.read_text(encoding="utf-8")
+    run.sheets.access = "view"  # shared as a Viewer: both reads pass, the write gets a 403
+
+    code, output = await wsync_demo(run, "reset")
+
+    assert code == 1
+    assert "the spreadsheet is not shared with the service account" in output
+    assert "as an Editor" in output
+    assert "emptying the database" not in output
+    assert await read_rows("SELECT payments_tab_id FROM sheet_state") == stored
+    assert [row["payment_id"] for row in await read_rows("SELECT payment_id FROM payments")] == [
+        "pay_DemoReset0001"
+    ]
+    assert len(run.sheets.tab(ours).values()) == 2
+    assert run.config_path.read_text(encoding="utf-8") == before
+
+    run.sheets.access = "edit"  # shared as an Editor again: the stored ids still name our tab
+    again, output = await wsync_demo(run, "reset")
+
+    assert again == 0, output
+    assert not run.sheets.has_tab(ours)
+    assert await read_rows("SELECT * FROM payments") == []
 
 
 # -- stopping the receiver -------------------------------------------------------------------

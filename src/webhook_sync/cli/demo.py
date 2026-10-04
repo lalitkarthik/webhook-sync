@@ -128,8 +128,10 @@ def reset(args: argparse.Namespace, config: Config) -> int:
     holds the lock throughout, so it refuses while a server runs: a server keeps its retry
     profile until it restarts, and its database is not emptied under it (ADR 0007).
 
-    Everything that can refuse does so before anything is emptied: the config file's new text
-    is proved, and the sheet is read for a tab with one of our titles that is not ours."""
+    What can be checked is checked before anything is emptied: the config file's new text is
+    proved and the file opened for writing, and the sheet is read for a tab with one of our
+    titles that is not ours. The sheet is written first, the database emptied next and the
+    config file written last, so a refused sheet write leaves all three as they were."""
     with_profile = with_demo_retry_profile(args.config)
     data_dir = config.service.data_dir
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -140,7 +142,12 @@ def reset(args: argparse.Namespace, config: Config) -> int:
                 EXIT_REFUSED,
             )
         asyncio.run(_empty(config))
-        args.config.write_text(with_profile, encoding="utf-8", newline="")
+        try:
+            args.config.write_text(with_profile, encoding="utf-8", newline="")
+        except OSError as error:
+            raise CommandFailed(
+                _by_hand(args.config, f"the file cannot be written ({error.strerror})")
+            ) from None
         say(
             f'retry_profile = "demo" set in [service] of {args.config.name}: '
             "failed jobs retry after 1, 2, 4, 8 and 16 s from the next wsync serve"
@@ -149,8 +156,10 @@ def reset(args: argparse.Namespace, config: Config) -> int:
 
 
 async def _empty(config: Config) -> None:
-    """Plan the sheet's reset from the tab ids the database still holds, then empty the
-    database, then the sheet."""
+    """Plan the sheet's reset from the tab ids the database still holds, write it, then empty
+    the database. A sheet write Google refuses (a Viewer's 403, a quota, a timeout) leaves the
+    database with those ids; if the database step fails after it, the next reset finds the new
+    tabs by title and header."""
     account = f"the service account {config.google_secrets.service_account.get('client_email')}"
     tokens = ServiceAccountTokens(config.google_secrets.service_account)
     try:
@@ -169,12 +178,6 @@ async def _empty(config: Config) -> None:
                 "columns, so reset will not delete it; rename or delete it, then run reset again",
                 EXIT_REFUSED,
             )
-        database = database_path(config.service.data_dir)
-        say(f"emptying the database {database}")
-        for suffix in DATABASE_SUFFIXES:
-            database.with_name(database.name + suffix).unlink(missing_ok=True)
-        await prepare_database(config)
-        say("database emptied: migrated, with no events, jobs or payments")
         say("emptying the demo sheet's Payments, Daily summary and Sync status tabs")
         written = await client.batch_update(plan.requests)
         if isinstance(written, SheetsFailure):
@@ -183,6 +186,12 @@ async def _empty(config: Config) -> None:
             "Payments, Daily summary and Sync status emptied, each with its header; "
             "the sheet's other tabs are untouched"
         )
+    database = database_path(config.service.data_dir)
+    say(f"emptying the database {database}")
+    for suffix in DATABASE_SUFFIXES:
+        database.with_name(database.name + suffix).unlink(missing_ok=True)
+    await prepare_database(config)
+    say("database emptied: migrated, with no events, jobs or payments")
 
 
 _TABLE = re.compile(r"\s*\[")
@@ -197,7 +206,8 @@ def with_demo_retry_profile(path: Path) -> str:
     """The config file's text with `retry_profile = "demo"` in its `[service]` table: the
     value replaced where the key is set, the rest of its line kept, or one line added. Nothing
     is written here, and the new text is proved first: it must parse to the same document with
-    only that key changed. A file that can't be edited so is refused, untouched."""
+    only that key changed. A file that can't be edited so, or can't be written, is refused,
+    untouched."""
     text = path.read_text(encoding="utf-8", newline="")
     lines = text.splitlines(keepends=True)
     newline = "\r\n" if lines and lines[0].endswith("\r\n") else "\n"
@@ -235,11 +245,23 @@ def with_demo_retry_profile(path: Path) -> str:
         proved = False
     if not proved:
         raise CommandFailed(
-            f'set retry_profile = "demo" in [service] of {path.name} by hand, then run reset '
-            "again: this file is laid out in a way reset will not edit",
-            EXIT_REFUSED,
+            _by_hand(path, "this file is laid out in a way reset will not edit"), EXIT_REFUSED
         )
+    try:
+        with path.open("r+b"):  # opened for writing, and nothing written
+            pass
+    except OSError as error:
+        raise CommandFailed(
+            _by_hand(path, f"the file cannot be written ({error.strerror})"), EXIT_REFUSED
+        ) from None
     return changed
+
+
+def _by_hand(path: Path, why: str) -> str:
+    return (
+        f'set retry_profile = "demo" in [service] of {path.name} by hand, then run reset '
+        f"again: {why}"
+    )
 
 
 def outage(args: argparse.Namespace, config: Config) -> int:
