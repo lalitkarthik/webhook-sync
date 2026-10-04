@@ -14,13 +14,16 @@ real sheet (F36). Each prints what it is doing and what it waits for.
 
 import argparse
 import asyncio
+import copy
 import functools
 import os
 import re
 import signal
+import sqlite3
 import subprocess
 import sys
 import time
+import tomllib
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from pathlib import Path
@@ -31,17 +34,17 @@ import sqlalchemy as sa
 
 from webhook_sync.admin import runs
 from webhook_sync.cli.admin import EXIT_REFUSED, CommandFailed, run_by_hand, verify_command
-from webhook_sync.cli.doctor import sheet_failure
+from webhook_sync.cli.doctor import sheet_failure, stored_tabs
 from webhook_sync.cli.serve import at_least_one, prepare_database, split_listen
-from webhook_sync.config import Config, ConfigError, load_config, load_settings
+from webhook_sync.config import Config, ConfigError, load_config
 from webhook_sync.db.files import database_path
 from webhook_sync.db.lock import lock_if_free
 from webhook_sync.db.reader import Reader
 from webhook_sync.db.schema import events, jobs, payments
 from webhook_sync.demo.payer import CheckoutPages, PayerFailed, load_payer
 from webhook_sync.receiver.demo import check_demo_switch
-from webhook_sync.sinks.sheets import reset_tabs
-from webhook_sync.sinks.sheets_client import ServiceAccountTokens, SheetsClient
+from webhook_sync.sinks.sheets import plan_tabs_reset
+from webhook_sync.sinks.sheets_client import ServiceAccountTokens, SheetsClient, SheetsFailure
 
 DEFAULT_CONFIG = Path("webhook-sync.toml")
 DATABASE_SUFFIXES = ("", "-wal", "-shm", "-journal")
@@ -123,7 +126,11 @@ def _guarded(name: str, scene: Scene) -> Callable[[argparse.Namespace], int]:
 def reset(args: argparse.Namespace, config: Config) -> int:
     """Empty the database and our tabs of the demo sheet, and set the demo retry profile. It
     holds the lock throughout, so it refuses while a server runs: a server keeps its retry
-    profile until it restarts, and its database is not emptied under it (ADR 0007)."""
+    profile until it restarts, and its database is not emptied under it (ADR 0007).
+
+    Everything that can refuse does so before anything is emptied: the config file's new text
+    is proved, and the sheet is read for a tab with one of our titles that is not ours."""
+    with_profile = with_demo_retry_profile(args.config)
     data_dir = config.service.data_dir
     data_dir.mkdir(parents=True, exist_ok=True)
     with lock_if_free(data_dir) as free:
@@ -132,19 +139,8 @@ def reset(args: argparse.Namespace, config: Config) -> int:
                 "a server is running: stop wsync serve first; reset empties its database",
                 EXIT_REFUSED,
             )
-        database = database_path(data_dir)
-        say(f"emptying the database {database}")
-        for suffix in DATABASE_SUFFIXES:
-            database.with_name(database.name + suffix).unlink(missing_ok=True)
-        asyncio.run(prepare_database(config))
-        say("database emptied: migrated, with no events, jobs or payments")
-        say("emptying the demo sheet's Payments, Daily summary and Sync status tabs")
-        asyncio.run(_reset_sheet(config))
-        say(
-            "Payments, Daily summary and Sync status emptied, each with its header; "
-            "the sheet's other tabs are untouched"
-        )
-        set_demo_retry_profile(args.config)
+        asyncio.run(_empty(config))
+        args.config.write_text(with_profile, encoding="utf-8", newline="")
         say(
             f'retry_profile = "demo" set in [service] of {args.config.name}: '
             "failed jobs retry after 1, 2, 4, 8 and 16 s from the next wsync serve"
@@ -152,50 +148,98 @@ def reset(args: argparse.Namespace, config: Config) -> int:
     return 0
 
 
-async def _reset_sheet(config: Config) -> None:
+async def _empty(config: Config) -> None:
+    """Plan the sheet's reset from the tab ids the database still holds, then empty the
+    database, then the sheet."""
     account = f"the service account {config.google_secrets.service_account.get('client_email')}"
     tokens = ServiceAccountTokens(config.google_secrets.service_account)
+    try:
+        stored = stored_tabs(config)
+    except sqlite3.Error:
+        stored = None  # an unreadable database holds no ids: ours are then found by header
     async with httpx.AsyncClient() as http:
-        failure = await reset_tabs(SheetsClient(http, config.sheets.spreadsheet_id, tokens), config)
-    if failure is not None:
-        raise CommandFailed(sheet_failure(failure, account))
+        client = SheetsClient(http, config.sheets.spreadsheet_id, tokens)
+        plan = await plan_tabs_reset(client, config, stored)
+        if isinstance(plan, SheetsFailure):
+            raise CommandFailed(sheet_failure(plan, account))
+        if plan.not_ours:
+            named = " and ".join(plan.not_ours)
+            raise CommandFailed(
+                f"a tab named {named} is not ours: its header differs from the configured "
+                "columns, so reset will not delete it; rename or delete it, then run reset again",
+                EXIT_REFUSED,
+            )
+        database = database_path(config.service.data_dir)
+        say(f"emptying the database {database}")
+        for suffix in DATABASE_SUFFIXES:
+            database.with_name(database.name + suffix).unlink(missing_ok=True)
+        await prepare_database(config)
+        say("database emptied: migrated, with no events, jobs or payments")
+        say("emptying the demo sheet's Payments, Daily summary and Sync status tabs")
+        written = await client.batch_update(plan.requests)
+        if isinstance(written, SheetsFailure):
+            raise CommandFailed(sheet_failure(written, account))
+        say(
+            "Payments, Daily summary and Sync status emptied, each with its header; "
+            "the sheet's other tabs are untouched"
+        )
 
 
-_SERVICE_TABLE = re.compile(r"\[\s*service\s*\]")
-_RETRY_PROFILE = re.compile(r"retry_profile\s*=")
 _TABLE = re.compile(r"\s*\[")
+_SERVICE_TABLE = re.compile(r"""\[\s*(service|"service"|'service')\s*\]""")
+_ROOT_SERVICE_KEY = re.compile(r"\s*service\s*\.")
+_PROFILE_VALUE = re.compile(
+    r"""(\s*(?:service\s*\.\s*)?retry_profile\s*=\s*)("[^"\\]*"|'[^']*')""", re.DOTALL
+)
 
 
-def set_demo_retry_profile(path: Path) -> None:
-    """`retry_profile = "demo"` in the config file's `[service]` table, every other line kept
-    as it was; the file is read back to prove it."""
-    lines = path.read_text(encoding="utf-8", newline="").splitlines(keepends=True)
+def with_demo_retry_profile(path: Path) -> str:
+    """The config file's text with `retry_profile = "demo"` in its `[service]` table: the
+    value replaced where the key is set, the rest of its line kept, or one line added. Nothing
+    is written here, and the new text is proved first: it must parse to the same document with
+    only that key changed. A file that can't be edited so is refused, untouched."""
+    text = path.read_text(encoding="utf-8", newline="")
+    lines = text.splitlines(keepends=True)
     newline = "\r\n" if lines and lines[0].endswith("\r\n") else "\n"
-    setting = f'retry_profile = "demo"{newline}'
-    in_service, service_at, done = False, None, False
+    at_root, in_service = True, False  # where the line being read is
+    service_at: int | None = None
+    dotted = False
     for at, line in enumerate(lines):
         if _TABLE.match(line):
-            in_service = bool(_SERVICE_TABLE.match(line.strip().split("#")[0].strip()))
-            if in_service:
+            at_root = False
+            in_service = _SERVICE_TABLE.fullmatch(line.split("#")[0].strip()) is not None
+            if in_service and service_at is None:
                 service_at = at
-        elif in_service and _RETRY_PROFILE.match(line.strip()):
-            lines[at] = setting
-            done = True
+            continue
+        dotted = dotted or (at_root and _ROOT_SERVICE_KEY.match(line) is not None)
+        set_here = _PROFILE_VALUE.match(line)
+        # At the root the key is `service.retry_profile`; in the table, `retry_profile`.
+        if set_here and (in_service or at_root) and at_root == ("service" in set_here[1]):
+            lines[at] = f'{set_here[1]}"demo"{line[set_here.end() :]}'
             break
-    if not done:
-        if service_at is None:
-            lines[:0] = [f"[service]{newline}", setting, newline]
+    else:
+        if service_at is not None:
+            if not lines[service_at].endswith(("\n", "\r")):
+                lines[service_at] += newline
+            lines.insert(service_at + 1, f'retry_profile = "demo"{newline}')
+        elif dotted:
+            lines.insert(0, f'service.retry_profile = "demo"{newline}')
         else:
-            lines.insert(service_at + 1, setting)
-    path.write_text("".join(lines), encoding="utf-8", newline="")
+            lines[:0] = [f"[service]{newline}", f'retry_profile = "demo"{newline}', newline]
+    changed = "".join(lines)
     try:
-        written = load_settings(path).service.retry_profile
-    except ConfigError as error:
+        wanted = copy.deepcopy(tomllib.loads(text))
+        wanted.setdefault("service", {})["retry_profile"] = "demo"
+        proved = tomllib.loads(changed) == wanted
+    except tomllib.TOMLDecodeError, TypeError:
+        proved = False
+    if not proved:
         raise CommandFailed(
-            f"{path.name} no longer loads after setting retry_profile: {error}"
-        ) from None
-    if written != "demo":
-        raise CommandFailed(f'set retry_profile = "demo" in [service] of {path.name} by hand')
+            f'set retry_profile = "demo" in [service] of {path.name} by hand, then run reset '
+            "again: this file is laid out in a way reset will not edit",
+            EXIT_REFUSED,
+        )
+    return changed
 
 
 def outage(args: argparse.Namespace, config: Config) -> int:
@@ -322,7 +366,7 @@ def _receiver(config_path: Path, config: Config) -> Generator[None]:
         yield
     finally:
         say("stopping the receiver")
-        _stop(process, config.service.data_dir)
+        stop_receiver(process, config.service.data_dir)
         say("the receiver is stopped")
 
 
@@ -340,22 +384,45 @@ def _healthy(base_url: str, process: subprocess.Popen[bytes], log_path: Path) ->
     raise CommandFailed(f"the receiver did not answer /health in {HEALTHY_WITHIN:.0f} s")
 
 
-def _stop(process: subprocess.Popen[bytes], data_dir: Path) -> None:
+def _ask_to_stop(process: subprocess.Popen[bytes]) -> None:
     """SIGTERM, the server's own shutdown; on Windows, where a console process can't be sent
     one, the process tree is ended: everything the scene waited for is already written, and a
-    stop at any point loses nothing (the crash tests). Returns once the lock is free."""
+    stop at any point loses nothing (the crash tests)."""
     if sys.platform == "win32":
         subprocess.run(
             ["taskkill", "/T", "/F", "/PID", str(process.pid)], capture_output=True, check=False
         )
     else:
         process.send_signal(signal.SIGTERM)
-    process.wait(timeout=STOP_WITHIN)
-    deadline = time.monotonic() + STOP_WITHIN
-    while time.monotonic() < deadline:
+
+
+def stop_receiver(
+    process: subprocess.Popen[bytes],
+    data_dir: Path,
+    *,
+    within: float = STOP_WITHIN,
+    ask: Callable[[subprocess.Popen[bytes]], None] = _ask_to_stop,
+) -> None:
+    """Ask the receiver to stop and give it `within` seconds, the grace of its own shutdown
+    (operations.md); then kill it. Returns once the lock is free, and fails the scene when it
+    still is not `within` seconds later: something else holds the database."""
+    ask(process)
+    try:
+        process.wait(timeout=within)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+        say(f"the receiver did not stop in {within:g} s and was killed")
+    deadline = time.monotonic() + within
+    while True:
         with lock_if_free(data_dir) as free:
             if free:
                 return
+        if time.monotonic() > deadline:
+            raise CommandFailed(
+                f"the receiver was stopped but the lock is still held {within:g} s later: "
+                "a wsync serve still runs on this database; stop it by hand"
+            )
         time.sleep(0.2)
 
 

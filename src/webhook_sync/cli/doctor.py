@@ -322,7 +322,7 @@ async def _sheet(settings: Settings | None, service_account_b64: str) -> Line:
         return Line("fail", check, "not checked: GOOGLE_SERVICE_ACCOUNT_B64 must hold a key first")
     account = f"the service account {key.get('client_email', '')}".rstrip()
     try:
-        stored = await asyncio.to_thread(_stored_tabs, settings)
+        stored = await asyncio.to_thread(stored_tabs, settings)
     except sqlite3.Error:
         stored = None  # the database line says what is wrong with it
     async with httpx.AsyncClient() as http:
@@ -366,7 +366,7 @@ def sheet_failure(failure: SheetsFailure, account: str) -> str:
     return f"the spreadsheet could not be read with {account}: {failure.error}"
 
 
-def _stored_tabs(settings: Settings) -> TabIds | None:
+def stored_tabs(settings: Settings) -> TabIds | None:
     """The tab ids a flush stored for the configured spreadsheet, or None before the first."""
     path = database_path(settings.service.data_dir)
     if not path.is_file():

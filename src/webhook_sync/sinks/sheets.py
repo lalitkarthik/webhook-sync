@@ -729,28 +729,76 @@ async def read_layout(
     return Layout(len(found), tuple(problems))
 
 
-async def reset_tabs(client: SheetsClient, settings: Settings) -> SheetsFailure | None:
-    """Our three tabs made again, empty but for their headers, in one `batchUpdate`
-    (`wsync demo reset`): each that is there is deleted and added back as a first flush adds
-    it, which the next first flush then adopts. The buyer's own tabs are left alone, and the
-    spreadsheet never has no tab between two requests."""
+@dataclass(frozen=True)
+class TabsReset:
+    """What `wsync demo reset` would do to the sheet, nothing written yet."""
+
+    requests: tuple[Json, ...]
+    """The one `batchUpdate` that makes our three tabs again; empty when `not_ours` stops it."""
+    not_ours: tuple[str, ...]
+    """Our titles on tabs whose header differs from ours: a person's own tabs."""
+
+
+async def plan_tabs_reset(
+    client: SheetsClient, settings: Settings, stored: TabIds | None
+) -> TabsReset | SheetsFailure:
+    """Our three tabs made again, empty but for their headers, as a plan (`wsync demo reset`).
+
+    Ours are the tabs with the ids a flush `stored`, whatever a person has renamed them to,
+    and a tab with one of our titles whose header matches ours, which a first flush would
+    adopt (Q140). A tab with one of our titles and another header is a person's own: it is
+    named in `not_ours` and nothing is planned. The plan renames each old tab out of the way,
+    adds the new ones as a first flush adds them, then deletes the old, so the spreadsheet
+    never has no tab and no two tabs share a title. Every other tab is left alone."""
     answer = await client.get(fields="sheets.properties(sheetId,title)")
     if isinstance(answer, SheetsFailure):
         return answer
-    existing: dict[str, int] = {}
+    by_title: dict[str, int] = {}
     for sheet in answer.get("sheets", []):
         properties = sheet.get("properties", {})
-        existing[properties.get("title")] = properties.get("sheetId", 0)
-    taken = set(existing.values())
-    requests: list[Json] = []
-    for spec in _tab_specs(payment_columns(settings)):
-        if spec.title in existing:
-            requests.append({"deleteSheet": {"sheetId": existing[spec.title]}})
+        by_title[properties.get("title")] = properties.get("sheetId", 0)
+    specs = _tab_specs(payment_columns(settings))
+    stored_ids: set[int] = (
+        {stored.payments, stored.daily_summary, stored.sync_status} if stored else set()
+    )
+    old = [sheet_id for sheet_id in by_title.values() if sheet_id in stored_ids]
+    titled = [
+        (by_title[spec.title], spec)
+        for spec in specs
+        if spec.title in by_title and by_title[spec.title] not in stored_ids
+    ]
+    not_ours: list[str] = []
+    if titled:
+        headers = await client.get_by_data_filter(
+            [_header(sheet_id, len(spec.header)) for sheet_id, spec in titled],
+            fields=KEY_COLUMN_FIELDS,
+        )
+        if isinstance(headers, SheetsFailure):
+            return headers
+        read = {s.get("properties", {}).get("sheetId", 0): s for s in headers.get("sheets", [])}
+        for sheet_id, spec in titled:
+            if _header_of(read.get(sheet_id, {})) == spec.header:
+                old.append(sheet_id)
+            else:
+                not_ours.append(spec.title)
+    if not_ours:
+        return TabsReset((), tuple(not_ours))
+    taken = set(by_title.values())
+    requests: list[Json] = [
+        {
+            "updateSheetProperties": {
+                "properties": {"sheetId": sheet_id, "title": f"webhook-sync reset {sheet_id}"},
+                "fields": "title",
+            }
+        }
+        for sheet_id in old
+    ]
+    for spec in specs:
         sheet_id = _new_sheet_id(taken)
         taken.add(sheet_id)
         requests.extend(_new_tab(sheet_id, spec))
-    written = await client.batch_update(requests)
-    return written if isinstance(written, SheetsFailure) else None
+    requests.extend({"deleteSheet": {"sheetId": sheet_id}} for sheet_id in old)
+    return TabsReset(tuple(requests), ())
 
 
 @dataclass(frozen=True)

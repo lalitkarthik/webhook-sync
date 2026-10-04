@@ -8,6 +8,7 @@ code, the ledger, the sheet and the config file.
 """
 
 import asyncio
+import copy
 import queue
 import re
 import subprocess
@@ -23,6 +24,7 @@ import pytest
 from conftest import runs_live
 from crash.harness import CrashRun, served_run
 from fakes.payer import FAILING_PAYER, FAKE_PAYER
+from fakes.sheets import FakeSheets, Tab, edit_cell, rename_tab
 from invariants import buyers_tabs
 from processes import fixture_environment, free_port, stop, write_serve_config, wsync_path
 from support import (
@@ -35,8 +37,10 @@ from support import (
     fixture_secrets,
 )
 
-from webhook_sync.cli.demo import set_demo_retry_profile
+from webhook_sync.cli.admin import CommandFailed
+from webhook_sync.cli.demo import stop_receiver, with_demo_retry_profile
 from webhook_sync.config import load_settings
+from webhook_sync.db.lock import hold_lock
 from webhook_sync.demo.payer import CHECKOUT_JS, PAYER_VARIABLE
 from webhook_sync.sinks.encoding import payment_columns
 from webhook_sync.sinks.sheets import (
@@ -199,30 +203,175 @@ async def test_reset_refuses_while_a_server_holds_the_database(
     assert run.config_path.read_text(encoding="utf-8") == before
 
 
-@pytest.mark.parametrize(
-    ("service", "newline"),
-    [
-        ('[service]\nretry_profile = "production"  # or "demo"\ndata_dir = "data"\n', "\n"),
-        ('[service]\r\ndata_dir = "data"\r\n', "\r\n"),
-        ("", "\n"),
-    ],
+REST = (
+    f'[sources.razorpay]\nmode = "test"\naccount = "{TEST_ACCOUNT}"\n\n'
+    f'[sinks.sheets]\nspreadsheet_id = "{TEST_SPREADSHEET_ID}"\n'
 )
-def test_the_demo_retry_profile_replaces_or_adds_the_one_line(
-    tmp_path: Path, service: str, newline: str
+"""The config below its `[service]` table."""
+PROFILE_SET = {
+    "the value replaced, its comment kept": (
+        '[service]\nretry_profile = "production"        # or "demo"\ndata_dir = "data"\n\n' + REST,
+        '[service]\nretry_profile = "demo"        # or "demo"\ndata_dir = "data"\n\n' + REST,
+    ),
+    "a line added, with the file's own line endings": (
+        ('[service]\ndata_dir = "data"\n\n' + REST).replace("\n", "\r\n"),
+        ('[service]\nretry_profile = "demo"\ndata_dir = "data"\n\n' + REST).replace("\n", "\r\n"),
+    ),
+    "no service table": (REST, '[service]\nretry_profile = "demo"\n\n' + REST),
+    "the service table is the last line, with no newline": (
+        REST + "\n[service]",
+        REST + '\n[service]\nretry_profile = "demo"\n',
+    ),
+    "a quoted table name": (
+        '["service"]\ndata_dir = "data"\n\n' + REST,
+        '["service"]\nretry_profile = "demo"\ndata_dir = "data"\n\n' + REST,
+    ),
+    "a dotted key at the root": (
+        'service.data_dir = "data"\n\n' + REST,
+        'service.retry_profile = "demo"\nservice.data_dir = "data"\n\n' + REST,
+    ),
+}
+INLINE_SERVICE = 'service = { data_dir = "data" }\n\n' + REST
+"""A valid config whose `service` table a line can't be added to."""
+
+
+@pytest.mark.parametrize(("before", "after"), PROFILE_SET.values(), ids=PROFILE_SET.keys())
+def test_the_demo_retry_profile_changes_one_line_and_the_config_still_loads(
+    tmp_path: Path, before: str, after: str
 ) -> None:
-    rest = (
-        f'[sources.razorpay]\nmode = "test"\naccount = "{TEST_ACCOUNT}"\n\n'
-        f'[sinks.sheets]\nspreadsheet_id = "{TEST_SPREADSHEET_ID}"\n'
-    ).replace("\n", newline)
     path = tmp_path / "webhook-sync.toml"
-    path.write_text(service + newline + rest, encoding="utf-8", newline="")
+    path.write_text(before, encoding="utf-8", newline="")
 
-    set_demo_retry_profile(path)
+    changed = with_demo_retry_profile(path)
 
-    text = path.read_text(encoding="utf-8", newline="")
-    assert text.count("retry_profile") == 1
-    assert text.endswith(rest)
+    assert changed == after
+    assert path.read_text(encoding="utf-8", newline="") == before  # nothing written yet
+    path.write_text(changed, encoding="utf-8", newline="")
     assert load_settings(path, fixture_secrets()).service.retry_profile == "demo"
+
+
+def test_a_config_the_profile_cannot_be_set_in_is_refused_untouched(tmp_path: Path) -> None:
+    path = tmp_path / "webhook-sync.toml"
+    path.write_text(INLINE_SERVICE, encoding="utf-8", newline="")
+
+    with pytest.raises(CommandFailed) as refused:
+        with_demo_retry_profile(path)
+
+    assert 'set retry_profile = "demo" in [service] of webhook-sync.toml by hand' in str(
+        refused.value
+    )
+    assert refused.value.exit_code == 2
+    assert path.read_text(encoding="utf-8", newline="") == INLINE_SERVICE
+
+
+def test_reset_refuses_before_it_empties_anything_when_it_cannot_set_the_profile(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "webhook-sync.toml"
+    before = INLINE_SERVICE + ON_THE_DEMO_LIST
+    config_path.write_text(before, encoding="utf-8", newline="")
+
+    code, output = demo(config_path, "reset", fixture_environment())
+
+    assert code == 2
+    assert 'set retry_profile = "demo" in [service] of webhook-sync.toml by hand' in output
+    assert not (tmp_path / "data").exists()
+    assert config_path.read_text(encoding="utf-8", newline="") == before
+
+
+# -- demo reset and the tabs that are ours ---------------------------------------------------
+
+
+def persons_payments_tab(sheets: FakeSheets) -> Tab:
+    """A person's own tab titled Payments, with their header and a row."""
+    sheets.apply([{"addSheet": {"properties": {"title": PAYMENTS}}}])
+    theirs = sheets.tab(PAYMENTS)
+    sheets.apply(
+        [
+            edit_cell(theirs.sheet_id, 0, 0, "Date"),
+            edit_cell(theirs.sheet_id, 0, 1, "Customer"),
+            edit_cell(theirs.sheet_id, 1, 0, "2026-10-04"),
+            edit_cell(theirs.sheet_id, 1, 1, "Asha"),
+        ]
+    )
+    return copy.deepcopy(sheets.tab(PAYMENTS))
+
+
+async def test_reset_empties_a_tab_of_ours_a_person_renamed(
+    run: CrashRun, read_rows: ReadRows
+) -> None:
+    await swept_in(run, "pay_DemoReset0001")
+    ours = run.sheets.tab(PAYMENTS).sheet_id
+    run.sheets.apply([rename_tab(ours, "Sales 2026")])
+
+    code, output = await wsync_demo(run, "reset")
+
+    assert code == 0, output
+    assert not run.sheets.has_tab(ours)
+    assert not run.sheets.has_tab("Sales 2026")
+    assert run.sheets.tab(PAYMENTS).values() == [[c.header for c in payment_columns(run.config)]]
+    assert await read_rows("SELECT * FROM payments") == []
+
+
+async def test_reset_refuses_a_persons_tab_with_one_of_our_titles_and_leaves_all_alone(
+    run: CrashRun, read_rows: ReadRows
+) -> None:
+    await swept_in(run, "pay_DemoReset0001")
+    ours = run.sheets.tab(PAYMENTS).sheet_id
+    run.sheets.apply([rename_tab(ours, "Sales 2026")])
+    theirs = persons_payments_tab(run.sheets)
+    before = run.config_path.read_text(encoding="utf-8")
+
+    code, output = await wsync_demo(run, "reset")
+
+    assert code == 2
+    assert "a tab named Payments is not ours: its header differs" in output
+    assert run.sheets.tab(PAYMENTS).cells == theirs.cells
+    assert len(run.sheets.tab(ours).values()) == 2  # our header and the row, under its new name
+    assert [row["payment_id"] for row in await read_rows("SELECT payment_id FROM payments")] == [
+        "pay_DemoReset0001"
+    ]
+    assert run.config_path.read_text(encoding="utf-8") == before
+
+
+async def test_reset_refuses_a_persons_tab_on_a_sheet_no_flush_has_written(
+    run: CrashRun,
+) -> None:
+    theirs = persons_payments_tab(run.sheets)
+
+    code, output = await wsync_demo(run, "reset")
+
+    assert code == 2
+    assert "a tab named Payments is not ours: its header differs" in output
+    assert run.sheets.tab(PAYMENTS).cells == theirs.cells
+    assert not run.sheets.has_tab(DAILY_SUMMARY)
+
+
+# -- stopping the receiver -------------------------------------------------------------------
+
+
+def a_process(seconds: int) -> subprocess.Popen[bytes]:
+    return subprocess.Popen([sys.executable, "-c", f"import time; time.sleep({seconds})"])
+
+
+def test_a_receiver_that_does_not_stop_in_time_is_killed(
+    data_dir: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    deaf = a_process(20)  # asked to stop, it carries on
+
+    stop_receiver(deaf, data_dir, within=0.5, ask=lambda process: None)
+
+    assert deaf.poll() is not None
+    assert "the receiver did not stop in 0.5 s and was killed" in capsys.readouterr().out
+
+
+def test_a_lock_still_held_after_the_receiver_stopped_fails_the_scene(data_dir: Path) -> None:
+    gone = a_process(0)
+
+    with hold_lock(data_dir), pytest.raises(CommandFailed) as failed:
+        stop_receiver(gone, data_dir, within=0.5)
+
+    assert "the lock is still held" in str(failed.value)
 
 
 # -- demo verify -----------------------------------------------------------------------------
