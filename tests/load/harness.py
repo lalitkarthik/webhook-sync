@@ -98,8 +98,11 @@ class Flush:
 
 
 def flushes(log: Path, sheets: FakeSheets) -> list[Flush]:
-    """Every flush in a server's log, in order, each with the calls answered during it. A call
-    answered outside every flush fails: the flusher is the only caller."""
+    """Every flush in a server's log, in order, each with the calls answered since the flush
+    before it ended and before its own line was logged: the flusher is the only caller, and
+    logs a flush after its last call. A flush's start is worked out from its line, so a line
+    logged a few milliseconds late would put the flush's first call before it; its end is not.
+    A call answered after the last flush fails."""
     found: list[Flush] = []
     for line in log.read_text(encoding="utf-8").splitlines():
         if not line.startswith("{"):
@@ -111,7 +114,7 @@ def flushes(log: Path, sheets: FakeSheets) -> list[Flush]:
         started = ended - timedelta(milliseconds=entry["duration_ms"] + 1)
         found.append(Flush(started, ended, entry["jobs"]))
     for name, at in zip(sheets.calls, sheets.called_at, strict=True):
-        during = [flush for flush in found if flush.started <= at <= flush.ended]
-        assert during, f"a {name} call at {at} came outside every logged flush"
-        during[0].calls.append(name)
+        during = next((flush for flush in found if at <= flush.ended), None)
+        assert during, f"a {name} call at {at} came after every logged flush"
+        during.calls.append(name)
     return found
