@@ -34,7 +34,7 @@ from time_machine import TimeMachineFixture
 from webhook_sync.admin.app import create_admin_app
 from webhook_sync.config import Config, SweeperConfig
 from webhook_sync.queue import runner as runner_module
-from webhook_sync.receiver.app import create_app
+from webhook_sync.receiver.app import create_app, shut_down
 from webhook_sync.sweeper import Sweeper
 
 SWEPT = ("pay_Tj64grZUMO3PEj", "pay_Tj66x2JuEXjIdB", "pay_Tj9gmEfed6kRqO", "pay_Tj9rKBOXWcsMeE")
@@ -241,3 +241,23 @@ async def test_an_unknown_run_is_404(
         answer = await admin.get("/admin/runs/no-such-run")
 
     assert answer.status_code == 404
+
+
+async def test_a_run_asked_for_once_the_shutdown_has_begun_is_refused(
+    razorpay: HeldRazorpay, run_config: Config, data_dir: Path
+) -> None:
+    public = create_app(run_config, data_dir)
+    async with public.router.lifespan_context(public):
+        transport = httpx.ASGITransport(app=create_admin_app(public, data_dir))
+        async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as admin:
+            await shut_down(public)  # the listeners still answer until the lifespan ends
+            answers = [
+                await admin.post("/admin/sweep"),
+                await admin.post(
+                    "/admin/backfill", json={"from": "2026-10-02", "to": "2026-10-02"}
+                ),
+                await admin.post("/admin/verify", json={"full": True}),
+            ]
+
+    assert [answer.status_code for answer in answers] == [503, 503, 503]
+    assert razorpay.list_calls == []

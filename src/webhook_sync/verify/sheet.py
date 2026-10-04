@@ -114,9 +114,9 @@ class SheetVerify:
             except Exception:
                 log.exception("verify run failed; the next one runs on time")
 
-    async def run(self) -> int | None:
+    async def run(self, *, by_hand: bool = False) -> int | None:
         """One quick run; its `verify_runs` id, or None when there was nothing to check (the
-        sheet paused, or never written) or the read failed."""
+        sheet paused, or never written) or the read failed. `by_hand`: asked for by a person."""
         started = utc_now()
         clock = time.perf_counter()
         found = await self.check(started)
@@ -133,6 +133,7 @@ class SheetVerify:
             findings=found.findings,
             line=status_line(started, self._zone, found.checked, len(found.findings)),
             repair=True,
+            by_hand=by_hand,
         )
         self._request_flush()
         log.info(

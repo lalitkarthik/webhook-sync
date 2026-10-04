@@ -35,6 +35,7 @@ from test_sweeper import (
 )
 from time_machine import TimeMachineFixture
 
+from webhook_sync.admin.app import create_admin_app
 from webhook_sync.clock import to_db_text, utc_now
 from webhook_sync.config import AlertsConfig, Config, SweeperConfig, VerifyConfig
 from webhook_sync.db.schema import checkpoints
@@ -686,4 +687,110 @@ async def test_a_database_error_in_the_nightly_pass_is_logged_and_the_loop_carri
     assert error == "OperationalError"
     assert await read_rows("SELECT kind, local_date FROM verify_runs") == [
         {"kind": "full", "local_date": "2026-10-12"}
+    ]
+
+
+async def verify_by_hand(
+    config: Config,
+    data_dir: Path,
+    clock: TimeMachineFixture,
+    outside: Outside,
+    asked: dict[str, Any],
+    at: datetime = EARLY,
+) -> dict[str, Any]:
+    """A verify asked for through the admin listener of the app started at `at`, before the
+    night is due; its report once it is over."""
+    clock.move_to(at, tick=True)
+    outside.razorpay.now = at
+    public = create_app(config, data_dir)
+    async with public.router.lifespan_context(public):
+        transport = httpx.ASGITransport(app=create_admin_app(public, data_dir))
+        async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as admin:
+            run_id = (await admin.post("/admin/verify", json=asked)).json()["run_id"]
+            report: dict[str, Any] = {"state": "running"}
+            while report["state"] == "running":
+                await asyncio.sleep(0.01)
+                report = (await admin.get(f"/admin/runs/{run_id}")).json()
+    return report
+
+
+async def test_a_full_run_by_hand_today_leaves_the_nights_run_to_the_start_up_catch_up(
+    verified_config: Config,
+    data_dir: Path,
+    outside: Outside,
+    read_rows: ReadRows,
+    clock: TimeMachineFixture,
+) -> None:
+    outside.razorpay.payments.update(listed(CAPTURED))
+    report = await verify_by_hand(
+        verified_config, data_dir, clock, outside, {"full": True, "days": 1}
+    )
+
+    # Started at 03:00 the same local date: the night's own run still happens at start.
+    async with night(verified_config, data_dir, read_rows, clock, outside, runs=2):
+        pass
+
+    assert report["state"] == "finished"
+    assert await read_rows(
+        "SELECT kind, by_hand, window_days, local_date, repaired_count FROM verify_runs ORDER BY id"
+    ) == [
+        {
+            "kind": "full",
+            "by_hand": 1,
+            "window_days": 1,
+            "local_date": "2026-10-12",
+            "repaired_count": 0,
+        },
+        {
+            "kind": "full",
+            "by_hand": 0,
+            "window_days": 30,
+            "local_date": "2026-10-12",
+            "repaired_count": 1,
+        },
+    ]
+
+
+async def test_a_full_run_by_hand_without_repair_raises_no_verify_differences_alert(
+    verified_config: Config,
+    data_dir: Path,
+    outside: Outside,
+    read_rows: ReadRows,
+    clock: TimeMachineFixture,
+) -> None:
+    outside.razorpay.payments.update(listed(CAPTURED))
+
+    report = await verify_by_hand(verified_config, data_dir, clock, outside, {"full": True})
+
+    assert report["result"]["findings"] == [
+        {"kind": "missing", "payment_id": CAPTURED, "detail": None, "repaired": False}
+    ]
+    assert outside.alerts() == []
+
+
+async def test_stale_on_runs_by_hand_never_makes_a_stale_twice_alert(
+    verified_config: Config,
+    data_dir: Path,
+    writer: Writer,
+    outside: Outside,
+    read_rows: ReadRows,
+    clock: TimeMachineFixture,
+) -> None:
+    config = replace(verified_config, verify=VerifyConfig(auto_repair=False))
+    fake = outside.razorpay
+    fake.payments.update(listed(CAPTURED))
+    await ledgered(config, data_dir, writer, read_rows, CAPTURED)
+    fake.payments[CAPTURED] = fake.payments[CAPTURED] | {"fee": 1416, "tax": 216}
+
+    for minutes in (10, 20):  # after the ledger wrote the row, before the night
+        at = EARLY + timedelta(minutes=minutes)
+        await verify_by_hand(config, data_dir, clock, outside, {"full": True}, at=at)
+    hand_alerts = outside.alerts()
+    async with night(config, data_dir, read_rows, clock, outside, runs=3):
+        await until(lambda: bool(outside.alerts()), "the night's alert")
+
+    assert hand_alerts == []
+    assert [f["kind"] for f in await read_rows(FINDINGS)] == ["stale"] * 3
+    assert outside.alerts() == [
+        "webhook-sync verify_differences: 1 difference(s) verify left unrepaired (stale 1)"
     ]

@@ -23,7 +23,8 @@ CREATE TABLE checkpoints (
 
 -- One row per verify run: quick (the sheet against the ledger) or full (Razorpay too), its
 -- counts and the line it puts on Sync status. `local_date` is the full run's date in
--- `service.timezone`, so the nightly run is once per date across restarts (A18).
+-- `service.timezone`, so the nightly run is once per date across restarts (A18). A run asked
+-- for by hand (`by_hand` 1) never counts as a night's run.
 CREATE TABLE verify_runs (
     id               INTEGER PRIMARY KEY,
     kind             TEXT NOT NULL CHECK (kind IN ('quick', 'full')),
@@ -36,7 +37,8 @@ CREATE TABLE verify_runs (
     repaired_count   INTEGER NOT NULL DEFAULT 0,
     ignored_events   INTEGER NOT NULL DEFAULT 0,
     outcome          TEXT,
-    status_line      TEXT
+    status_line      TEXT,
+    by_hand          INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX verify_runs_by_kind_and_date ON verify_runs (kind, local_date);

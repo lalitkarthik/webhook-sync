@@ -86,11 +86,12 @@ async def verify(checks: Checks, *, full: bool, repair: bool, days: int | None) 
     """One verify run now: quick (the sheet against the ledger), or full (Razorpay too, over
     `days` or `[verify] days`, repairing only when `repair`); the run and its findings."""
     if full:
-        run_id = await checks.full_verify.run(repair=repair, days=days)
+        run_id = await checks.full_verify.run(repair=repair, days=days, by_hand=True)
         if isinstance(run_id, Failure):
             raise RunFailed(f"a Razorpay list failed: {run_id.error}")
     else:
-        run_id = await checks.sheet_verify.run() if checks.sheet_verify is not None else None
+        sheet = checks.sheet_verify
+        run_id = await sheet.run(by_hand=True) if sheet is not None else None
     if run_id is None:
         raise RunFailed(NOTHING_TO_CHECK)
     async with Reader.open(checks.data_dir) as reader:

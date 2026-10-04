@@ -5,7 +5,7 @@ cache; `GET /admin/status` returns what `wsync status` prints. `POST /admin/swee
 `/admin/backfill` and `/admin/verify` start a run by hand on the server's sweeper and verify
 and answer 202 with its id; `GET /admin/runs/{id}` reports it (Q152, A19). The app shares the
 public app's writer, pause cache, sweeper and verify, set by the public app's lifespan; until
-that has run it answers 503.
+that has run, and to a run asked for once the shutdown has begun, it answers 503.
 """
 
 import dataclasses
@@ -87,7 +87,9 @@ def create_admin_app(public: FastAPI, data_dir: Path) -> FastAPI:
         return JSONResponse(dict(await read_status(data_dir)))
 
     def checks() -> Checks | None:
-        if getattr(public.state, "writer", None) is None:
+        """The server's sweeper and verify; None while it starts or once its shutdown has
+        begun, when a new run would escape the shutdown's cancelling."""
+        if getattr(public.state, "writer", None) is None or public.state.receiver.shutting_down:
             return None
         return Checks(
             data_dir, public.state.sweeper, public.state.full_verify, public.state.sheet_verify

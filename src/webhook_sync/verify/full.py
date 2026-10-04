@@ -164,16 +164,18 @@ class FullVerify:
         repair: bool | None = None,
         days: int | None = None,
         local_date: date | None = None,
+        by_hand: bool = False,
     ) -> int | Failure | None:
         """One full run: its `verify_runs` id, or the failure of a list. While Razorpay is
         paused, a quick run instead (None when there is no sheet to check). `repair` defaults
         to `[verify] auto_repair`; `days` to `[verify] days`; `local_date` (the night it is
-        for) to today's."""
+        for) to today's. A run `by_hand` is stored as such: it is no night's run, the run
+        before no nightly run, and it alerts on nothing, since its findings are printed."""
         started = utc_now()
         clock = time.perf_counter()
         if self._razorpay.name in self._pauses.sources:
             log.info("full verify: Razorpay is paused, only the sheet is checked")
-            return await self._sheet.run() if self._sheet is not None else None
+            return await self._sheet.run(by_hand=by_hand) if self._sheet is not None else None
         days = self._config.verify.days if days is None else days
         source = await self._source.check(started, days)
         if isinstance(source, Failure):
@@ -199,6 +201,7 @@ class FullVerify:
             ),
             repair=repair,
             ignored_events=source.ignored_events,
+            by_hand=by_hand,
         )
         if self._sheet is not None:
             self._sheet.request_flush()
@@ -212,7 +215,8 @@ class FullVerify:
                 "duration_ms": round((time.perf_counter() - clock) * 1000),
             },
         )
-        await self._alert(recorded.run_id, findings, repair=repair)
+        if not by_hand:
+            await self._alert(recorded.run_id, findings, repair=repair)
         return recorded.run_id
 
     async def _alert(self, run_id: int, findings: list[Finding], *, repair: bool) -> None:
@@ -228,16 +232,22 @@ class FullVerify:
         async with self._writer.transaction() as tx:
             rows = await tx.execute(
                 sa.select(verify_runs.c.id)
-                .where(verify_runs.c.kind == "full", verify_runs.c.local_date == night.isoformat())
+                .where(
+                    verify_runs.c.kind == "full",
+                    verify_runs.c.by_hand == 0,
+                    verify_runs.c.local_date == night.isoformat(),
+                )
                 .limit(1)
             )
         return bool(rows)
 
     async def _stale_on_the_run_before(self, run_id: int) -> set[str]:
-        """The payments found stale by the full run before `run_id`."""
+        """The payments found stale by the nightly full run before `run_id`."""
         before = (
             sa.select(sa.func.max(verify_runs.c.id))
-            .where(verify_runs.c.kind == "full", verify_runs.c.id < run_id)
+            .where(
+                verify_runs.c.kind == "full", verify_runs.c.by_hand == 0, verify_runs.c.id < run_id
+            )
             .scalar_subquery()
         )
         async with self._writer.transaction() as tx:
