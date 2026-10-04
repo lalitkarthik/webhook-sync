@@ -15,7 +15,7 @@ from pathlib import Path
 
 import httpx
 
-from webhook_sync.cli.admin import EXIT_REFUSED, CommandFailed
+from webhook_sync.cli.admin import EXIT_REFUSED, CommandFailed, verify_command
 from webhook_sync.cli.doctor import sheet_failure
 from webhook_sync.cli.serve import prepare_database
 from webhook_sync.config import Config, ConfigError, load_config, load_settings
@@ -159,4 +159,11 @@ def outage(args: argparse.Namespace, config: Config) -> int:
 
 
 def verify(args: argparse.Namespace, config: Config) -> int:
-    raise CommandFailed("not built yet")
+    """`wsync verify --full`: through the running server when there is one, else on its own."""
+    say(
+        f"running a full verify: Razorpay's last {config.verify.days} days against the ledger, "
+        "and the ledger against the sheet"
+    )
+    return verify_command(
+        argparse.Namespace(config=args.config, full=True, repair=False, days=None, no_wait=False)
+    )

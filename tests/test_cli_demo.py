@@ -8,6 +8,7 @@ code, the ledger, the sheet and the config file.
 """
 
 import asyncio
+import re
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
@@ -206,3 +207,23 @@ def test_the_demo_retry_profile_replaces_or_adds_the_one_line(
     assert text.count("retry_profile") == 1
     assert text.endswith(rest)
     assert load_settings(path, fixture_secrets()).service.retry_profile == "demo"
+
+
+# -- demo verify -----------------------------------------------------------------------------
+
+
+async def test_verify_prints_the_full_verify_line_on_its_own_and_through_a_server(
+    run: CrashRun,
+) -> None:
+    await swept_in(run, "pay_DemoVerify0001", "pay_DemoVerify0002")
+
+    alone_code, alone = await wsync_demo(run, "verify")
+    async with run.server():
+        served_code, served = await wsync_demo(run, "verify")
+
+    for code, output in ((alone_code, alone), (served_code, served)):
+        assert code == 0, output
+        assert "running a full verify" in output
+        assert re.search(r"Verified .*: last 30 days, 2 payments, 0 differences", output), output
+    assert "(on the database: no server is running)" in alone
+    assert "(through the running server)" in served
