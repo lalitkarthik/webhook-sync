@@ -369,8 +369,9 @@ class FakeSheets:
     Fault switches: `access` ("edit", "view" or "none": unshared), `deleted`,
     `exhaust_quota`, `fail_next`, `lose_next_write_reply`, `refuse_tokens`, `revoke_tokens`,
     `cell_characters` (a lower per-cell limit, to make one cell bad); `after_next` makes a
-    person's edits straight after a call is answered, between the flusher's read and write;
-    `hold_read` answers a read late, with the sheet as it stood when the read came.
+    person's edits (see "A person's actions" below) straight after a call is answered, between
+    any two of the flusher's calls; `hold_read` answers a read late, with the sheet as it stood
+    when the read came. `add_buyers_own` gives the buyer a tab and cells of their own (Q168).
     """
 
     def __init__(
@@ -469,6 +470,43 @@ class FakeSheets:
         stood when the call came, but only once `until` returns: a slow answer, while other
         calls change the sheet."""
         self._holds.append((matching, until))
+
+    def add_buyers_own(self) -> None:
+        """The buyer's own cells on `Sheet1` and their own tab, `BUYERS_TAB`, beside ours: what
+        invariant 6 holds the service to never touching (Q168, A11)."""
+        if not self.has_tab("Sheet1"):
+            self.apply([{"addSheet": {"properties": {"title": "Sheet1", "sheetId": 0}}}])
+        self.apply(
+            [
+                {"addSheet": {"properties": {"title": BUYERS_TAB}}},
+                _cells_at(self.tab("Sheet1").sheet_id, [["Customer", "Plan"], ["Asha", "Yearly"]]),
+            ]
+        )
+        budget = self.tab(BUYERS_TAB).sheet_id
+        self.apply(
+            [
+                _cells_at(budget, [["Month", "Target"], ["October"]]),
+                {
+                    "updateCells": {
+                        "start": {"sheetId": budget, "rowIndex": 1, "columnIndex": 1},
+                        "rows": [
+                            {
+                                "values": [
+                                    {
+                                        "userEnteredValue": {"numberValue": 125000},
+                                        "userEnteredFormat": {
+                                            "numberFormat": {"type": "NUMBER", "pattern": "#,##0"}
+                                        },
+                                        "note": "Agreed with the accountant",
+                                    }
+                                ]
+                            }
+                        ],
+                        "fields": "*",
+                    }
+                },
+            ]
+        )
 
     def cell_count(self, tabs: Iterable[Tab] | None = None) -> int:
         return sum(tab.row_count * tab.column_count for tab in (tabs or self.tabs))
@@ -798,6 +836,73 @@ class FakeSheets:
             for c, cell in line.items():
                 tab.cells[(r, c)] = cell
         return {}
+
+
+# ---------------------------------------------------------------------------------------------
+# A person's actions: each a `batchUpdate` request, for `FakeSheets.apply` (now) or
+# `FakeSheets.after_next` (straight after a call is answered).
+
+BUYERS_TAB = "Budget"
+"""The title of the buyer's own tab (`FakeSheets.add_buyers_own`)."""
+
+
+def sort_rows(sheet_id: int, *, column: int = 0, order: str = "ASCENDING") -> Json:
+    """A sort of every row below the header by one column, as a person sorts a tab."""
+    return {
+        "sortRange": {
+            "range": {"sheetId": sheet_id, "startRowIndex": 1},
+            "sortSpecs": [{"dimensionIndex": column, "sortOrder": order}],
+        }
+    }
+
+
+def edit_cell(sheet_id: int, row: int, column: int, text: str) -> Json:
+    """A person types `text` into one cell."""
+    return _cells_at(sheet_id, [[text]], row=row, column=column)
+
+
+def delete_row(sheet_id: int, row: int) -> Json:
+    """A person deletes one row: those below move up."""
+    return {
+        "deleteDimension": {
+            "range": {
+                "sheetId": sheet_id,
+                "dimension": "ROWS",
+                "startIndex": row,
+                "endIndex": row + 1,
+            }
+        }
+    }
+
+
+def delete_tab(sheet_id: int) -> Json:
+    """A person deletes a whole tab."""
+    return {"deleteSheet": {"sheetId": sheet_id}}
+
+
+def rename_tab(sheet_id: int, title: str) -> Json:
+    """A person renames a tab; its sheetId stays."""
+    return {
+        "updateSheetProperties": {
+            "properties": {"sheetId": sheet_id, "title": title},
+            "fields": "title",
+        }
+    }
+
+
+def _cells_at(
+    sheet_id: int, texts: Sequence[Sequence[str]], *, row: int = 0, column: int = 0
+) -> Json:
+    return {
+        "updateCells": {
+            "start": {"sheetId": sheet_id, "rowIndex": row, "columnIndex": column},
+            "rows": [
+                {"values": [{"userEnteredValue": {"stringValue": text}} for text in line]}
+                for line in texts
+            ],
+            "fields": "userEnteredValue",
+        }
+    }
 
 
 def _sort_key(cell: Json) -> tuple[int, Any]:
