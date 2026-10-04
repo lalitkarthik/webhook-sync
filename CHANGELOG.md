@@ -1,5 +1,12 @@
 # Changelog
 
+## P4 (in progress): catch what webhooks missed — 2026-10-04
+
+- The sweeper now lists Razorpay's payments and refunds on Razorpay's own clock, at startup and every 10 minutes, so payments made while the server was down reach the ledger and the sheet with Via = sweep; an hourly re-list catches later captures, fees and refunds.
+- `heartbeat_url` gets one ping after each healthy sweep pass, and a `silent_webhook` alert fires when the sweep finds payments no webhook brought.
+- Every hour the sheet is checked against the ledger: missing or edited rows are rewritten, duplicates and unknown rows reported, and the run's line shown on Sync status.
+- Not yet merged: the nightly check against Razorpay (#42, parked) and the `wsync sweep`, `backfill` and `verify` commands (#43).
+
 ## P3: mirror the ledger to the Google Sheet — 2026-10-03
 
 - `wsync serve` now runs the flusher: every 3 s (or at once at 200 jobs) it writes waiting payments to the Google Sheet in two reads and one write: a Payments tab with one row per payment, a Daily summary per local day and currency, and a Sync status tab saying whether all is healthy.
