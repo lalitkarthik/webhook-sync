@@ -224,25 +224,37 @@ class FakeRazorpay:
         on the refunds list and in its payment's fetch, newest first. The payment's
         `amount_refunded` and `refund_status` count every refund that has not failed: whether
         Razorpay's count a pending one is undocumented (G65), and the row must not follow them
-        either way."""
+        either way. Once they add up to the amount the payment is `refunded`, `full`, as
+        Razorpay documents it (no recording shows one); below it, `captured` again."""
         payment_id = refund["payment_id"]
         state = self.fetches[payment_id]
         others = [other for other in state["refunds"]["items"] if other["id"] != refund["id"]]
         items = sorted([*others, refund], key=lambda item: item["created_at"], reverse=True)
         counted = sum(item["amount"] for item in items if item["status"] != "failed")
-        assert counted < state["amount"], "a full refund is not replayed: none was recorded"
-        totals = {"amount_refunded": counted, "refund_status": "partial" if counted else None}
+        full = counted >= state["amount"]
+        totals = {
+            "status": "refunded" if full else "captured",
+            "amount_refunded": counted,
+            "refund_status": "full" if full else "partial" if counted else None,
+        }
         collection = {"entity": "collection", "count": len(items), "items": items}
         self.change(payment_id, state | totals | {"refunds": collection})
         self.payments[payment_id] = self.payments[payment_id] | totals
         self.refunds = [other for other in self.refunds if other["id"] != refund["id"]] + [refund]
 
-    def documented_refund(self, payment_id: str, *, amount: int) -> dict[str, Any]:
-        """A refund that failed, which test mode can't make (Q166): the refund of Razorpay's
-        documented `refund.failed` sample, placed on the payment (its id and currency, `amount`,
-        created now). Unrecorded: mark the test `unrecorded`."""
-        sample: dict[str, Any] = razorpay_sample("refund.failed")["payload"]["refund"]["entity"]
-        return sample | {
+    def documented_refund(
+        self,
+        payment_id: str,
+        *,
+        amount: int,
+        sample: Literal["refund.failed", "refund.processed"] = "refund.failed",
+    ) -> dict[str, Any]:
+        """A refund no recording holds: one that failed, which test mode can't make (Q166), or
+        a `processed` one. It is the refund of Razorpay's documented sample of that event,
+        placed on the payment (its id and currency, `amount`, created now). Unrecorded: mark
+        the test `unrecorded`."""
+        documented: dict[str, Any] = razorpay_sample(sample)["payload"]["refund"]["entity"]
+        return documented | {
             "payment_id": payment_id,
             "amount": amount,
             "currency": self.fetches[payment_id]["currency"],

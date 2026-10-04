@@ -160,6 +160,48 @@ def test_a_refund_that_fails_counts_at_razorpay_while_pending_and_never_in_our_r
     assert refunded(razorpay) == ("partially_refunded", 10000)
 
 
+def totals(payment: dict[str, Any]) -> tuple[str, int, str | None]:
+    return payment["status"], payment["amount_refunded"], payment["refund_status"]
+
+
+@pytest.mark.unrecorded
+def test_refunds_adding_up_to_the_amount_make_the_payment_refunded_in_full(
+    razorpay: FakeRazorpay,
+) -> None:
+    for refund_id in (FIRST, SECOND):
+        razorpay.refund(recorded_refund(refund_id))
+    sample = razorpay_sample("refund.processed")["payload"]["refund"]["entity"]
+
+    rest = razorpay.documented_refund(PAYMENT, amount=30000, sample="refund.processed")
+    razorpay.refund(rest)
+
+    assert (rest["id"], rest["status"]) == (sample["id"], "processed")
+    assert totals(razorpay.fetches[PAYMENT]) == ("refunded", 50000, "full")
+    assert razorpay.fetches[PAYMENT]["captured"] is True
+    assert totals(razorpay.payments[PAYMENT]) == ("refunded", 50000, "full")
+    assert refunded(razorpay) == ("refunded", 50000)
+
+
+@pytest.mark.unrecorded
+def test_a_refund_of_the_rest_that_fails_takes_the_payment_back_to_captured(
+    razorpay: FakeRazorpay,
+) -> None:
+    for refund_id in (FIRST, SECOND):
+        razorpay.refund(recorded_refund(refund_id))
+    rest = razorpay.documented_refund(PAYMENT, amount=30000)
+
+    razorpay.refund(rest | {"status": "pending"})
+    pending = totals(razorpay.fetches[PAYMENT])
+    while_pending = refunded(razorpay)
+    razorpay.refund(rest)
+
+    assert pending == ("refunded", 50000, "full")
+    assert while_pending == ("partially_refunded", 20000)
+    assert totals(razorpay.fetches[PAYMENT]) == ("captured", 20000, "partial")
+    assert totals(razorpay.payments[PAYMENT]) == ("captured", 20000, "partial")
+    assert refunded(razorpay) == ("partially_refunded", 20000)
+
+
 @pytest.mark.unrecorded
 def test_a_documented_delivery_is_the_sample_about_the_refund_signed_with_the_fixture_secret(
     razorpay: FakeRazorpay,
