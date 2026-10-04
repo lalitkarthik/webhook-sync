@@ -3,7 +3,8 @@ on the same database (Q159, Q164).
 
 `crash.server(crash_at=...)` starts a server armed with `WSYNC_CRASH_AT`, against FakeRazorpay
 and FakeSheets over HTTP (`fakes.over_http`); the test drives it through `server.client`, as
-Razorpay does, and `server.crashed()` fails unless the process exited with the crash code: a
+Razorpay does, and through `server.admin`, its admin listener, asks for a sweep by hand;
+`server.crashed()` fails unless the process exited with the crash code: a
 crash test that never crashed proves nothing (A15). `crash.server()` then starts a new server
 on the same database; the test settles it and, while it still runs, reads what it left and ends
 with `crash.check()`, the nine invariants. Not after it stops: on Windows `stop` returns once the
@@ -13,10 +14,12 @@ read then fails with a disk I/O error. The fixture is in `conftest.py`.
 
 import asyncio
 import subprocess
+import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -46,7 +49,25 @@ class Server:
 
     process: subprocess.Popen[bytes]
     client: httpx.AsyncClient
+    admin: httpx.AsyncClient
     log: Path
+
+    async def sweep(self) -> str:
+        """Ask for a sweep by hand; its run id."""
+        asked = await self.admin.post("/admin/sweep")
+        assert asked.status_code == 202, asked.text
+        return asked.json()["run_id"]
+
+    async def run_ended(self, run_id: str, *, within: float = SETTLE_LIMIT) -> dict[str, Any]:
+        """Wait for a run by hand to end; its report."""
+        deadline = time.monotonic() + within
+        while True:
+            report = (await self.admin.get(f"/admin/runs/{run_id}")).json()
+            if report["state"] != "running":
+                return report
+            if time.monotonic() > deadline:
+                pytest.fail(f"run {run_id} still running {within} s on\n{self._log_tail()}")
+            await asyncio.sleep(0.05)
 
     async def crashed(self, *, within: float = CRASH_WAIT) -> None:
         """Wait for the process to exit; fail unless it exited with the crash code."""
@@ -73,6 +94,7 @@ class CrashRun:
     config_path: Path
     environ: dict[str, str]
     port: int
+    admin_port: int
     razorpay: FakeRazorpay
     sheets: FakeSheets
     on_purpose: OnPurpose = field(default_factory=OnPurpose)
@@ -104,11 +126,13 @@ class CrashRun:
             )
             try:
                 await asyncio.to_thread(wait_until_healthy, base_url, process)
+                admin_url = f"http://127.0.0.1:{self.admin_port}"
                 async with (
                     self.watch,
                     httpx.AsyncClient(base_url=base_url, trust_env=False, timeout=30) as client,
+                    httpx.AsyncClient(base_url=admin_url, trust_env=False, timeout=30) as admin,
                 ):
-                    yield Server(process, client, log)
+                    yield Server(process, client, admin, log)
             finally:
                 if process.poll() is None:
                     await asyncio.to_thread(stop, process)

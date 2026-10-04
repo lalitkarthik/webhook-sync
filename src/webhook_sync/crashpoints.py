@@ -20,9 +20,11 @@ TEST_KEY_PREFIX = "rzp_test_"
 CRASH_EXIT_CODE = 86
 """The exit code of every crash point: a crash test fails unless the server exited with it (A15)."""
 
-NAMES = ("after_event_commit",)
+NAMES = ("after_event_commit", "after_sheet_write_before_done", "mid_slice")
 """`after_event_commit`: the receiver, after the event's transaction commits and before it
-answers (A14)."""
+answers; `after_sheet_write_before_done`: the flusher, after its post-write check and before
+its jobs are completed; `mid_slice`: the sweeper, after a slice's items are stored and before
+its checkpoint moves (A14)."""
 
 _armed: str | None = None
 
