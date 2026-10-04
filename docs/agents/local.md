@@ -63,8 +63,10 @@ One step of `docs/design/build-order.md` at a time, each in its own sessions:
    (`cx run --detach yes --name orch-<slug>`) and posts the orchestrator hand-off on the issue.
 2. **Build** (unattended): the orchestrator starts a worker per ticket, tests and reviews each,
    walks the feature's user flows once, opens one PR and merges it when every ticket is closed,
-   the suite is green and the flow check passed. Progress shows on the feature issue and in
-   `~/.claude/accounts/runs/orch-<slug>.json`. To resume a stopped build:
+   the suite is green and the flow check passed. Progress shows live on the dashboard the plan
+   opens (`/feature-loop dashboard` brings it back: every agent, its latest action and each
+   ticket), on the feature issue and in `~/.claude/accounts/runs/orch-<slug>.json`. To resume a
+   stopped build:
    `/feature-loop orchestrate #<feature issue>`.
 3. **Merge**: a PR the orchestrator left open (it says why) is merged by the owner.
 4. **Clean up**: the orchestrator runs Phase C after its own merge; after an owner merge, tell a
