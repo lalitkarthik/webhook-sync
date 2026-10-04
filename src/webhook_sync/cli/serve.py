@@ -49,14 +49,14 @@ def add_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) 
     )
     parser.add_argument(
         "--demo-fail-first",
-        type=_at_least_one,
+        type=at_least_one,
         metavar="N",
         help="demo only: answer 500 to the first N attempts of each stored event",
     )
     parser.set_defaults(handler=serve)
 
 
-def _at_least_one(text: str) -> int:
+def at_least_one(text: str) -> int:
     try:
         n = int(text)
     except ValueError:
