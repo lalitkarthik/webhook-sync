@@ -13,8 +13,8 @@ from support import ReadRows
 from webhook_sync.sinks.sheets import PAYMENTS
 
 DELIVERED = ("Tj9h5SOW6XVf7g", "Tj9sobwBnTgcRB", "Tj9sMcl7hE9PaT")
-"""The captures of pay_Tj9gmEfed6kRqO and pay_Tj9rKBOXWcsMeE and the failure of
-pay_Tj9sm13R8h2378, in that order: the Payments rows, top to bottom."""
+"""The capture of pay_Tj9gmEfed6kRqO, the failure of pay_Tj9sm13R8h2378 and the capture of
+pay_Tj9rKBOXWcsMeE, in that order: the Payments rows, top to bottom."""
 CHANGED = "pay_Tj9rKBOXWcsMeE"
 ANNOUNCED = "Tj9rs3245YOiVJ"  # payment.authorized of pay_Tj9rKBOXWcsMeE, a new event here
 
