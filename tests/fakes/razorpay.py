@@ -98,7 +98,8 @@ class Sent:
 
 @dataclass
 class FakeRazorpay:
-    """Razorpay's payments and refunds lists and its payment fetch, on Razorpay's own clock.
+    """Razorpay's payments and refunds lists, its payment fetch and a payment's refunds pages,
+    on Razorpay's own clock.
 
     A list answers as Razorpay does: newest first, `from` and `to` both inclusive, `count` items
     after `skip`, with `now` in the `Date` header. A fetch answers the payment's recorded state.
@@ -134,6 +135,9 @@ class FakeRazorpay:
         router.get(url__regex=rf"^{RAZORPAY_API}/v1/payments/(?P<payment_id>pay_\w+)(\?|$)").mock(
             side_effect=self._fetch
         )
+        router.get(
+            url__regex=rf"^{RAZORPAY_API}/v1/payments/(?P<payment_id>pay_\w+)/refunds(\?|$)"
+        ).mock(side_effect=self._refunds)
 
     def change(self, payment_id: str, state: dict[str, Any]) -> None:
         """The payment moves on at Razorpay: fetches answer `state` from now on."""
@@ -220,3 +224,13 @@ class FakeRazorpay:
         if payment_id not in self.fetches:
             return httpx.Response(400, json=recorded_fetch("not-found-well-formed"))
         return httpx.Response(200, json=self.fetches[payment_id])
+
+    async def _refunds(self, request: httpx.Request, payment_id: str) -> httpx.Response:
+        """A page of the payment's refunds, in its fetch's order: an empty page past the end,
+        and for a payment Razorpay doesn't know, as recorded."""
+        await asyncio.sleep(self.latency)
+        query = dict(request.url.params)
+        count, skip = int(query.get("count", "10")), int(query.get("skip", "0"))
+        refunds = self.fetches.get(payment_id, {}).get("refunds") or {}
+        page = (refunds.get("items") or [])[skip : skip + count]
+        return httpx.Response(200, json={"count": len(page), "entity": "collection", "items": page})

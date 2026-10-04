@@ -8,12 +8,14 @@ from datetime import UTC, datetime
 from email.utils import format_datetime
 
 import httpx
+import pytest
 from fakes.over_http import FakesOverHttp
 from fakes.razorpay import FakeRazorpay, recorded_latency, recorded_listed_payments
 from support import recorded_fetch
 
 NOW = datetime(2026, 10, 2, 20, 5, tzinfo=UTC)
 CAPTURED = "pay_Tj9rKBOXWcsMeE"
+REFUNDED = "pay_Tj9gmEfed6kRqO"
 LATENCY = 0.2
 
 
@@ -35,6 +37,26 @@ async def test_razorpay_over_http_answers_fetches_and_lists_as_in_process() -> N
     assert (unknown.status_code, unknown.json()) == (400, recorded_fetch("not-found-well-formed"))
     assert [item["id"] for item in listed.json()["items"]] == [CAPTURED]
     assert listed.headers["date"] == format_datetime(NOW, usegmt=True)
+
+
+async def test_razorpay_over_http_answers_a_payments_refunds_page_by_page_as_recorded(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with FakesOverHttp(FakeRazorpay(now=NOW)) as fakes:
+        async with httpx.AsyncClient(base_url=fakes.url, trust_env=False) as client:
+            pages = [
+                await client.get(f"/v1/payments/{REFUNDED}/refunds", params=query)
+                for query in ({"count": 1}, {"count": 1, "skip": 1}, {"count": 1, "skip": 2})
+            ]
+            unknown = await client.get("/v1/payments/pay_00000000000000/refunds?count=1")
+
+    assert [(page.status_code, page.json()) for page in pages] == [
+        (200, recorded_fetch(name))
+        for name in ("refunds-page-1", "refunds-page-2", "refunds-page-3-empty")
+    ]
+    assert (unknown.status_code, unknown.json()) == (200, recorded_fetch("refunds-unknown-payment"))
+    logged = capsys.readouterr().err
+    assert f'"GET /v1/payments/{REFUNDED}/refunds?count=1&skip=1 HTTP/1.1" 200' in logged
 
 
 def test_the_recorded_latency_is_the_median_recorded_call() -> None:

@@ -12,7 +12,8 @@ inside the fake, and a test scripts and reads them as it does there.
   server's HTTP clients honour `HTTPS_PROXY` and `SSL_CERT_FILE`). Nothing in the product
   changes for it; a tunnel to any other host is refused, and no certificate for one is trusted.
 
-A fake's lost reply (`httpx.TimeoutException`) closes the connection unanswered.
+A fake's lost reply (`httpx.TimeoutException`) closes the connection unanswered. Each answered
+call is logged to stderr with its request line and status, Google's inside their tunnel.
 """
 
 import asyncio
@@ -156,6 +157,7 @@ class _Handler(BaseHTTPRequestHandler):
         except Exception:
             traceback.print_exc()
             response = httpx.Response(500, json={"error": "the fake failed"})
+        self.log_request(response.status_code)
         self.send_response_only(response.status_code)
         for name, value in response.headers.multi_items():
             if name.lower() not in NOT_ANSWERED:
