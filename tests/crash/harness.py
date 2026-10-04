@@ -146,9 +146,10 @@ class CrashRun:
 
 
 @contextmanager
-def served_run(data_dir: Path) -> Generator[CrashRun]:
-    """A config on `data_dir` for the recordings' account, with FakeRazorpay and FakeSheets
-    served over HTTP. The first sweep starts empty, so only what a test sends arrives."""
+def served_run(data_dir: Path, *, extra: str = "") -> Generator[CrashRun]:
+    """A config on `data_dir` for the recordings' account, with `extra` TOML at its end, and
+    FakeRazorpay and FakeSheets served over HTTP. The first sweep starts empty, so only what a
+    test sends arrives."""
     razorpay = FakeRazorpay(now=datetime.now(UTC))
     sheets = FakeSheets(TEST_SPREADSHEET_ID)
     with FakesOverHttp(razorpay, sheets) as fakes:
@@ -158,7 +159,7 @@ def served_run(data_dir: Path) -> Generator[CrashRun]:
             port,
             account=RECORDED_ACCOUNT,
             api_url=fakes.url,
-            extra="\n[sweeper]\ninitial_lookback_days = 0\n",
+            extra=f"\n[sweeper]\ninitial_lookback_days = 0\n{extra}",
         )
         environ = fakes.environ(fixture_environment())
         config = load_config(config_path, environ)
