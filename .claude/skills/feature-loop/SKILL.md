@@ -2,7 +2,7 @@
 name: feature-loop
 description: Multi-ticket feature workflow — set a repo up, design the whole product into docs/design/ with its list of every feature, find unchecked facts in that design, plan one feature into waves of tickets, then build it unattended (workers per ticket, test, review, one user-flow check, PR merged when green), and audit the result until it converges.
 disable-model-invocation: true
-argument-hint: "setup | design | plan | orchestrate <feature issue> | gaps | audit [<feature issue>]"
+argument-hint: "setup | design | plan | orchestrate <feature issue> | gaps | audit [<feature issue>] | dashboard"
 ---
 
 # Feature loop
@@ -98,6 +98,16 @@ Read [workflow.md](workflow.md) for the git and context rules, then run
 
 Read [workflow.md](workflow.md) and [prompts/audit.md](prompts/audit.md), then start at its
 **Startup**: the whole product on `main` with no argument, one feature with its issue number.
+
+## `dashboard` — watch the agents
+
+Run `node .claude/skills/feature-loop/scripts/dashboard.mjs --detach` in the project root, then show the user the
+URL it prints (`http://127.0.0.1:8765`; `--port <n>` changes it): open it in the session's
+browser pane when it has one, otherwise print it. The page refreshes itself and shows the
+accounts, every agent running now with its latest action, the current build's tickets and PR,
+what finished in the last 24 hours, and the watchdog's log when there is one. It only reads, and
+running it twice is harmless (the second run prints the URL). The plan's **Launch** step starts it
+by itself; type this mode to bring it back, for example after a reboot.
 
 ## After a merge
 

@@ -73,6 +73,10 @@ prints when `$TMPDIR` is unset. Hand-off and state files live there, outside the
       merges itself when everything is green and stays open, with the reason, when it is not.
     - `HERDR_ENV=1`: launch the orchestrator with [herdr.md](herdr.md) and name its tab.
 
+    Then, on either route, start the dashboard: `node .claude/skills/feature-loop/scripts/dashboard.mjs --detach`
+    in the project root. Show the user the URL it prints (open it in the session's browser pane
+    when it has one): the page shows every agent and ticket of the build, live.
+
     The planning session is finished.
 
 ## Phase B — build (main session as orchestrator, unattended)
