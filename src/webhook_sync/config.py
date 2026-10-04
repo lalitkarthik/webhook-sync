@@ -17,7 +17,7 @@ import os
 import re
 import tomllib
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import time
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -139,11 +139,12 @@ class GoogleSecrets:
 
 
 @dataclass(frozen=True)
-class Config:
+class Settings:
+    """What the TOML holds: the configuration without its secrets. `wsync doctor` checks it
+    apart from them, so that a missing secret does not hide a typo."""
+
     service: ServiceConfig
     razorpay: RazorpayConfig
-    razorpay_secrets: RazorpaySecrets
-    google_secrets: GoogleSecrets
     sheets: SheetsConfig
     sinks: tuple[str, ...]
     """The configured sinks' names, one per `[sinks.*]` section present (today `sheets`). Each
@@ -152,6 +153,12 @@ class Config:
     sweeper: SweeperConfig = SweeperConfig()
     verify: VerifyConfig = VerifyConfig()
     demo: DemoConfig = DemoConfig()
+
+
+@dataclass(frozen=True, kw_only=True)
+class Config(Settings):
+    razorpay_secrets: RazorpaySecrets
+    google_secrets: GoogleSecrets
 
 
 SECRET_NAMES = (
@@ -246,12 +253,12 @@ def locate_admin_listen(path: Path) -> str:
     return _admin_listen(cast(Mapping[str, Any], service) if isinstance(service, dict) else {})
 
 
-def load_config(path: Path, environ: Mapping[str, str] | None = None) -> Config:
-    """Read the config file at `path` and the secrets; raise ConfigError naming what is wrong."""
+def load_settings(path: Path, environ: Mapping[str, str] | None = None) -> Settings:
+    """Read and validate the config file at `path` alone; raise ConfigError naming what is
+    wrong. The secrets that are set are read only to refuse a TOML that holds one's value."""
     document = _read_toml(path)
     _check_keys(document, SCHEMA, prefix="")
-    secrets = _secrets(path.parent / ".env", os.environ if environ is None else environ)
-    _refuse_secret_values(document, secrets, prefix="")
+    _refuse_secret_values(document, read_secrets(path, environ), prefix="")
 
     service = _section(document, "service")
     razorpay = _section(_section(document, "sources"), "razorpay", "sources.", required=True)
@@ -261,20 +268,7 @@ def load_config(path: Path, environ: Mapping[str, str] | None = None) -> Config:
     verify = _section(document, "verify")
     demo = _section(document, "demo")
 
-    mode: Mode = _choice(razorpay, "mode", "sources.razorpay", MODES)
-    key_prefix = f"rzp_{mode}_"
-    if not secrets["RAZORPAY_KEY_ID"].startswith(key_prefix):
-        raise ConfigError(
-            f'RAZORPAY_KEY_ID does not match sources.razorpay.mode = "{mode}": '
-            f"a {mode}-mode key starts {key_prefix}"
-        )
-    webhook_secrets = tuple(
-        s.strip() for s in secrets["RAZORPAY_WEBHOOK_SECRET"].split(",") if s.strip()
-    )
-    if not webhook_secrets:
-        raise ConfigError("RAZORPAY_WEBHOOK_SECRET is missing or empty")
-
-    return Config(
+    return Settings(
         service=ServiceConfig(
             public_listen=_listen(service, "public_listen", DEFAULT_PUBLIC_LISTEN),
             admin_listen=_admin_listen(service),
@@ -285,18 +279,10 @@ def load_config(path: Path, environ: Mapping[str, str] | None = None) -> Config:
             ),
         ),
         razorpay=RazorpayConfig(
-            mode=mode,
+            mode=_choice(razorpay, "mode", "sources.razorpay", MODES),
             account=_account(razorpay),
             metadata_keys=tuple(razorpay.get("metadata_keys", [])),
             api_url=_api_url(razorpay),
-        ),
-        razorpay_secrets=RazorpaySecrets(
-            key_id=secrets["RAZORPAY_KEY_ID"],
-            key_secret=secrets["RAZORPAY_KEY_SECRET"],
-            webhook_secrets=webhook_secrets,
-        ),
-        google_secrets=GoogleSecrets(
-            service_account=_service_account(secrets["GOOGLE_SERVICE_ACCOUNT_B64"])
         ),
         sheets=SheetsConfig(
             spreadsheet_id=_string(sheets, "spreadsheet_id", "sinks.sheets"),
@@ -316,6 +302,57 @@ def load_config(path: Path, environ: Mapping[str, str] | None = None) -> Config:
         ),
         demo=DemoConfig(spreadsheet_ids=tuple(demo.get("spreadsheet_ids", []))),
     )
+
+
+def read_secrets(path: Path, environ: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Each secret's value, stripped, from the environment or the `.env` beside the config file
+    at `path`, the real environment winning (A11); empty when it is missing."""
+    dotenv_path = path.parent / ".env"
+    from_file = dotenv_values(dotenv_path) if dotenv_path.is_file() else {}
+    merged: dict[str, str] = {k: v for k, v in from_file.items() if v is not None}
+    merged.update(os.environ if environ is None else environ)
+    return {name: merged.get(name, "").strip() for name in SECRET_NAMES}
+
+
+def load_config(path: Path, environ: Mapping[str, str] | None = None) -> Config:
+    """Read the config file at `path` and the secrets; raise ConfigError naming what is wrong."""
+    _check_keys(_read_toml(path), SCHEMA, prefix="")
+    secrets = read_secrets(path, environ)
+    for name in SECRET_NAMES:
+        if not secrets[name]:
+            raise ConfigError(f"{name} is missing or empty")
+    settings = load_settings(path, environ)
+    check_key_mode(settings.razorpay.mode, secrets["RAZORPAY_KEY_ID"])
+    return Config(
+        **{f.name: getattr(settings, f.name) for f in fields(settings)},
+        razorpay_secrets=RazorpaySecrets(
+            key_id=secrets["RAZORPAY_KEY_ID"],
+            key_secret=secrets["RAZORPAY_KEY_SECRET"],
+            webhook_secrets=webhook_secrets(secrets["RAZORPAY_WEBHOOK_SECRET"]),
+        ),
+        google_secrets=GoogleSecrets(
+            service_account=service_account_key(secrets["GOOGLE_SERVICE_ACCOUNT_B64"])
+        ),
+    )
+
+
+def check_key_mode(mode: Mode, key_id: str) -> None:
+    """Refuse a key whose prefix is not the configured mode's (Q111): nothing else in a
+    delivery or an answer names the mode."""
+    key_prefix = f"rzp_{mode}_"
+    if not key_id.startswith(key_prefix):
+        raise ConfigError(
+            f'RAZORPAY_KEY_ID does not match sources.razorpay.mode = "{mode}": '
+            f"a {mode}-mode key starts {key_prefix}"
+        )
+
+
+def webhook_secrets(value: str) -> tuple[str, ...]:
+    """`RAZORPAY_WEBHOOK_SECRET` as its secrets, newest first; refused when it holds none."""
+    found = tuple(s.strip() for s in value.split(",") if s.strip())
+    if not found:
+        raise ConfigError("RAZORPAY_WEBHOOK_SECRET is missing or empty")
+    return found
 
 
 def _read_toml(path: Path) -> dict[str, Any]:
@@ -375,19 +412,6 @@ def _refuse_secret_values(
                     f"{name} holds a secret's value: secrets belong in the environment or .env, "
                     "never in the config file"
                 )
-
-
-def _secrets(dotenv_path: Path, environ: Mapping[str, str]) -> dict[str, str]:
-    from_file = dotenv_values(dotenv_path) if dotenv_path.is_file() else {}
-    merged: dict[str, str] = {k: v for k, v in from_file.items() if v is not None}
-    merged.update(environ)
-    secrets: dict[str, str] = {}
-    for name in SECRET_NAMES:
-        value = merged.get(name, "")
-        if not value.strip():
-            raise ConfigError(f"{name} is missing or empty")
-        secrets[name] = value.strip()
-    return secrets
 
 
 def _section(
@@ -488,7 +512,7 @@ _SERVICE_ACCOUNT_REFUSED = (
 )
 
 
-def _service_account(value: str) -> Mapping[str, Any]:
+def service_account_key(value: str) -> Mapping[str, Any]:
     """The decoded key, refused (naming the variable, never its value) unless it is a
     service-account key whose private key loads (A4, Q135)."""
     try:

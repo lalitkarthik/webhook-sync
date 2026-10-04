@@ -52,13 +52,13 @@ from sqlalchemy.dialects import sqlite
 
 from webhook_sync.alerts import Alerter
 from webhook_sync.clock import to_db_text, utc_now
-from webhook_sync.config import Config, RetryProfile
+from webhook_sync.config import Config, RetryProfile, Settings
 from webhook_sync.crashpoints import crash_point
 from webhook_sync.db.schema import jobs, payments, sheet_state, sinks, verify_runs
 from webhook_sync.db.writer import Transaction, Writer
 from webhook_sync.queue import ClaimedJob, Done, Failure, Pauses, StageFailed, enqueue
 from webhook_sync.queue.runner import BatchStageRunner, BatchWork, Sleep
-from webhook_sync.sinks.encoding import UnknownCurrency, payment_columns
+from webhook_sync.sinks.encoding import Column, UnknownCurrency, payment_columns
 from webhook_sync.sinks.sheets_client import TAB_MISSING, Json, SheetsClient, SheetsFailure
 from webhook_sync.sinks.summary import (
     KEY_COLUMNS,
@@ -530,11 +530,7 @@ class Flusher:
     # -- the read -------------------------------------------------------------------------------
 
     def _specs(self) -> tuple[_TabSpec, _TabSpec, _TabSpec]:
-        return (
-            _TabSpec(PAYMENTS, tuple(c.header for c in self._columns), self._key + 1),
-            _TabSpec(DAILY_SUMMARY, DAILY_SUMMARY_HEADER, 3),
-            _TabSpec(SYNC_STATUS, SYNC_STATUS_HEADER, 1),
-        )
+        return _tab_specs(self._columns)
 
     async def _read(self, tabs: TabIds) -> _Read:
         """One read by tab id: the header rows, key columns and grid sizes of Payments and
@@ -663,6 +659,74 @@ class Flusher:
         first = last_used + 1
         grow = _grow(sheet_id, first + len(rows) - row_count)
         return [*([grow] if grow is not None else []), _update_cells(sheet_id, first, 0, rows)]
+
+
+def _tab_specs(columns: Sequence[Column]) -> tuple[_TabSpec, _TabSpec, _TabSpec]:
+    key = next(i for i, c in enumerate(columns) if c.key == "payment_id")
+    return (
+        _TabSpec(PAYMENTS, tuple(c.header for c in columns), key + 1),
+        _TabSpec(DAILY_SUMMARY, DAILY_SUMMARY_HEADER, 3),
+        _TabSpec(SYNC_STATUS, SYNC_STATUS_HEADER, 1),
+    )
+
+
+@dataclass(frozen=True)
+class Layout:
+    """What a look at the three tabs found, nothing written: how many of them are there, and
+    what a flush would stop at, in plain words."""
+
+    tabs: int
+    problems: tuple[str, ...]
+
+
+async def read_layout(
+    client: SheetsClient, settings: Settings, stored: TabIds | None
+) -> Layout | SheetsFailure:
+    """The three tabs as a flush would find them, by two reads (`wsync doctor`).
+
+    With `stored` ids (a flush has run) the tabs are found by id, as the flusher reads them: a
+    missing Payments or Daily summary is "tab missing", a missing Sync status is made again by
+    the next flush, and Sync status's header is not compared. With none they are found by
+    title, as the first flush adopts them: every header must match. Only our columns are read."""
+    answer = await client.get(fields="sheets.properties(sheetId,title)")
+    if isinstance(answer, SheetsFailure):
+        return answer
+    by_title: dict[str, int] = {}
+    for sheet in answer.get("sheets", []):
+        properties = sheet.get("properties", {})
+        by_title[properties.get("title")] = properties.get("sheetId", 0)
+    specs = _tab_specs(payment_columns(settings))
+    problems: list[str] = []
+    found: list[tuple[int, _TabSpec]] = []
+    if stored is None:
+        found = [(by_title[spec.title], spec) for spec in specs if spec.title in by_title]
+    else:
+        ids = (stored.payments, stored.daily_summary, stored.sync_status)
+        for sheet_id, spec in zip(ids, specs, strict=True):
+            if sheet_id in by_title.values():
+                found.append((sheet_id, spec))
+            elif spec.title != SYNC_STATUS:
+                problems.append(f"the {spec.title} tab was deleted ({TAB_MISSING})")
+    compared = [(i, s) for i, s in found if stored is None or s.title != SYNC_STATUS]
+    if compared:
+        headers = await client.get_by_data_filter(
+            [_header(sheet_id, len(spec.header)) for sheet_id, spec in compared],
+            fields=KEY_COLUMN_FIELDS,
+        )
+        if isinstance(headers, SheetsFailure):
+            return headers
+        read = {s.get("properties", {}).get("sheetId", 0): s for s in headers.get("sheets", [])}
+        for sheet_id, spec in compared:
+            header = _header_of(read.get(sheet_id, {})) or ()
+            for at, expected in enumerate(spec.header):
+                there = header[at] if at < len(header) else ""
+                if there != expected:
+                    problems.append(
+                        f"the {spec.title} tab's header differs from the configured columns "
+                        f"({LAYOUT_CHANGED}): column {at + 1} reads {there!r}, not {expected!r}"
+                    )
+                    break
+    return Layout(len(found), tuple(problems))
 
 
 @dataclass(frozen=True)
