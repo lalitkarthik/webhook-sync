@@ -231,7 +231,8 @@ class Sweeper:
                 unannounced.extend(
                     item["id"] for item in new if history <= item["created_at"] < old
                 )
-            crash_point("mid_slice")  # the slice's items stored, its checkpoint not moved
+            if kept:
+                crash_point("mid_slice")  # the slice's items stored, its checkpoint not moved
             await self._advance(list_name, end)
             log.info(
                 "sweep slice",
