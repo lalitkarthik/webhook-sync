@@ -11,15 +11,16 @@ from webhook_sync.config import Config, ConfigError
 TEST_KEY_PREFIX = "rzp_test_"
 
 
-def check_demo_switch(config: Config) -> None:
-    """Refuse the switch unless the key is a test-mode key and the sheet is on the demo list."""
+def check_demo_switch(config: Config, what: str = "--demo-fail-first") -> None:
+    """Refuse `what` (the switch, or `wsync demo`) unless the key is a test-mode key and the
+    sheet is on the demo list (Q120)."""
     if not config.razorpay_secrets.key_id.startswith(TEST_KEY_PREFIX):
         raise ConfigError(
-            f"--demo-fail-first needs a test-mode key: RAZORPAY_KEY_ID must start {TEST_KEY_PREFIX}"
+            f"{what} needs a test-mode key: RAZORPAY_KEY_ID must start {TEST_KEY_PREFIX}"
         )
     if config.sheets.spreadsheet_id not in config.demo.spreadsheet_ids:
         raise ConfigError(
-            "--demo-fail-first needs sinks.sheets.spreadsheet_id listed in demo.spreadsheet_ids"
+            f"{what} needs sinks.sheets.spreadsheet_id listed in demo.spreadsheet_ids"
         )
 
 
