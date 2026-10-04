@@ -3,6 +3,13 @@
 Every scene refuses, before it touches anything, unless the Razorpay key is a test-mode key and
 the configured spreadsheet is on `[demo] spreadsheet_ids`, so a mistyped id can never empty a
 real sheet (F36). Each prints what it is doing and what it waits for.
+
+- `reset` empties the database and our three tabs of the demo sheet, and sets the demo retry
+  profile in the config file. It needs the lock, so it refuses while a server runs.
+- `outage` pays test orders with the receiver stopped (the payer, else a person at the page it
+  prints), then starts its own receiver, sweeps until each payment is stored, waits for the
+  ledger and sheet rows, and stops the receiver. It refuses while a server runs.
+- `verify` runs `wsync verify --full`, through the running server when there is one.
 """
 
 import argparse
