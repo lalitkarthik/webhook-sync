@@ -49,7 +49,14 @@ from webhook_sync.sinks.sheets import (
 
 SCENES = ("reset", "outage", "verify")
 LIVE_KEY_ID = "rzp_live_fixtureKeyId01"
-SECRET_VALUES = (TEST_KEY_ID, TEST_KEY_SECRET, TEST_WEBHOOK_SECRET, LIVE_KEY_ID)
+SECRET_VALUES = (
+    TEST_KEY_ID,
+    TEST_KEY_SECRET,
+    TEST_WEBHOOK_SECRET,
+    LIVE_KEY_ID,
+    TEST_SPREADSHEET_ID,
+)
+"""What no scene may print: the secrets, and the spreadsheet's id (sheets-sink.md)."""
 ON_THE_DEMO_LIST = f'\n[demo]\nspreadsheet_ids = ["{TEST_SPREADSHEET_ID}"]\n'
 QUIET_VERIFY = '\n[verify]\nnightly_at = "23:59"\n'
 """The nightly verify never due in a test day's hours."""
@@ -336,6 +343,9 @@ async def test_outage_pays_orders_while_stopped_and_the_sweep_brings_each_back_o
     assert "starting the receiver" in output
     assert scene.lines[-1] == "the receiver is stopped"
     await assert_swept_once(run, read_rows, paid)
+    receiver_log = (run.config.service.data_dir / "demo-serve.log").read_text(encoding="utf-8")
+    assert "sweep slice" in receiver_log
+    assert [value for value in SECRET_VALUES if value in receiver_log] == []
 
 
 async def test_when_the_payer_fails_outage_prints_the_page_to_pay_by_hand_and_waits(

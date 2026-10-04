@@ -76,3 +76,6 @@ def test_reset_outage_and_verify_pay_real_test_orders_and_end_on_0_differences(
 
     assert "0 differences" in printed[-1]
     assert "Via = sweep" in printed[1]
+    receiver_log = (tmp_path / "data" / "demo-serve.log").read_text(encoding="utf-8")
+    logged = [name for name, value in hidden.items() if value in receiver_log]
+    assert logged == [], f"the receiver's log holds {', '.join(logged)}"

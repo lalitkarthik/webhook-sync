@@ -60,13 +60,15 @@ class JsonFormatter(logging.Formatter):
 
 
 def configure_logging(level: int = logging.INFO) -> None:
-    """Send every log record, ours and uvicorn's, to stderr as JSON lines."""
+    """Send every log record, ours and uvicorn's, to stderr as JSON lines. httpx's line per
+    request is left out: it holds the whole URL, and Sheets' holds the spreadsheet id."""
     stream: TextIO = sys.stderr
     handler: logging.StreamHandler[TextIO] = logging.StreamHandler(stream)
     handler.setFormatter(JsonFormatter())
     root = logging.getLogger()
     root.handlers[:] = [handler]
     root.setLevel(level)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
         logger = logging.getLogger(name)
         logger.handlers.clear()
