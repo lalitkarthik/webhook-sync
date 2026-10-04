@@ -13,8 +13,10 @@ object would take the detached server down when uv exits):
 `launch` starts one detached process tree whose top PID goes to `.verify/pid`: a supervisor
 serving the fakes over HTTP (`tests/fakes/over_http.py`: FakeRazorpay replaying the recordings,
 and FakeSheets, its token endpoint refusing the key) and its child, the installed `wsync serve`.
-Fixture secrets only (`tests/support.py`); no call leaves 127.0.0.1. Everything it writes is
-under `.verify/run/`; `cleanup` kills that PID tree only and keeps any evidence folder.
+Fixture secrets only (`tests/support.py`); no call leaves 127.0.0.1. It writes under
+`.verify/run/`, plus `.verify/pid` and `.verify/port` (the public port); `cleanup` kills that PID
+tree only, removes `.verify/pid` and `.verify/run/`, and keeps `.verify/port` and any evidence
+folder.
 """
 
 from __future__ import annotations

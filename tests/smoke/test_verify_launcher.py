@@ -66,10 +66,10 @@ def test_every_port_file_skill_md_names_exists_after_launch(
         assert re.fullmatch(r"\d+", (ROOT / name).read_text(encoding="utf-8")), name
 
 
-def test_cleanup_leaves_the_port_file_and_removes_the_run_folder_as_skill_md_says() -> None:
-    if (VERIFY / "pid").exists():
-        pytest.skip("a verify run is live in this worktree; clean it up first")
-    assert helper("launch").returncode == 0
+def test_cleanup_leaves_the_port_file_and_removes_the_run_folder_as_skill_md_says(
+    launched: subprocess.CompletedProcess[str],
+) -> None:
+    assert launched.returncode == 0, launched.stdout + launched.stderr
 
     cleaned = helper("cleanup")
 
