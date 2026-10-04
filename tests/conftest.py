@@ -105,9 +105,21 @@ async def writer(data_dir: Path) -> AsyncIterator[Writer]:
         await opened.close()
 
 
-def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    """Skip `posix` tests on Windows: there `send_signal` kills outright and `uv run` sits
+def runs_live(markexpr: str) -> bool:
+    """Whether the run selects the live tests by themselves, `-m live`: the only run that calls
+    Razorpay test mode and the throwaway sheet (Q175, A15)."""
+    return markexpr == "live"
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Skip `live` tests unless the run is `-m live`, so the default suite makes no outside
+    call. Skip `posix` tests on Windows: there `send_signal` kills outright and `uv run` sits
     between the test and the server, so graceful stops and the server's pid can't be seen."""
+    if not runs_live(str(config.getoption("markexpr") or "")):
+        offline = pytest.mark.skip(reason="calls Razorpay test mode: runs only under -m live")
+        for item in items:
+            if "live" in item.keywords:
+                item.add_marker(offline)
     if sys.platform != "win32":
         return
     skip = pytest.mark.skip(reason="needs POSIX signals; the server deploys on Linux")

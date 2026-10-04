@@ -11,6 +11,7 @@ import asyncio
 import queue
 import re
 import subprocess
+import sys
 import time
 from collections.abc import Iterator
 from datetime import timedelta
@@ -19,6 +20,7 @@ from threading import Thread
 
 import httpx
 import pytest
+from conftest import runs_live
 from crash.harness import CrashRun, served_run
 from fakes.payer import FAILING_PAYER, FAKE_PAYER
 from invariants import buyers_tabs
@@ -366,3 +368,30 @@ async def test_outage_refuses_while_a_server_runs(run: CrashRun) -> None:
     assert code == 2
     assert "a server is running: stop wsync serve first" in output
     assert run.razorpay.orders == {}
+
+
+# -- what the default suite leaves out ---------------------------------------------------------
+
+
+def test_the_default_run_leaves_the_live_test_out() -> None:
+    assert runs_live("live")
+    assert not runs_live("")
+    assert not runs_live("not posix")
+    assert not runs_live("not live")
+
+
+def test_wsync_and_its_demo_load_no_browser_until_the_browser_payer_pays() -> None:
+    loaded = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys, webhook_sync.cli.main, webhook_sync.demo.payer; "
+            "print(sorted(m for m in sys.modules if m.split('.')[0] in ('playwright', 'pyee')))",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=True,
+    )
+
+    assert loaded.stdout.strip() == "[]"

@@ -66,6 +66,7 @@ markers = [
     "posix: needs POSIX signals and a direct child process; skipped on Windows (deploys run Linux)",
     "smoke: drives the real wsync serve end to end (uv run pytest -m smoke)",
     "load: a load check against the real wsync serve; its timing is asserted only under -m load",
+    "live: calls Razorpay test mode and the throwaway sheet; runs only under -m live (Q175)",
 ]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
