@@ -729,6 +729,30 @@ async def read_layout(
     return Layout(len(found), tuple(problems))
 
 
+async def reset_tabs(client: SheetsClient, settings: Settings) -> SheetsFailure | None:
+    """Our three tabs made again, empty but for their headers, in one `batchUpdate`
+    (`wsync demo reset`): each that is there is deleted and added back as a first flush adds
+    it, which the next first flush then adopts. The buyer's own tabs are left alone, and the
+    spreadsheet never has no tab between two requests."""
+    answer = await client.get(fields="sheets.properties(sheetId,title)")
+    if isinstance(answer, SheetsFailure):
+        return answer
+    existing: dict[str, int] = {}
+    for sheet in answer.get("sheets", []):
+        properties = sheet.get("properties", {})
+        existing[properties.get("title")] = properties.get("sheetId", 0)
+    taken = set(existing.values())
+    requests: list[Json] = []
+    for spec in _tab_specs(payment_columns(settings)):
+        if spec.title in existing:
+            requests.append({"deleteSheet": {"sheetId": existing[spec.title]}})
+        sheet_id = _new_sheet_id(taken)
+        taken.add(sheet_id)
+        requests.extend(_new_tab(sheet_id, spec))
+    written = await client.batch_update(requests)
+    return written if isinstance(written, SheetsFailure) else None
+
+
 @dataclass(frozen=True)
 class _Stored:
     tabs: TabIds | None

@@ -197,13 +197,13 @@ def start(
                 check_demo_switch(config)
             crashpoints.arm(config, os.environ if environ is None else environ)
             held.callback(crashpoints.disarm)
-            asyncio.run(_prepare_database(config))
+            asyncio.run(prepare_database(config))
         except (ConfigError, LockHeld, SchemaTooNew) as error:
             raise StartRefused(str(error)) from None
         yield config
 
 
-async def _prepare_database(config: Config) -> None:
+async def prepare_database(config: Config) -> None:
     """Refuse a newer schema, apply pending migrations, give each configured source and sink
     its `sinks` row (so `wsync status` lists them with no server running), then reclaim jobs
     left running (A13)."""

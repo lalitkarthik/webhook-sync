@@ -329,7 +329,7 @@ async def _sheet(settings: Settings | None, service_account_b64: str) -> Line:
         client = SheetsClient(http, settings.sheets.spreadsheet_id, ServiceAccountTokens(key))
         layout = await read_layout(client, settings, stored)
     if isinstance(layout, SheetsFailure):
-        return Line("fail", check, _sheet_failure(layout, account))
+        return Line("fail", check, sheet_failure(layout, account))
     return _layout(layout, account)
 
 
@@ -342,7 +342,7 @@ def _layout(layout: Layout, account: str) -> Line:
     return Line("ok", "sheet", f"{reached}; the tabs and their headers match")
 
 
-def _sheet_failure(failure: SheetsFailure, account: str) -> str:
+def sheet_failure(failure: SheetsFailure, account: str) -> str:
     """A failed read in plain words, with whom to ask when an organisation's policy is the
     likely cause (Q90, Q101)."""
     if failure.error == KEY_REFUSED:
