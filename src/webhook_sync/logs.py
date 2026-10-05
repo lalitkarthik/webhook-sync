@@ -37,6 +37,11 @@ LOGGED_FIELDS = (
     "rows_updated",
     "rows_appended",
     "duration_ms",
+    "list",
+    "slice_start",
+    "slice_end",
+    "listed",
+    "stored",
 )
 
 

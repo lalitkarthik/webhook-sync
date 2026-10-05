@@ -11,6 +11,7 @@ code, the ledger, the sheet and the config file.
 import asyncio
 import contextlib
 import copy
+import json
 import os
 import queue
 import re
@@ -680,7 +681,12 @@ async def test_outage_pays_orders_while_stopped_and_the_sweep_brings_each_back_o
     assert scene.lines[-1] == "the receiver is stopped"
     await assert_swept_once(run, read_rows, paid)
     receiver_log = (run.config.service.data_dir / "demo-serve.log").read_text(encoding="utf-8")
-    assert "sweep slice" in receiver_log
+    slices = [
+        line
+        for line in map(json.loads, receiver_log.splitlines())
+        if line["message"] == "sweep slice" and line["list"] == "payments"
+    ]
+    assert sum(line["listed"] for line in slices) == 2
     assert [value for value in SECRET_VALUES if value in receiver_log] == []
 
 

@@ -133,4 +133,5 @@ jobs:
           fi
       - if: failure() && steps.secrets.outputs.ready == 'true'
         name: The receiver's log
-        run: tail -n 200 "$(dirname "$CONFIG")/data/demo-serve.log" || true
+        # Long enough to hold the first walk after twelve minutes of sweeps.
+        run: tail -n 2000 "$(dirname "$CONFIG")/data/demo-serve.log" || true
