@@ -49,10 +49,13 @@ GITHUB_SECRETS = (
     "GOOGLE_SERVICE_ACCOUNT_B64",
     "SHEET_ID",
 )
+# Named, not taken from the current folder: the .env is found from this file, so the command
+# runs from anywhere, and gh would otherwise set the secrets on whichever repository that is.
+REPO = "lalitkarthik/webhook-sync"
 
 
 def to_github():
-    """Each of GITHUB_SECRETS from .env to the current repository's Actions secrets, with
+    """Each of GITHUB_SECRETS from .env to REPO's Actions secrets, with
     `gh secret set NAME` reading the value from standard input. Prints names only. Refuses,
     before setting anything, a missing value or a Razorpay key that is not a test key."""
     values = env_values()
@@ -66,11 +69,11 @@ def to_github():
         sys.exit("gh is not installed or not on PATH: nothing was copied.")
     for name in GITHUB_SECRETS:
         done = subprocess.run(
-            [gh, "secret", "set", name], input=values[name], text=True, capture_output=True
+            [gh, "secret", "set", name, "--repo", REPO], input=values[name], text=True, capture_output=True
         )
         if done.returncode != 0:
             sys.exit(f"{name}: gh secret set failed (exit {done.returncode}): {done.stderr.strip()}")
-        print(f"{name}: set in the repository's Actions secrets")
+        print(f"{name}: set in {REPO}'s Actions secrets")
 
 
 def drop(name):

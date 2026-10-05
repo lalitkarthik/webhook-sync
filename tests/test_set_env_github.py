@@ -85,7 +85,9 @@ def test_sets_each_secret_from_standard_input_and_prints_names_only(tmp_path: Pa
     code, output, calls = _run(tmp_path, VALUES | NOT_COPIED)
 
     assert code == 0, output
-    assert [call["args"] for call in calls] == [["secret", "set", name] for name in VALUES]
+    assert [call["args"] for call in calls] == [
+        ["secret", "set", name, "--repo", "lalitkarthik/webhook-sync"] for name in VALUES
+    ]
     assert {call["args"][2]: call["stdin"] for call in calls} == VALUES
     assert _shown(output, VALUES | NOT_COPIED) == []
     for name in VALUES:
