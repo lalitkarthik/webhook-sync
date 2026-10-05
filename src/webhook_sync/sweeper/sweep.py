@@ -148,13 +148,15 @@ class Sweeper:
             return
         log.info("heartbeat sent")
 
-    async def sweep(self) -> bool:
+    async def sweep(self, *, relist: bool = False) -> bool:
         """One sweep of both lists; True when every due slice of each was stored, and its
-        re-list when due. Nothing is listed while Razorpay is paused."""
+        re-list when due. With `relist`, each list is re-listed now, due or not: a person
+        asked, for a payment Razorpay listed after the slices had passed it. Nothing is listed
+        while Razorpay is paused."""
         async with self._sweeping:
-            return await self._sweep()
+            return await self._sweep(relist)
 
-    async def _sweep(self) -> bool:
+    async def _sweep(self, relist: bool) -> bool:
         finished = True
         stored = 0
         unannounced: list[str] = []
@@ -169,7 +171,7 @@ class Sweeper:
                     continue
                 stored += walked.stored
                 unannounced.extend(walked.unannounced)
-                floor = await self._relist_floor(list_name)
+                floor = await self._relist_floor(list_name, asked=relist)
                 if floor is not None:
                     finished = (
                         await self._relist(list_name, entity, walked.source_now, floor) and finished
@@ -255,9 +257,9 @@ class Sweeper:
         await self._swept(list_name, stored)
         return _Walked(source_now, stored, unannounced)
 
-    async def _relist_floor(self, list_name: ListName) -> int | None:
+    async def _relist_floor(self, list_name: ListName, *, asked: bool) -> int | None:
         """The list's re-list floor in Unix seconds when its re-list is due (last run an hour
-        ago or more, on our clock); None when it isn't."""
+        ago or more, on our clock) or `asked` for; None when it is neither."""
         async with self._writer.transaction() as tx:
             rows = await tx.execute(
                 sa.select(checkpoints.c.last_relist_at, checkpoints.c.relist_floor_at).where(
@@ -265,7 +267,7 @@ class Sweeper:
                 )
             )
         last = rows[0]["last_relist_at"]
-        if last is not None and last > to_db_text(utc_now() - RELIST_EVERY):
+        if not asked and last is not None and last > to_db_text(utc_now() - RELIST_EVERY):
             return None
         return int(datetime.fromisoformat(rows[0]["relist_floor_at"]).timestamp())
 

@@ -67,9 +67,10 @@ class Checks:
     sheet_verify: SheetVerify | None
 
 
-async def sweep(checks: Checks) -> Result:
-    """One sweep of both lists now; whether it caught up, and each list's last sweep."""
-    finished = await checks.sweeper.sweep()
+async def sweep(checks: Checks, *, relist: bool = False) -> Result:
+    """One sweep of both lists now, with each list's re-list when `relist`; whether it caught
+    up, and each list's last sweep."""
+    finished = await checks.sweeper.sweep(relist=relist)
     async with Reader.open(checks.data_dir) as reader:
         return {"finished": finished, "sweeps": await last_sweeps(reader)}
 

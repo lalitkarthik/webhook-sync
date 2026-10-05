@@ -44,6 +44,13 @@ class BackfillAsked(BaseModel):
         return self
 
 
+class SweepAsked(BaseModel):
+    """`relist` re-lists each list now, due or not: the payments of the last 7 days and the
+    refunds of the last 21."""
+
+    relist: bool = False
+
+
 class VerifyAsked(BaseModel):
     """Quick by default; `full` checks Razorpay too, over `days` (default `[verify] days`), and
     repairs only when `repair` is set (a quick run always repairs)."""
@@ -104,10 +111,10 @@ def create_admin_app(public: FastAPI, data_dir: Path) -> FastAPI:
         return JSONResponse({"run_id": run.id, "kind": kind}, status_code=202)
 
     @app.post("/admin/sweep")
-    async def sweep_now(request: Request) -> JSONResponse:  # pyright: ignore[reportUnusedFunction]
+    async def sweep_now(request: Request, asked: SweepAsked | None = None) -> JSONResponse:  # pyright: ignore[reportUnusedFunction]
         if (on := checks()) is None:
             return _starting()
-        return start("sweep", sweep(on), request)
+        return start("sweep", sweep(on, relist=asked is not None and asked.relist), request)
 
     @app.post("/admin/backfill")
     async def backfill_now(asked: BackfillAsked, request: Request) -> JSONResponse:  # pyright: ignore[reportUnusedFunction]

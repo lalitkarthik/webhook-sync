@@ -14,7 +14,7 @@ import json
 import random
 import statistics
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.utils import format_datetime
 from typing import Any, Literal
 
@@ -202,6 +202,10 @@ class FakeRazorpay:
     shifting: bool = False
     """Items created in the same second come back in another order on every list call:
     Razorpay doesn't document their order (razorpay-list-facts.md)."""
+    listed_late: timedelta = timedelta(0)
+    """How long after a payment is made the payments list first shows it; its fetch and its
+    order's payments show it at once (seen on the test account, 2026-10-05:
+    razorpay-list-facts.md, Q7)."""
     arriving: list[Payment] = field(default_factory=list[Payment])
     """Payments made between two page calls: one is made each time a payments list call has
     answered a full page."""
@@ -422,7 +426,9 @@ class FakeRazorpay:
         return [query for called, query in self.list_calls if called == path]
 
     async def _list_payments(self, request: httpx.Request) -> httpx.Response:
-        answer = await self._list(request, list(self.payments.values()))
+        shown_by = int((self.now - self.listed_late).timestamp())
+        shown = [payment for payment in self.payments.values() if payment["created_at"] <= shown_by]
+        answer = await self._list(request, shown)
         full = answer.status_code == 200 and answer.json()["count"] == int(
             request.url.params.get("count", "10")
         )
