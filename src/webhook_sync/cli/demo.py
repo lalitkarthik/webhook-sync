@@ -9,9 +9,15 @@ real sheet (F36). Each prints what it is doing and what it waits for.
 - `outage` pays test orders with the receiver stopped (the payer, else a person at the page it
   prints), then starts its own receiver, sweeps until each payment is stored, waits for the
   ledger and sheet rows, and stops the receiver. It refuses while a server runs.
+- `duplicates` starts its own receiver with `--demo-fail-first 4`, pays one test order, and
+  prints each delivery of its events as it arrives, until Razorpay's retries get an answer that
+  is not 500 and the payment's rows are written. It needs Razorpay to reach the receiver, so
+  it runs live only with the tunnel up. Whether it ends, fails or is interrupted, it leaves a
+  receiver running in its normal mode, without the switch.
 - `verify` runs `wsync verify --full`, through the running server when there is one.
 """
 
+import _thread
 import argparse
 import asyncio
 import copy
@@ -40,7 +46,7 @@ from webhook_sync.config import Config, ConfigError, load_config
 from webhook_sync.db.files import database_path
 from webhook_sync.db.lock import lock_if_free
 from webhook_sync.db.reader import Reader
-from webhook_sync.db.schema import events, jobs, payments
+from webhook_sync.db.schema import deliveries, events, jobs, payments
 from webhook_sync.demo.payer import CheckoutPages, PayerFailed, load_payer
 from webhook_sync.receiver.demo import check_demo_switch
 from webhook_sync.sinks.sheets import plan_tabs_reset
@@ -67,6 +73,12 @@ STOP_WITHIN = 30.0
 SWEEP_AGAIN_AFTER = 5.0
 STORED_WITHIN = 5 * 60.0
 ROWS_WITHIN = 2 * 60.0
+FAIL_FIRST = 4
+"""The deliveries of each event the receiver answers 500 in the duplicates scene (Q106)."""
+DELIVERY_WITHIN = 60
+"""Real seconds `duplicates` waits for each delivery: Razorpay retried a 500 after about 1, 8,
+11 and 21 s (G48)."""
+WATCH_EVERY = 0.5
 
 say = functools.partial(print, flush=True)
 
@@ -85,6 +97,11 @@ def add_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) 
             reset,
         ),
         ("outage", "pay test orders while the receiver is stopped, then sweep them in", outage),
+        (
+            "duplicates",
+            "pay a test order with the receiver answering 500 to its first four deliveries",
+            duplicates,
+        ),
         ("verify", "run a full verify and print its line", verify),
     ):
         scene_parser = scenes.add_parser(name, help=says)
@@ -101,6 +118,15 @@ def add_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) 
                 default=ORDERS,
                 metavar="N",
                 help=f"the test orders paid while the receiver is stopped (default: {ORDERS})",
+            )
+        if scene is duplicates:
+            scene_parser.add_argument(
+                "--wait",
+                type=at_least_one,
+                default=DELIVERY_WITHIN,
+                metavar="SECONDS",
+                help="how long to wait for each delivery from Razorpay "
+                f"(default: {DELIVERY_WITHIN})",
             )
         scene_parser.set_defaults(handler=_guarded(name, scene))
 
@@ -370,20 +396,12 @@ def _captured(api: httpx.Client, order_id: str) -> str:
 
 
 @contextmanager
-def _receiver(config_path: Path, config: Config) -> Generator[None]:
-    """`wsync serve` on the config, started and healthy while the block runs, then stopped."""
-    log_path = config.service.data_dir / SERVE_LOG
-    host, port = split_listen(config.service.public_listen)
-    base_url = f"http://{'127.0.0.1' if host in ('0.0.0.0', '::') else host}:{port}"
-    say(f"starting the receiver: wsync serve, its log in {log_path}")
-    with log_path.open("ab") as log:
-        process = subprocess.Popen(
-            [sys.executable, "-m", "webhook_sync", "serve", "--config", str(config_path)],
-            stdout=log,
-            stderr=log,
-        )
+def _receiver(config_path: Path, config: Config, *switch: str) -> Generator[None]:
+    """`wsync serve` on the config with `switch`, started and healthy while the block runs,
+    then stopped."""
+    shown = " ".join(("wsync serve", *switch))
+    process, base_url, _ = _serve(config_path, config, switch, shown)
     try:
-        _healthy(base_url, process, log_path)
         say(f"the receiver is up at {base_url}")
         yield
     finally:
@@ -392,7 +410,47 @@ def _receiver(config_path: Path, config: Config) -> Generator[None]:
         say("the receiver is stopped")
 
 
-def _healthy(base_url: str, process: subprocess.Popen[bytes], log_path: Path) -> None:
+def _serve(
+    config_path: Path,
+    config: Config,
+    switch: tuple[str, ...],
+    shown: str,
+    *,
+    detached: bool = False,
+) -> tuple[subprocess.Popen[bytes], str, str]:
+    """Start `wsync serve` with `switch` and wait for it to be healthy; the process, its
+    URL and its log. A `detached` one outlives the scene and ignores the owner's Ctrl+C: it
+    has a process group, and on Windows a hidden console, of its own."""
+    log_path = config.service.data_dir / SERVE_LOG
+    host, port = split_listen(config.service.public_listen)
+    base_url = f"http://{'127.0.0.1' if host in ('0.0.0.0', '::') else host}:{port}"
+    say(f"starting the receiver: {shown}, its log in {log_path}")
+    if sys.platform == "win32":
+        group = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+    else:
+        group = 0
+    with log_path.open("ab") as log:
+        process = subprocess.Popen(
+            [sys.executable, "-m", "webhook_sync", "serve", "--config", str(config_path), *switch],
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=log,
+            creationflags=group if detached else 0,
+            start_new_session=detached and sys.platform != "win32",
+        )
+    try:
+        _healthy(base_url, process, log_path)
+    except KeyboardInterrupt:
+        if not detached:  # a detached receiver is left to run, as it was asked to
+            stop_receiver(process, config.service.data_dir)
+        raise
+    except BaseException:
+        stop_receiver(process, config.service.data_dir)
+        raise
+    return process, base_url, str(log_path)
+
+
+def _healthy(base_url: str, process: subprocess.Popen[bytes], log_path: Path | str) -> None:
     deadline = time.monotonic() + HEALTHY_WITHIN
     while time.monotonic() < deadline:
         if process.poll() is not None:
@@ -435,16 +493,22 @@ def stop_receiver(
         process.kill()
         process.wait()
         say(f"the receiver did not stop in {within:g} s and was killed")
+    if not _lock_freed(data_dir, within):
+        raise CommandFailed(
+            f"the receiver was stopped but the lock is still held {within:g} s later: "
+            "a wsync serve still runs on this database; stop it by hand"
+        )
+
+
+def _lock_freed(data_dir: Path, within: float) -> bool:
+    """Whether the database's lock is free, or comes free within `within` seconds."""
     deadline = time.monotonic() + within
     while True:
         with lock_if_free(data_dir) as free:
             if free:
-                return
+                return True
         if time.monotonic() > deadline:
-            raise CommandFailed(
-                f"the receiver was stopped but the lock is still held {within:g} s later: "
-                "a wsync serve still runs on this database; stop it by hand"
-            )
+            return False
         time.sleep(0.2)
 
 
@@ -512,6 +576,165 @@ async def _ledger(data_dir: Path, paid: list[str]) -> tuple[dict[str, str], list
     open_jobs = [job["payment_key"] for job in found if job["status"] in ("waiting", "running")]
     dead = [job["payment_key"] for job in found if job["status"] == "dead"]
     return {row["payment_id"]: row["via"] for row in rows}, open_jobs, dead
+
+
+def duplicates(args: argparse.Namespace, config: Config) -> int:
+    """With the receiver answering 500 to the first four deliveries of each event, pay one
+    test order and print each delivery as Razorpay's retries bring it, until one is answered
+    otherwise and the payment's rows are written. A receiver in its normal mode is left
+    running however the scene ends: the tunnel keeps somewhere to deliver to."""
+    data_dir = config.service.data_dir
+    data_dir.mkdir(parents=True, exist_ok=True)
+    with lock_if_free(data_dir) as free:
+        if not free:
+            raise CommandFailed(
+                "a server is running: stop wsync serve first; duplicates restarts it with "
+                f"--demo-fail-first {FAIL_FIRST}",
+                EXIT_REFUSED,
+            )
+    switch = ("--demo-fail-first", str(FAIL_FIRST))
+    shown = " ".join(("wsync serve", *switch))
+    receiver: subprocess.Popen[bytes] | None = None
+    try:
+        with _interrupted_on_break():
+            receiver, base_url, _ = _serve(args.config, config, switch, shown)
+            say(f"the receiver is up at {base_url}")
+            say(
+                f"the receiver answers 500 to the first {FAIL_FIRST} deliveries of each event, "
+                "after storing it, so Razorpay retries"
+            )
+            [payment_id] = _pay_orders(config, 1)
+            counted = _deliveries_watched(data_dir, payment_id, args.wait)
+            say("waiting for its ledger row and sheet row: the flusher writes every 3 s")
+            _rows_written(data_dir, [payment_id])
+            say(f"{payment_id}: one ledger row and one sheet row; {counted} duplicates")
+    except KeyboardInterrupt:
+        say("interrupted: putting the receiver back in its normal mode")
+        return 130
+    finally:
+        with _uninterruptible():
+            if receiver is not None:
+                say("stopping the receiver")
+                try:
+                    stop_receiver(receiver, data_dir)
+                    say("the receiver is stopped")
+                except (CommandFailed, OSError) as failed:
+                    say(str(failed))
+            _leave_running(args.config, config)
+    return 0
+
+
+@contextmanager
+def _uninterruptible() -> Generator[None]:
+    """Ctrl+C, Ctrl+Break and SIGTERM ignored while the block runs: the clean-up that leaves
+    a receiver in its normal mode is not cut short. A receiver started meanwhile sets its own
+    handlers (`wsync serve`), so it can still be stopped."""
+    stops = (signal.SIGINT, signal.SIGBREAK if sys.platform == "win32" else signal.SIGTERM)
+    before = [signal.signal(stop, signal.SIG_IGN) for stop in stops]
+    try:
+        yield
+    finally:
+        for stop, handler in zip(stops, before, strict=True):
+            signal.signal(stop, handler)
+
+
+@contextmanager
+def _interrupted_on_break() -> Generator[None]:
+    """Ctrl+Break on Windows, and SIGTERM elsewhere, end the scene as Ctrl+C does: passed on
+    as SIGINT, which `asyncio.run` turns into a clean cancel where a raise would hang it."""
+    stop = signal.SIGBREAK if sys.platform == "win32" else signal.SIGTERM
+
+    def interrupt(signum: int, frame: object) -> None:
+        _thread.interrupt_main(signal.SIGINT)
+
+    before = signal.signal(stop, interrupt)
+    try:
+        yield
+    finally:
+        signal.signal(stop, before)
+
+
+def _deliveries_watched(data_dir: Path, payment_id: str, wait: int) -> int:
+    """Print each delivery of the payment's events as it arrives, until every event that
+    arrived has had an answer other than 500; the duplicates among them."""
+    say(
+        f"waiting for Razorpay's deliveries of {payment_id}: it retries a 500 after about "
+        "1, 8, 11 and 21 s"
+    )
+    shown = 0
+    last = time.monotonic()
+    while True:
+        arrived = asyncio.run(_deliveries(data_dir, payment_id))
+        attempts: dict[str, int] = {}
+        for at, (event_type, result, status_code) in enumerate(arrived):
+            attempts[event_type] = attempts.get(event_type, 0) + 1
+            if at < shown:
+                continue
+            why = " on purpose" if status_code == 500 else ""
+            stored = "stored as new" if result == "new" else f"a {result}"
+            say(
+                f"{event_type} attempt {attempts[event_type]}: answered {status_code}{why}, "
+                f"{stored}"
+            )
+            last = time.monotonic()
+        shown = len(arrived)
+        answered = {event_type for event_type, _, status_code in arrived if status_code != 500}
+        if arrived and answered == set(attempts):
+            return sum(result == "duplicate" for _, result, _ in arrived)
+        if time.monotonic() - last > wait:
+            if not arrived:
+                raise CommandFailed(
+                    f"no delivery of {payment_id} arrived in {wait} s: Razorpay could not "
+                    "reach the receiver, and the public URL or the tunnel is the likely cause; "
+                    "check the tunnel is up and Razorpay's webhook points at it with "
+                    "wsync doctor --url <public URL>"
+                )
+            raise CommandFailed(
+                f"Razorpay sent no retry of {payment_id}'s 500s in {wait} s; see the receiver's log"
+            )
+        time.sleep(WATCH_EVERY)
+
+
+async def _deliveries(data_dir: Path, payment_id: str) -> list[tuple[str, str, int]]:
+    """The deliveries of the payment's events, as they arrived: type, result and answer."""
+    async with Reader.open(data_dir) as reader:
+        found = await reader.fetch_all(
+            sa.select(events.c.type, deliveries.c.result, deliveries.c.status_code)
+            .join(
+                events,
+                sa.and_(
+                    events.c.source == deliveries.c.source,
+                    events.c.event_id == deliveries.c.event_id,
+                ),
+            )
+            .where(events.c.payment_key == payment_id)
+            .order_by(deliveries.c.id)
+        )
+    return [(row["type"], row["result"], row["status_code"]) for row in found]
+
+
+def _leave_running(config_path: Path, config: Config) -> None:
+    """A receiver in its normal mode, started apart from the scene and left running, once the
+    scene's own has let go of the database. A failure is one more line: the scene's own
+    error, and its exit code, still come through."""
+    if not _lock_freed(config.service.data_dir, STOP_WITHIN):
+        say(
+            f"a receiver still holds the database {STOP_WITHIN:g} s on: not starting another; "
+            "start wsync serve by hand once it has stopped"
+        )
+        return
+    try:
+        process, base_url, _ = _serve(config_path, config, (), "wsync serve", detached=True)
+    except (CommandFailed, OSError) as failed:
+        say(f"the receiver in its normal mode did not start: {failed}; start wsync serve by hand")
+        return
+    stop_with = (
+        f"taskkill /T /F /PID {process.pid}" if sys.platform == "win32" else f"kill {process.pid}"
+    )
+    say(
+        f"the receiver is running in its normal mode at {base_url}, pid {process.pid}; "
+        f"stop it with {stop_with}"
+    )
 
 
 def verify(args: argparse.Namespace, config: Config) -> int:
