@@ -4,6 +4,9 @@ receiver.md, "The one transaction". A new handled event is stored with its ledge
 outbox); a new event (handled or ignored) is answered 202. An event already stored makes no job
 and is answered 200: a duplicate when the signed body's hash matches or the fingerprint is the
 same, a conflict when a known event id arrives with a different fingerprint (the first is kept).
+
+Ported from hookline (https://github.com/hassanatic/hookline, commit c0e549e), `hookline/store.py`:
+MIT, Copyright (c) 2026 Hassan Abdullah. Changed: see THIRD_PARTY_NOTICES.md.
 """
 
 import json

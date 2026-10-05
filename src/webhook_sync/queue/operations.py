@@ -2,6 +2,10 @@
 
 Times come from the caller (the one clock, A14). `enqueue` runs inside the caller's own
 transaction, so the change and the job it causes commit together (the outbox).
+
+Ported from driftless (https://github.com/quyumkehinde/driftless, commit e49725d),
+`internal/store/queries/jobs.sql`: Apache-2.0, Copyright 2026 Quyum Kehinde.
+Changed: see THIRD_PARTY_NOTICES.md.
 """
 
 import logging

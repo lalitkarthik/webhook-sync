@@ -23,6 +23,10 @@ payments created on past local dates as `backfill:` events and never touches a c
 The app's lifespan runs `run`: one sweep after a random 0-30 s delay, then one every 10 minutes,
 skipped while Razorpay is paused. A pass that stored every due slice, and each re-list when due,
 POSTs the heartbeat URL when one is set (Q148).
+
+Ported from driftless (https://github.com/quyumkehinde/driftless, commit e49725d),
+`internal/sweep/sweeper.go`: Apache-2.0, Copyright 2026 Quyum Kehinde.
+Changed: see THIRD_PARTY_NOTICES.md.
 """
 
 import asyncio
