@@ -6,10 +6,10 @@ and FakeSheets over HTTP (`fakes.over_http`); the test drives it through `server
 Razorpay does, and through `server.admin`, its admin listener, asks for a sweep by hand;
 `server.crashed()` fails unless the process exited with the crash code: a
 crash test that never crashed proves nothing (A15). `crash.server()` then starts a new server
-on the same database; the test settles it and, while it still runs, reads what it left and ends
-with `crash.check()`, the nine invariants. Not after it stops: on Windows `stop` returns once the
-`wsync.exe` launcher has died, and the server under it may still hold the database's files, so a
-read then fails with a disk I/O error. The fixture is in `conftest.py`; the load checks run
+on the same database; the test settles it, reads what it left and ends with `crash.check()`,
+the nine invariants. A read after the server stops is safe too: `stop` returns only once every
+process of the tree has exited, on Windows the server under the `wsync.exe` launcher as well,
+so none still holds the database's files. The fixture is in `conftest.py`; the load checks run
 their servers on the same `served_run`.
 """
 

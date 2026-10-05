@@ -173,8 +173,13 @@ class ProcessTree:
             )
             if not handle:
                 continue
+            try:
+                started[each] = _started(self._kernel32, handle)
+            except BaseException:
+                self._kernel32.CloseHandle(handle)
+                self._close()
+                raise
             parent = processes.get(each, (0, ""))[0]
-            started[each] = _started(self._kernel32, handle)
             if each != pid and started[each] < started[parent]:
                 self._kernel32.CloseHandle(handle)
                 continue
@@ -186,6 +191,11 @@ class ProcessTree:
                 if its_parent == each and child not in tree
             )
 
+    def _close(self) -> None:
+        for handle in self._handles.values():
+            self._kernel32.CloseHandle(handle)
+        self._handles.clear()
+
     def __enter__(self) -> Self:
         return self
 
@@ -195,9 +205,7 @@ class ProcessTree:
         error: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
-        for handle in self._handles.values():
-            self._kernel32.CloseHandle(handle)
-        self._handles.clear()
+        self._close()
 
     def __len__(self) -> int:
         return len(self._handles)
