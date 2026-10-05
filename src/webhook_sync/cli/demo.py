@@ -51,6 +51,7 @@ from webhook_sync.demo.payer import CheckoutPages, PayerFailed, load_payer
 from webhook_sync.receiver.demo import check_demo_switch
 from webhook_sync.sinks.sheets import plan_tabs_reset
 from webhook_sync.sinks.sheets_client import ServiceAccountTokens, SheetsClient, SheetsFailure
+from webhook_sync.sweeper.sweep import OVERLAP, SETTLE
 
 DEFAULT_CONFIG = Path("webhook-sync.toml")
 DATABASE_SUFFIXES = ("", "-wal", "-shm", "-journal")
@@ -71,7 +72,10 @@ POLL_AT_MOST = 30.0
 HEALTHY_WITHIN = 30.0
 STOP_WITHIN = 30.0
 SWEEP_AGAIN_AFTER = 5.0
-STORED_WITHIN = 5 * 60.0
+ONE_SWEEP = 60.0
+STORED_WITHIN = (OVERLAP + SETTLE).total_seconds() + ONE_SWEEP
+"""Real seconds of sweeps a paid order has to be stored: as late as Razorpay's list may show
+a payment and a sweep still read it (the sweeper's overlap and settle), and one sweep more."""
 ROWS_WITHIN = 2 * 60.0
 FAIL_FIRST = 4
 """The deliveries of each event the receiver answers 500 in the duplicates scene (Q106)."""
@@ -305,7 +309,7 @@ def outage(args: argparse.Namespace, config: Config) -> int:
     say("the receiver is stopped: Razorpay's deliveries of these payments reach nobody")
     paid = _pay_orders(config, args.orders)
     with _receiver(args.config, config):
-        _sweep_until_stored(args.config, data_dir, paid)
+        sweep_until_stored(args.config, data_dir, paid)
         say("waiting for their ledger rows and sheet rows: the flusher writes every 3 s")
         rows = _rows_written(data_dir, paid)
         for payment_id in paid:
@@ -512,10 +516,11 @@ def _lock_freed(data_dir: Path, within: float) -> bool:
         time.sleep(0.2)
 
 
-def _sweep_until_stored(config_path: Path, data_dir: Path, paid: list[str]) -> None:
+def sweep_until_stored(config_path: Path, data_dir: Path, paid: list[str]) -> None:
     """Sweeps through the receiver until each payment is stored. Razorpay's list gives a sweep
-    only payments a minute old (sweeper.md), so a payment just made waits for a later one; a
-    sweep that stops short, a list call failing, is tried again too."""
+    only payments a minute old (sweeper.md), and may show one later still, so a payment just
+    made waits for a later sweep, for as long as a sweep re-reads its minute; a sweep that
+    stops short, a list call failing, is tried again too."""
     deadline = time.monotonic() + STORED_WITHIN
     say("sweeping Razorpay's payments since the checkpoint")
     while True:
@@ -527,7 +532,9 @@ def _sweep_until_stored(config_path: Path, data_dir: Path, paid: list[str]) -> N
         if time.monotonic() > deadline:
             raise CommandFailed(
                 f"{missing} of {len(paid)} payments still not stored after "
-                f"{STORED_WITHIN / 60:.0f} minutes of sweeps; see wsync status"
+                f"{STORED_WITHIN / 60:.0f} minutes of sweeps: Razorpay's payments list has not "
+                "shown them, and a sweep no longer reads that far back; the hourly re-list of "
+                "a running wsync serve stores them once it does; see wsync status"
             )
         if result["finished"]:
             say(
