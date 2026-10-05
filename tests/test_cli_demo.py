@@ -524,7 +524,7 @@ def test_payments_razorpay_never_lists_fail_the_scene_only_after_its_longer_dead
     with pytest.raises(CommandFailed) as failed:
         demo_scenes.sweep_until_stored(tmp_path / "webhook-sync.toml", tmp_path, PAID)
 
-    assert demo_scenes.STORED_WITHIN >= 45 * 60
+    assert demo_scenes.STORED_WITHIN >= 2 * 54 * 60  # twice the longest measured
     assert demo_scenes.STORED_WITHIN < sweeps.now < demo_scenes.STORED_WITHIN + 60
     line = str(failed.value)
     assert "2 of 2 payments" in line

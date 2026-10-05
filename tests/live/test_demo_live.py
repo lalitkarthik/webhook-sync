@@ -62,7 +62,7 @@ def test_reset_outage_and_verify_pay_real_test_orders_and_end_on_0_differences(
             capture_output=True,
             text=True,
             encoding="utf-8",
-            timeout=75 * 60,  # above the hour `outage` gives Razorpay's list (#69)
+            timeout=135 * 60,  # above the two hours `outage` gives Razorpay's list (#69)
             check=False,
         )
         output = result.stdout + result.stderr

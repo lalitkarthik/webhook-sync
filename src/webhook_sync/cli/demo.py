@@ -79,10 +79,10 @@ SWEEP_AGAIN_AFTER = 5.0
 RELIST_AGAIN_AFTER = 15.0
 """Real seconds between two re-lists by hand: each reads the payments of the last 7 days and
 the refunds of the last 21."""
-STORED_WITHIN = 60 * 60.0
+STORED_WITHIN = 2 * 60 * 60.0
 """Real seconds of sweeps and re-lists a paid order has to be stored. Razorpay's test-mode list
-showed payments 25 to 41 minutes after they were made on 2026-10-05 (razorpay-list-facts.md,
-Q7): half as long again as the longest."""
+showed payments 25 to 54 minutes after they were made on 2026-10-05, later as the day went on
+(razorpay-list-facts.md, Q7): about twice the longest."""
 ROWS_WITHIN = 2 * 60.0
 FAIL_FIRST = 4
 """The deliveries of each event the receiver answers 500 in the duplicates scene (Q106)."""

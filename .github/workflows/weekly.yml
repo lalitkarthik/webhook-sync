@@ -30,8 +30,8 @@ jobs:
 
   real-run:
     runs-on: ubuntu-latest
-    # Above the hour `demo outage` gives Razorpay's list to show the payments (#69).
-    timeout-minutes: 90
+    # Above the two hours `demo outage` gives Razorpay's list to show the payments (#69).
+    timeout-minutes: 150
     defaults:
       run:
         shell: bash  # with -o pipefail, so verify's exit code survives the tee
@@ -134,5 +134,5 @@ jobs:
           fi
       - if: failure() && steps.secrets.outputs.ready == 'true'
         name: The receiver's log
-        # The whole of it: the first walk, then up to an hour of sweeps and re-lists.
+        # The whole of it: the first walk, then up to two hours of sweeps and re-lists.
         run: cat "$(dirname "$CONFIG")/data/demo-serve.log" || true
