@@ -36,6 +36,10 @@ A payment in an unknown currency is held back: its job alone goes dead, with one
 Every write is by key, so a flush done twice changes nothing: a write whose reply was lost
 fails as `retry`, and the next flush finds the rows it wrote and updates them in place.
 Nothing here logs the spreadsheet id, an email or the service-account address.
+
+Ported from sync-engine (https://github.com/stripe/sync-engine, commit 0cb8ca4),
+`packages/destination-google-sheets/src/writer.ts`: Apache-2.0, Copyright 2025 Supabase.
+Changed: see THIRD_PARTY_NOTICES.md.
 """
 
 import logging

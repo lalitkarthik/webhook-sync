@@ -4,6 +4,9 @@ Built from a config object and a data directory. Its lifespan opens the writer a
 pending migrations before the first request, starts the stage runners, the sweeper, the hourly
 verify, the nightly full verify and the reaper, and closes the writer at the end. `shut_down`
 runs the shutdown's steps while the app still answers.
+
+Ported from hookline (https://github.com/hassanatic/hookline, commit c0e549e), `hookline/app.py`:
+MIT, Copyright (c) 2026 Hassan Abdullah. Changed: see THIRD_PARTY_NOTICES.md.
 """
 
 import asyncio

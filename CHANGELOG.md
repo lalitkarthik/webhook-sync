@@ -7,6 +7,8 @@
 - `uv run pytest -m load` runs the load checks: 1,000 concurrent replays of one delivery are answered 2xx or 429, never 503, with the server's own p99 at 0.8 s on the laptop, and 200 payments reach the sheet in at most three Sheets calls a flush. `synchronous=FULL` stays.
 - The tests run on Windows once a week; no behaviour of P1-P4 changed, and no bug was found in it.
 
+Measured on 2026-10-04 by `uv run pytest -m load`, the final run of the P5 build (PR #58), on the development laptop: an Acer Nitro AN515-58 (Intel Core i7-12650H, 16 GB of RAM, NVMe SSD, Windows 11), with `synchronous=FULL` and the local fakes. The storm: 1,000 of 1,000 deliveries answered at once, 72 x 200, 1 x 202, 927 x 429, 0 x 503, the refused sent again under the cap; server-side p99 0.79 s, client-side p99 4.3 s (printed, never asserted). The burst: 200 payments mirrored in 324 s by 104 flushes making 314 Sheets calls, 2 of them creating the tabs. Q172 and Q173 of the grilling log hold the earlier runs and the range across them.
+
 ## P4: catch what webhooks missed, and prove the sheet is right — 2026-10-04
 
 - The sweeper lists Razorpay's payments and refunds on Razorpay's own clock, at startup and every 10 minutes, so payments made while the server was down reach the ledger and the sheet with Via = sweep; an hourly re-list catches later captures, fees and refunds, and `heartbeat_url` gets one ping per healthy pass.
