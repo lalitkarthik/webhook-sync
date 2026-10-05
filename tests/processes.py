@@ -190,7 +190,10 @@ class ProcessTree:
         return self
 
     def __exit__(
-        self, kind: type[BaseException] | None, error: BaseException | None, tb: TracebackType | None
+        self,
+        kind: type[BaseException] | None,
+        error: BaseException | None,
+        tb: TracebackType | None,
     ) -> None:
         for handle in self._handles.values():
             self._kernel32.CloseHandle(handle)
