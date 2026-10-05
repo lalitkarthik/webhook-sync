@@ -145,3 +145,4 @@ The sweeper's `skip` paging is made independent of the order of same-second item
 - A15 [INTERNAL] The live test is marked `live` and left out of the default run, as the load checks' burst is — the suite never calls Razorpay or Google by default.
 - A16 [INTERNAL] The clock check's limit is 30 s, as operations.md states.
 - A17 [INTERNAL] `demo reset` and `demo outage` refuse while a server runs, where the plan had `reset` talk to the running server — settled during the build of #62: emptying a database under a server breaks ADR 0007, and the service should not ship a route that wipes the ledger.
+- A18 [INTERNAL] The sweeper's overlap stays at 10 minutes although Razorpay's test-mode list showed new payments 28 to 54 minutes late on 2026-10-05: the hourly re-list stores a payment listed later, and `demo outage` asks for the re-list itself and waits up to two hours — settled during the build of #69, on its measurements (`docs/research/razorpay-list-facts.md`, Q7).

@@ -7,6 +7,7 @@
 - Once a week CI pays two test orders on the real Razorpay with the receiver stopped, sweeps them in and runs `verify --full`, failing on any finding; `python scripts/set_env.py github` sets the job's test-mode secrets without printing them.
 - `README.md` states each promise beside the test that proves it, with the measured numbers, the limits and the credits; `THIRD_PARTY_NOTICES.md` credits the ported code.
 - The sweeper now stores every payment when more than 100 are created inside two seconds, each sweep slice logs what it listed and stored, and the verify skill's launcher writes `.verify/port`.
+- Razorpay's test-mode payments list showed new payments 28 to 54 minutes late on 5 October 2026. A sweep by hand can now ask for the re-list (`POST /admin/sweep` with `relist`), and `demo outage` does so and waits up to two hours for a late-listed payment.
 
 ## P5: prove nothing is lost or written twice — 2026-10-04
 
