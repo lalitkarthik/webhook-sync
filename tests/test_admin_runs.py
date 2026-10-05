@@ -142,6 +142,36 @@ async def test_a_sweep_by_hand_reports_what_each_list_stored(
     assert sorted({e["payment_key"] for e in events}) == LISTED
 
 
+LISTED_LATE = "pay_ListedLate0001"
+
+
+async def test_a_sweep_by_hand_asked_to_re_list_stores_a_payment_listed_after_the_overlap(
+    razorpay: HeldRazorpay,
+    run_config: Config,
+    data_dir: Path,
+    read_rows: ReadRows,
+    time_machine: TimeMachineFixture,
+) -> None:
+    # Razorpay's list shows the payment 30 minutes after it was made (razorpay-list-facts.md,
+    # Q7); its fetch answers at once.
+    razorpay.listed_late = timedelta(minutes=30)
+    razorpay.make(LISTED_LATE, int((NOW - timedelta(minutes=15)).timestamp()))
+    of_it = f"SELECT origin FROM events WHERE payment_key = '{LISTED_LATE}'"
+
+    async with admin_listener(run_config, data_dir) as admin:
+        await over(admin, await started(admin, "/admin/sweep"))
+        # 20 minutes on the list shows it, and the slices' 10-minute overlap is past it.
+        time_machine.move_to(NOW + timedelta(minutes=20), tick=True)
+        razorpay.now = NOW + timedelta(minutes=20)
+        await over(admin, await started(admin, "/admin/sweep"))
+        by_slices = await read_rows(of_it)
+        report = await over(admin, await started(admin, "/admin/sweep", {"relist": True}))
+
+    assert by_slices == []
+    assert (report["state"], report["result"]["finished"]) == ("finished", True)
+    assert await read_rows(of_it) == [{"origin": "sweep"}]
+
+
 async def test_a_backfill_by_hand_stores_backfill_events_and_moves_no_checkpoint(
     razorpay: HeldRazorpay, run_config: Config, data_dir: Path, read_rows: ReadRows
 ) -> None:

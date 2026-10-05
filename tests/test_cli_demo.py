@@ -23,7 +23,8 @@ import sys
 import time
 from collections.abc import Generator, Iterator
 from contextlib import contextmanager
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
+from itertools import pairwise
 from pathlib import Path
 from threading import Thread
 from typing import ClassVar
@@ -49,6 +50,7 @@ from support import (
 from webhook_sync.cli import demo as demo_scenes
 from webhook_sync.cli.admin import CommandFailed
 from webhook_sync.cli.demo import stop_receiver, with_demo_retry_profile
+from webhook_sync.clock import to_db_text
 from webhook_sync.config import load_settings
 from webhook_sync.db.lock import hold_lock
 from webhook_sync.demo.payer import CHECKOUT_JS, PAYER_VARIABLE
@@ -440,17 +442,32 @@ def test_a_lock_still_held_after_the_receiver_stopped_fails_the_scene(data_dir: 
 
 # -- sweeping until each payment is stored ---------------------------------------------------
 
-PAID = ["pay_Tj9rKBOXWcsMeE", "pay_Tj9rKBOXWcsMeF"]
+MADE_AT = 1_791_195_000
+PAID = {"pay_Tj9rKBOXWcsMeE": MADE_AT, "pay_Tj9rKBOXWcsMeF": MADE_AT + 20}
+"""Two payments and when Razorpay made each, 20 s apart."""
 
 
 class Sweeps:
-    """`sweep_until_stored` on a clock of its own: each sweep finishes and takes two seconds,
-    each wait takes what it asks, and Razorpay's list shows the payments from `listed_at`
-    seconds on (never, when None)."""
+    """`sweep_until_stored` on a clock of its own, Razorpay's too: the payments are made as it
+    starts, each sweep finishes and takes two seconds, each wait takes what it asks, and
+    Razorpay's list shows the payments from `listed_at` seconds on (never, when None). A sweep
+    stores a listed payment while its slices still read that far back, and a re-list stores it
+    whenever it is listed. With `refunds_down` the refunds list fails every time, after the
+    payments list has been read, so no sweep finishes."""
 
-    def __init__(self, monkeypatch: pytest.MonkeyPatch, *, listed_at: float | None) -> None:
+    def __init__(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        listed_at: float | None,
+        refunds_down: bool = False,
+    ) -> None:
         self.now = 0.0
         self.listed_at = listed_at
+        self.refunds_down = refunds_down
+        self.stored = False
+        self.relists: list[float] = []
+        """When each re-list was asked for."""
         monkeypatch.setattr(demo_scenes.time, "monotonic", lambda: self.now)
         monkeypatch.setattr(demo_scenes.time, "sleep", self._pass)
         monkeypatch.setattr(demo_scenes, "run_by_hand", self._sweep)
@@ -459,16 +476,28 @@ class Sweeps:
     def _pass(self, seconds: float) -> None:
         self.now += seconds
 
-    def _sweep(self, *_: object) -> tuple[dict[str, object], str]:
+    def _sweep(
+        self, config_path: Path, path: str, body: dict[str, bool] | None, work: object
+    ) -> tuple[dict[str, object], str]:
         self.now += 2.0
-        return {"finished": True}, ""
+        relist = bool(body and body["relist"])
+        if relist:
+            self.relists.append(self.now)
+        checkpoint = MADE_AT + self.now - SETTLE.total_seconds()
+        read_by_slices = checkpoint - OVERLAP.total_seconds() <= max(PAID.values())
+        listed = self.listed_at is not None and self.now >= self.listed_at
+        self.stored = self.stored or (listed and (relist or read_by_slices))
+        at = datetime.fromtimestamp(checkpoint, UTC)
+        sweeps = [
+            {"list": name, "checkpoint_at": to_db_text(at)} for name in ("payments", "refunds")
+        ]
+        return {"finished": not self.refunds_down, "sweeps": sweeps}, ""
 
     async def _stored(self, data_dir: Path, paid: list[str]) -> set[str]:
-        listed = self.listed_at is not None and self.now >= self.listed_at
-        return set(paid) if listed else set()
+        return set(paid) if self.stored else set()
 
 
-def test_payments_razorpay_lists_nine_minutes_late_are_stored_and_the_scene_goes_on(
+def test_payments_razorpay_lists_nine_minutes_late_are_stored_by_a_sweep_and_the_scene_goes_on(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     sweeps = Sweeps(monkeypatch, listed_at=9 * 60.0)
@@ -476,10 +505,45 @@ def test_payments_razorpay_lists_nine_minutes_late_are_stored_and_the_scene_goes
     demo_scenes.sweep_until_stored(tmp_path / "webhook-sync.toml", tmp_path, PAID)
 
     assert 9 * 60.0 <= sweeps.now < 9 * 60.0 + 10
+    assert sweeps.relists == []
     assert "swept: all 2 payments stored" in capsys.readouterr().out
 
 
-def test_payments_razorpay_never_lists_fail_the_scene_only_after_the_sweepers_tolerance(
+def test_payments_razorpay_lists_after_the_sweeps_overlap_are_stored_by_a_re_list(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    sweeps = Sweeps(monkeypatch, listed_at=29 * 60.0)  # as on 2026-10-05 (razorpay-list-facts.md)
+
+    demo_scenes.sweep_until_stored(tmp_path / "webhook-sync.toml", tmp_path, PAID)
+
+    tolerance = (OVERLAP + SETTLE).total_seconds()
+    assert 29 * 60.0 <= sweeps.now < 29 * 60.0 + 30
+    assert tolerance < sweeps.relists[0] < tolerance + 30  # once no sweep reads that far back
+    printed = capsys.readouterr().out
+    assert "no sweep reads that far back" in printed
+    assert "re-listing" in printed
+    assert "swept: all 2 payments stored" in printed
+
+
+def test_a_refunds_list_that_keeps_failing_does_not_keep_the_re_list_from_being_asked_for(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    sweeps = Sweeps(monkeypatch, listed_at=29 * 60.0, refunds_down=True)
+
+    demo_scenes.sweep_until_stored(tmp_path / "webhook-sync.toml", tmp_path, PAID)
+
+    tolerance = (OVERLAP + SETTLE).total_seconds()
+    assert 29 * 60.0 <= sweeps.now < 29 * 60.0 + 30
+    assert tolerance < sweeps.relists[0] < tolerance + 30
+    # The first re-list follows at once; each later one waits its 15 s, failing list or not.
+    gaps = [later - earlier for earlier, later in pairwise(sweeps.relists[1:])]
+    assert min(gaps) >= demo_scenes.RELIST_AGAIN_AFTER
+    printed = capsys.readouterr().out
+    assert "the sweep stopped before catching up" in printed
+    assert "swept: all 2 payments stored" in printed
+
+
+def test_payments_razorpay_never_lists_fail_the_scene_only_after_its_longer_deadline(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     sweeps = Sweeps(monkeypatch, listed_at=None)
@@ -487,8 +551,7 @@ def test_payments_razorpay_never_lists_fail_the_scene_only_after_the_sweepers_to
     with pytest.raises(CommandFailed) as failed:
         demo_scenes.sweep_until_stored(tmp_path / "webhook-sync.toml", tmp_path, PAID)
 
-    tolerance = (OVERLAP + SETTLE).total_seconds()
-    assert tolerance < sweeps.now < tolerance + 2 * 60
+    assert demo_scenes.STORED_WITHIN < sweeps.now < demo_scenes.STORED_WITHIN + 60
     line = str(failed.value)
     assert "2 of 2 payments" in line
     assert "Razorpay's payments list has not shown them" in line
@@ -688,6 +751,33 @@ async def test_outage_pays_orders_while_stopped_and_the_sweep_brings_each_back_o
     ]
     assert sum(line["listed"] for line in slices) == 2
     assert [value for value in SECRET_VALUES if value in receiver_log] == []
+
+
+async def test_outage_re_lists_a_payment_razorpay_shows_only_after_the_sweeps_overlap(
+    run: CrashRun, read_rows: ReadRows
+) -> None:
+    # As measured on 2026-10-05: the list showed a payment about half an hour after it was
+    # made, its fetch and its order's payments at once (razorpay-list-facts.md, Q7).
+    run.razorpay.listed_late = timedelta(minutes=25)
+    scene = Scene(run, "outage", "--orders", "1", payer=FAKE_PAYER)
+
+    await scene.until("not listed yet")
+    run.razorpay.now += timedelta(minutes=12)  # a sweep moves the checkpoint past the overlap
+    await scene.until("no sweep reads that far back again; re-listing")
+    run.razorpay.now += timedelta(minutes=14)  # 26 minutes on, the list shows it
+    code, output = await scene.ended()
+
+    assert code == 0, output
+    [payment_id] = run.razorpay.orders_paid()
+    assert f"{payment_id}: one ledger row and one sheet row, Via = sweep" in output
+    await assert_swept_once(run, read_rows, [payment_id])
+    receiver_log = (run.config.service.data_dir / "demo-serve.log").read_text(encoding="utf-8")
+    logged = [json.loads(line) for line in receiver_log.splitlines()]
+    of_payments = [line for line in logged if line.get("list") == "payments"]
+    assert sum(line["stored"] for line in of_payments if line["message"] == "sweep slice") == 0
+    # One re-list stored it: the last. Any before it ran while the list did not show it.
+    relisted = [line["stored"] for line in of_payments if line["message"] == "re-list"]
+    assert (sum(relisted), relisted[-1]) == (1, 1)
 
 
 async def test_when_the_payer_fails_outage_prints_the_page_to_pay_by_hand_and_waits(

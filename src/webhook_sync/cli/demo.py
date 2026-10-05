@@ -8,7 +8,9 @@ real sheet (F36). Each prints what it is doing and what it waits for.
   profile in the config file. It needs the lock, so it refuses while a server runs.
 - `outage` pays test orders with the receiver stopped (the payer, else a person at the page it
   prints), then starts its own receiver, sweeps until each payment is stored, waits for the
-  ledger and sheet rows, and stops the receiver. It refuses while a server runs.
+  ledger and sheet rows, and stops the receiver. Razorpay's list can show a payment long after
+  the sweeps' overlap has passed it; the scene then asks for the re-list, as a running server
+  does every hour. It refuses while a server runs.
 - `duplicates` starts its own receiver with `--demo-fail-first 4`, pays one test order, and
   prints each delivery of its events as it arrives, until Razorpay's retries get an answer that
   is not 500 and the payment's rows are written. It needs Razorpay to reach the receiver, so
@@ -30,8 +32,9 @@ import subprocess
 import sys
 import time
 import tomllib
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +42,7 @@ import httpx
 import sqlalchemy as sa
 
 from webhook_sync.admin import runs
+from webhook_sync.admin.status import LastSweep
 from webhook_sync.cli.admin import EXIT_REFUSED, CommandFailed, run_by_hand, verify_command
 from webhook_sync.cli.doctor import sheet_failure, stored_tabs
 from webhook_sync.cli.serve import at_least_one, prepare_database, split_listen
@@ -51,7 +55,7 @@ from webhook_sync.demo.payer import CheckoutPages, PayerFailed, load_payer
 from webhook_sync.receiver.demo import check_demo_switch
 from webhook_sync.sinks.sheets import plan_tabs_reset
 from webhook_sync.sinks.sheets_client import ServiceAccountTokens, SheetsClient, SheetsFailure
-from webhook_sync.sweeper.sweep import OVERLAP, SETTLE
+from webhook_sync.sweeper.sweep import OVERLAP
 
 DEFAULT_CONFIG = Path("webhook-sync.toml")
 DATABASE_SUFFIXES = ("", "-wal", "-shm", "-journal")
@@ -72,10 +76,13 @@ POLL_AT_MOST = 30.0
 HEALTHY_WITHIN = 30.0
 STOP_WITHIN = 30.0
 SWEEP_AGAIN_AFTER = 5.0
-ONE_SWEEP = 60.0
-STORED_WITHIN = (OVERLAP + SETTLE).total_seconds() + ONE_SWEEP
-"""Real seconds of sweeps a paid order has to be stored: as late as Razorpay's list may show
-a payment and a sweep still read it (the sweeper's overlap and settle), and one sweep more."""
+RELIST_AGAIN_AFTER = 15.0
+"""Real seconds between two re-lists by hand: each reads the payments of the last 7 days and
+the refunds of the last 21."""
+STORED_WITHIN = 2 * 60 * 60.0
+"""Real seconds of sweeps and re-lists a paid order has to be stored. Razorpay's test-mode list
+showed five timed payments 39 to 54 minutes after they were made on 2026-10-05, later as the
+day went on (razorpay-list-facts.md, Q7): about twice the longest."""
 ROWS_WITHIN = 2 * 60.0
 FAIL_FIRST = 4
 """The deliveries of each event the receiver answers 500 in the duplicates scene (Q106)."""
@@ -311,18 +318,18 @@ def outage(args: argparse.Namespace, config: Config) -> int:
     with _receiver(args.config, config):
         sweep_until_stored(args.config, data_dir, paid)
         say("waiting for their ledger rows and sheet rows: the flusher writes every 3 s")
-        rows = _rows_written(data_dir, paid)
+        rows = _rows_written(data_dir, list(paid))
         for payment_id in paid:
             say(f"{payment_id}: one ledger row and one sheet row, Via = {rows[payment_id]}")
     return 0
 
 
-def _pay_orders(config: Config, count: int) -> list[str]:
+def _pay_orders(config: Config, count: int) -> dict[str, int]:
     """Make `count` orders and have each paid, by the payer or else by a person at its page;
-    the captured payments' ids, in order."""
+    the captured payments' ids, in order, each with when Razorpay made it (`created_at`)."""
     payer = load_payer(config, os.environ)
     secrets = config.razorpay_secrets
-    paid: list[str] = []
+    paid: dict[str, int] = {}
     with (
         CheckoutPages(secrets.key_id) as pages,
         httpx.Client(
@@ -353,9 +360,9 @@ def _pay_orders(config: Config, count: int) -> list[str]:
                     f"{checkout.page_url}: Netbanking, any bank, then Success"
                 )
             say(f"waiting for Razorpay to capture the payment of {checkout.order_id}")
-            payment_id = _captured(api, checkout.order_id)
+            payment_id, created_at = _captured(api, checkout.order_id)
             say(f"{payment_id} captured")
-            paid.append(payment_id)
+            paid[payment_id] = created_at
     return paid
 
 
@@ -378,9 +385,10 @@ def _razorpay(api: httpx.Client, method: str, path: str, **sent: Any) -> Any:
     return answer.json()
 
 
-def _captured(api: httpx.Client, order_id: str) -> str:
-    """The id of the order's captured payment, once Razorpay has one. A 429 doubles the time
-    between two looks, up to `POLL_AT_MOST`: a person paying by hand can take minutes."""
+def _captured(api: httpx.Client, order_id: str) -> tuple[str, int]:
+    """The id of the order's captured payment and its `created_at`, once Razorpay has one. A
+    429 doubles the time between two looks, up to `POLL_AT_MOST`: a person paying by hand can
+    take minutes."""
     deadline = time.monotonic() + CAPTURED_WITHIN
     every = POLL_EVERY
     while True:
@@ -391,7 +399,7 @@ def _captured(api: httpx.Client, order_id: str) -> str:
         else:
             for payment in listed["items"]:
                 if payment["status"] == "captured":
-                    return payment["id"]
+                    return payment["id"], payment["created_at"]
         if time.monotonic() > deadline:
             raise CommandFailed(
                 f"no payment of {order_id} captured in {CAPTURED_WITHIN / 60:.0f} minutes"
@@ -516,37 +524,74 @@ def _lock_freed(data_dir: Path, within: float) -> bool:
         time.sleep(0.2)
 
 
-def sweep_until_stored(config_path: Path, data_dir: Path, paid: list[str]) -> None:
+def sweep_until_stored(config_path: Path, data_dir: Path, paid: Mapping[str, int]) -> None:
     """Sweeps through the receiver until each payment is stored. Razorpay's list gives a sweep
     only payments a minute old (sweeper.md), and may show one later still, so a payment just
-    made waits for a later sweep, for as long as a sweep re-reads its minute; a sweep that
-    stops short, a list call failing, is tried again too."""
+    made waits for a later sweep; a sweep that stops short, a list call failing, is tried
+    again too. Once the payments checkpoint is more than the sweeper's overlap past a payment
+    the list still does not show, no sweep reads that far back again: from then on each sweep
+    is asked for the re-list too, which a running server makes every hour. That holds whether
+    or not the sweep finished: the payments list is read before the refunds list, so a failing
+    refunds list does not keep the payments from being re-listed."""
     deadline = time.monotonic() + STORED_WITHIN
+    relist = False
     say("sweeping Razorpay's payments since the checkpoint")
     while True:
-        result, _ = run_by_hand(config_path, "/admin/sweep", None, runs.sweep)
-        missing = len(paid) - len(asyncio.run(_stored(data_dir, paid)))
+        result, _ = run_by_hand(
+            config_path,
+            "/admin/sweep",
+            {"relist": True} if relist else None,
+            functools.partial(runs.sweep, relist=relist),
+        )
+        stored = asyncio.run(_stored(data_dir, list(paid)))
+        missing = [payment_id for payment_id in paid if payment_id not in stored]
         if not missing:
             say(f"swept: all {len(paid)} payments stored, each as a sweep event")
             return
+        waiting = f"{len(missing)} of {len(paid)} payments"
         if time.monotonic() > deadline:
             raise CommandFailed(
-                f"{missing} of {len(paid)} payments still not stored after "
-                f"{STORED_WITHIN / 60:.0f} minutes of sweeps: Razorpay's payments list has not "
-                "shown them, and a sweep no longer reads that far back; the hourly re-list of "
-                "a running wsync serve stores them once it does; see wsync status"
+                f"{waiting} still not stored after {STORED_WITHIN / 60:.0f} minutes of sweeps "
+                "and re-lists: Razorpay's payments list has not shown them; the hourly re-list "
+                "of a running wsync serve stores them once it does; see wsync status"
             )
-        if result["finished"]:
+        again = RELIST_AGAIN_AFTER if relist else SWEEP_AGAIN_AFTER
+        oldest = min(paid[payment_id] for payment_id in missing)
+        if not relist and _past_the_overlap(result["sweeps"], oldest):
+            relist, again = True, 0.0
             say(
-                f"{missing} of {len(paid)} payments not listed yet: a sweep reads only payments "
-                f"a minute old at Razorpay; sweeping again in {SWEEP_AGAIN_AFTER:.0f} s"
+                f"{waiting} not listed yet, and the checkpoint is more than "
+                f"{OVERLAP.total_seconds() / 60:.0f} minutes past them, so no sweep reads that "
+                "far back again; re-listing the payments of the last 7 days, as a running "
+                "wsync serve does every hour"
+            )
+        elif not result["finished"]:
+            say(
+                "the sweep stopped before catching up: a list call to Razorpay failed; "
+                f"sweeping again in {again:.0f} s"
+            )
+        elif relist:
+            say(
+                f"{waiting} not listed yet: Razorpay's list can show a payment many minutes "
+                f"late; re-listing again in {again:.0f} s"
             )
         else:
             say(
-                "the sweep stopped before catching up: a list call to Razorpay failed; "
-                f"sweeping again in {SWEEP_AGAIN_AFTER:.0f} s"
+                f"{waiting} not listed yet: a sweep reads only payments a minute old at "
+                f"Razorpay; sweeping again in {again:.0f} s"
             )
-        time.sleep(SWEEP_AGAIN_AFTER)
+        time.sleep(again)
+
+
+def _past_the_overlap(sweeps: list[LastSweep], created_at: int) -> bool:
+    """Whether the payments checkpoint is so far past `created_at` that a slice's overlap no
+    longer reaches it (sweeper.md): only the re-list reads a payment that old."""
+    return any(
+        datetime.fromisoformat(sweep["checkpoint_at"]).timestamp() - OVERLAP.total_seconds()
+        > created_at
+        for sweep in sweeps
+        if sweep["list"] == "payments"
+    )
 
 
 async def _stored(data_dir: Path, paid: list[str]) -> set[str]:
