@@ -53,6 +53,7 @@ its tickets are sub-issues labelled `ticket` with native blocked-by edges. See
 | `docs/decisions/NNNN-<slug>.md` | one decision record each (in `docs/design/decisions/` when there is a design) | when a decision is locked in |
 | `docs/specs/<slug>.md` | one spec per feature, with its Assumptions and a `Status:` line | planning; status updated at the build's end |
 | `docs/research/<topic>.md` | research notes with sources | planning; `/feature-loop gaps` |
+| `docs/guide/` | the owner's guide: what is built in a buyer's words, the steps to watch each feature work, and the guiding agent's prompt | after a build changes what a user sees |
 | `docs/audits/<yyyymmdd>.md` | one ledger per audit run: every finding and its status | `/feature-loop audit` |
 | `CHANGELOG.md` | what changed for the user, newest first | the end of a build or an audit |
 
