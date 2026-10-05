@@ -1,4 +1,4 @@
-Status: planned
+Status: implemented
 
 # P6: demo, doctor, the weekly real run and the README
 

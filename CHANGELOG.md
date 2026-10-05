@@ -1,5 +1,13 @@
 # Changelog
 
+## P6: demo, doctor, the weekly real run and the README — 2026-10-05
+
+- `wsync doctor` checks a setup end to end (config, secrets, the Razorpay key and mode, Razorpay's webhook, the clock, the sheet, the database), prints one line per check and exits 0 unless one fails; `--url` posts an empty body to the public webhook URL and fails unless the receiver's own 400 comes back. It changes nothing.
+- `wsync demo reset`, `outage`, `duplicates` and `verify` run the video's scenes against Razorpay test mode, paying test orders in a headless browser from the optional `demo` extra. Every scene refuses without an `rzp_test_` key and a spreadsheet on `[demo] spreadsheet_ids`; `reset`, `outage` and `duplicates` also refuse while a server runs.
+- Once a week CI pays two test orders on the real Razorpay with the receiver stopped, sweeps them in and runs `verify --full`, failing on any finding; `python scripts/set_env.py github` sets the job's test-mode secrets without printing them.
+- `README.md` states each promise beside the test that proves it, with the measured numbers, the limits and the credits; `THIRD_PARTY_NOTICES.md` credits the ported code.
+- The sweeper now stores every payment when more than 100 are created inside two seconds, each sweep slice logs what it listed and stored, and the verify skill's launcher writes `.verify/port`.
+
 ## P5: prove nothing is lost or written twice — 2026-10-04
 
 - `WSYNC_CRASH_AT=<name>` makes `wsync serve` exit with code 86 at a named place (`after_event_commit`, `after_sheet_write_before_done`, `mid_slice`); it is refused without an `rzp_test_` key or for an unknown name, and logs one warning when armed. Restarting on the same database loses nothing and writes nothing twice.
