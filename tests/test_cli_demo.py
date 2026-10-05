@@ -9,11 +9,13 @@ code, the ledger, the sheet and the config file.
 """
 
 import asyncio
+import contextlib
 import copy
 import os
 import queue
 import re
 import signal
+import socket
 import stat
 import subprocess
 import sys
@@ -23,6 +25,7 @@ from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
 from threading import Thread
+from typing import ClassVar
 
 import httpx
 import pytest
@@ -458,12 +461,36 @@ TESTS = Path(__file__).parent
 PAGE_URL = re.compile(r"http://127\.0\.0\.1:\d+/pay/(order_\w+)")
 SCENE_LIMIT = 120.0
 """Real seconds a scene gets to end."""
+LEFT_RUNNING = re.compile(r"the receiver is running in its normal mode at (\S+), pid (\d+)")
+
+
+def kill_tree(pid: int) -> None:
+    """Kill a process and everything under it; one started in a session of its own is the
+    leader of its group."""
+    if sys.platform == "win32":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True)
+    else:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(pid, signal.SIGKILL)
+
+
+@pytest.fixture(autouse=True)
+def no_scene_left() -> Iterator[None]:
+    """Every scene a test started is killed when it ends, and so is any receiver a scene
+    left running: a failed test leaves none holding the port and the database's lock."""
+    yield
+    while Scene.started:
+        Scene.started.pop().kill()
 
 
 class Scene:
     """A `wsync demo` subprocess, its lines read as it prints them."""
 
+    started: ClassVar[list[Scene]] = []
+    """The scenes started and not yet killed."""
+
     def __init__(self, run: CrashRun, scene: str, *args: str, payer: str) -> None:
+        Scene.started.append(self)
         environ = run.environ | {PAYER_VARIABLE: payer, "PYTHONPATH": str(TESTS)}
         self.process = subprocess.Popen(
             [wsync_path(), "demo", scene, *args, "--config", str(run.config_path)],
@@ -500,6 +527,21 @@ class Scene:
             if text in line:
                 return line
         pytest.fail(f"no line held {text!r}:\n" + "\n".join(self.lines))
+
+    def kill(self) -> None:
+        """Kill the scene's processes, then any receiver it said it left running."""
+        kill_tree(self.process.pid)
+        self.process.wait(timeout=30)
+        while True:  # its last lines, until the pipe closes
+            try:
+                line = self._new.get(timeout=5)
+            except queue.Empty:
+                break
+            if line is None:
+                break
+            self.lines.append(line)
+        for found in LEFT_RUNNING.finditer("\n".join(self.lines)):
+            kill_tree(int(found[2]))
 
     def interrupt(self) -> None:
         """Ctrl+C, as the owner presses it; on Windows, Ctrl+Break: a console sends Ctrl+C
@@ -618,8 +660,6 @@ async def test_outage_refuses_while_a_server_runs(run: CrashRun) -> None:
 
 # -- demo duplicates ---------------------------------------------------------------------------
 
-LEFT_RUNNING = re.compile(r"the receiver is running in its normal mode at (\S+), pid (\d+)")
-
 
 @contextmanager
 def left_running(run: CrashRun, output: str) -> Generator[httpx.AsyncClient]:
@@ -627,15 +667,13 @@ def left_running(run: CrashRun, output: str) -> Generator[httpx.AsyncClient]:
     test reads the database inside the block: on Windows a stopped server's files may stay
     held a moment longer (the crash harness)."""
     found = LEFT_RUNNING.search(output)
-    assert found is not None, output
-    assert found[1] == f"http://127.0.0.1:{run.port}"
     try:
+        assert found is not None, output
+        assert found[1] == f"http://127.0.0.1:{run.port}"
         yield httpx.AsyncClient(base_url=found[1], trust_env=False, timeout=30)
     finally:
-        if sys.platform == "win32":
-            subprocess.run(["taskkill", "/T", "/F", "/PID", found[2]], capture_output=True)
-        else:
-            os.kill(int(found[2]), signal.SIGTERM)
+        if found is not None:
+            kill_tree(int(found[2]))
 
 
 async def assert_in_normal_mode(run: CrashRun, client: httpx.AsyncClient, payment_id: str) -> None:
@@ -691,6 +729,31 @@ async def test_duplicates_with_no_delivery_names_the_tunnel_and_fails(run: Crash
         assert "the public URL or the tunnel is the likely cause" in output
         assert "wsync doctor --url" in output
         await assert_in_normal_mode(run, client, payment_id)
+
+
+def taken(port: int) -> socket.socket:
+    """The port, listened on by the test so that no server can take it, even one that asks
+    to reuse the address (Windows lets it, unless the port is held exclusively)."""
+    held = socket.socket()
+    if sys.platform == "win32":
+        held.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+    held.bind(("127.0.0.1", port))
+    held.listen()
+    return held
+
+
+async def test_a_receiver_that_will_not_start_after_the_scene_leaves_its_error_and_exit_code(
+    run: CrashRun,
+) -> None:
+    scene = Scene(run, "duplicates", "--wait", "2", payer=FAKE_PAYER)
+    await scene.until("the receiver is stopped")
+    with taken(run.port):  # before the receiver in its normal mode starts
+        code, output = await scene.ended()
+
+    assert code == 1, output
+    assert "the public URL or the tunnel is the likely cause" in output
+    assert "the receiver in its normal mode did not start: the receiver stopped as it" in output
+    assert LEFT_RUNNING.search(output) is None
 
 
 async def test_an_interrupted_duplicates_leaves_the_receiver_in_its_normal_mode(

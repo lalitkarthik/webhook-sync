@@ -440,6 +440,10 @@ def _serve(
         )
     try:
         _healthy(base_url, process, log_path)
+    except KeyboardInterrupt:
+        if not detached:  # a detached receiver is left to run, as it was asked to
+            stop_receiver(process, config.service.data_dir)
+        raise
     except BaseException:
         stop_receiver(process, config.service.data_dir)
         raise
@@ -489,16 +493,22 @@ def stop_receiver(
         process.kill()
         process.wait()
         say(f"the receiver did not stop in {within:g} s and was killed")
+    if not _lock_freed(data_dir, within):
+        raise CommandFailed(
+            f"the receiver was stopped but the lock is still held {within:g} s later: "
+            "a wsync serve still runs on this database; stop it by hand"
+        )
+
+
+def _lock_freed(data_dir: Path, within: float) -> bool:
+    """Whether the database's lock is free, or comes free within `within` seconds."""
     deadline = time.monotonic() + within
     while True:
         with lock_if_free(data_dir) as free:
             if free:
-                return
+                return True
         if time.monotonic() > deadline:
-            raise CommandFailed(
-                f"the receiver was stopped but the lock is still held {within:g} s later: "
-                "a wsync serve still runs on this database; stop it by hand"
-            )
+            return False
         time.sleep(0.2)
 
 
@@ -583,8 +593,12 @@ def duplicates(args: argparse.Namespace, config: Config) -> int:
                 EXIT_REFUSED,
             )
     switch = ("--demo-fail-first", str(FAIL_FIRST))
+    shown = " ".join(("wsync serve", *switch))
+    receiver: subprocess.Popen[bytes] | None = None
     try:
-        with _interrupted_on_break(), _receiver(args.config, config, *switch):
+        with _interrupted_on_break():
+            receiver, base_url, _ = _serve(args.config, config, switch, shown)
+            say(f"the receiver is up at {base_url}")
             say(
                 f"the receiver answers 500 to the first {FAIL_FIRST} deliveries of each event, "
                 "after storing it, so Razorpay retries"
@@ -595,11 +609,33 @@ def duplicates(args: argparse.Namespace, config: Config) -> int:
             _rows_written(data_dir, [payment_id])
             say(f"{payment_id}: one ledger row and one sheet row; {counted} duplicates")
     except KeyboardInterrupt:
-        say("interrupted")
+        say("interrupted: putting the receiver back in its normal mode")
         return 130
     finally:
-        _leave_running(args.config, config)
+        with _uninterruptible():
+            if receiver is not None:
+                say("stopping the receiver")
+                try:
+                    stop_receiver(receiver, data_dir)
+                    say("the receiver is stopped")
+                except CommandFailed as failed:
+                    say(str(failed))
+            _leave_running(args.config, config)
     return 0
+
+
+@contextmanager
+def _uninterruptible() -> Generator[None]:
+    """Ctrl+C, Ctrl+Break and SIGTERM ignored while the block runs: the clean-up that leaves
+    a receiver in its normal mode is not cut short. A receiver started meanwhile sets its own
+    handlers (`wsync serve`), so it can still be stopped."""
+    stops = (signal.SIGINT, signal.SIGBREAK if sys.platform == "win32" else signal.SIGTERM)
+    before = [signal.signal(stop, signal.SIG_IGN) for stop in stops]
+    try:
+        yield
+    finally:
+        for stop, handler in zip(stops, before, strict=True):
+            signal.signal(stop, handler)
 
 
 @contextmanager
@@ -678,12 +714,20 @@ async def _deliveries(data_dir: Path, payment_id: str) -> list[tuple[str, str, i
 
 
 def _leave_running(config_path: Path, config: Config) -> None:
-    """A receiver in its normal mode, started apart from the scene and left running."""
-    with lock_if_free(config.service.data_dir) as free:
-        if not free:
-            say("a receiver still holds the database: not starting another")
-            return
-    process, base_url, _ = _serve(config_path, config, (), "wsync serve", detached=True)
+    """A receiver in its normal mode, started apart from the scene and left running, once the
+    scene's own has let go of the database. A failure is one more line: the scene's own
+    error, and its exit code, still come through."""
+    if not _lock_freed(config.service.data_dir, STOP_WITHIN):
+        say(
+            f"a receiver still holds the database {STOP_WITHIN:g} s on: not starting another; "
+            "start wsync serve by hand once it has stopped"
+        )
+        return
+    try:
+        process, base_url, _ = _serve(config_path, config, (), "wsync serve", detached=True)
+    except CommandFailed as failed:
+        say(f"the receiver in its normal mode did not start: {failed}; start wsync serve by hand")
+        return
     stop_with = (
         f"taskkill /T /F /PID {process.pid}" if sys.platform == "win32" else f"kill {process.pid}"
     )
