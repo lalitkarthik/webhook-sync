@@ -46,6 +46,7 @@ from webhook_sync.clock import to_db_text
 from webhook_sync.config import AlertsConfig, Config, SweeperConfig
 from webhook_sync.db.schema import checkpoints
 from webhook_sync.db.writer import Writer
+from webhook_sync.logs import JsonFormatter
 from webhook_sync.queue import record_pause
 from webhook_sync.queue import runner as runner_module
 from webhook_sync.receiver.app import create_app
@@ -191,6 +192,39 @@ async def test_payments_made_while_the_server_was_down_reach_the_ledger_and_the_
     assert await read_rows("SELECT * FROM deliveries") == []
     events = await read_rows("SELECT origin, payment_key FROM events ORDER BY payment_key")
     assert events == [{"origin": "sweep", "payment_key": payment_id} for payment_id in OUTAGE]
+
+
+async def test_each_sweep_slice_is_logged_with_its_list_its_bounds_and_what_it_listed_and_stored(
+    swept_config: Config,
+    data_dir: Path,
+    outside: Outside,
+    read_rows: ReadRows,
+    sweeper_logs: pytest.LogCaptureFixture,
+) -> None:
+    listed = recorded_listed_payments()
+    for payment_id in OUTAGE:
+        outside.razorpay.payments[payment_id] = listed[payment_id]
+
+    async with running(swept_config, data_dir):
+        await wait_for(read_rows, ALL_ROWS, settled(OUTAGE))
+        await passes_ended(sweeper_logs, 1)
+
+    lines = [
+        json.loads(JsonFormatter().format(record))
+        for record in sweeper_logs.records
+        if record.getMessage() == "sweep slice"
+    ]
+    payments = [line for line in lines if line["list"] == "payments"]
+    assert {line["list"] for line in lines} == {"payments", "refunds"}
+    assert sum(line["listed"] for line in payments) == len(OUTAGE)
+    assert sum(line["stored"] for line in payments) == len(OUTAGE)
+    # A day back from Razorpay's now in four slices, the last ending a minute behind it.
+    assert [(line["slice_start"], line["slice_end"]) for line in payments] == [
+        ("2026-10-01T20:00:00.000000Z", "2026-10-02T02:00:00.000000Z"),
+        ("2026-10-02T02:00:00.000000Z", "2026-10-02T08:00:00.000000Z"),
+        ("2026-10-02T08:00:00.000000Z", "2026-10-02T14:00:00.000000Z"),
+        ("2026-10-02T14:00:00.000000Z", "2026-10-02T19:59:00.000000Z"),
+    ]
 
 
 async def test_a_late_delivery_of_a_swept_payment_is_a_new_event_that_changes_nothing(

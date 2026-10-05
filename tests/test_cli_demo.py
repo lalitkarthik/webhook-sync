@@ -11,6 +11,7 @@ code, the ledger, the sheet and the config file.
 import asyncio
 import contextlib
 import copy
+import json
 import os
 import queue
 import re
@@ -45,6 +46,7 @@ from support import (
     fixture_secrets,
 )
 
+from webhook_sync.cli import demo as demo_scenes
 from webhook_sync.cli.admin import CommandFailed
 from webhook_sync.cli.demo import stop_receiver, with_demo_retry_profile
 from webhook_sync.config import load_settings
@@ -58,6 +60,7 @@ from webhook_sync.sinks.sheets import (
     SYNC_STATUS,
     SYNC_STATUS_HEADER,
 )
+from webhook_sync.sweeper.sweep import OVERLAP, SETTLE
 
 SCENES = ("reset", "outage", "duplicates", "verify")
 LIVE_KEY_ID = "rzp_live_fixtureKeyId01"
@@ -435,6 +438,63 @@ def test_a_lock_still_held_after_the_receiver_stopped_fails_the_scene(data_dir: 
     assert "the lock is still held" in str(failed.value)
 
 
+# -- sweeping until each payment is stored ---------------------------------------------------
+
+PAID = ["pay_Tj9rKBOXWcsMeE", "pay_Tj9rKBOXWcsMeF"]
+
+
+class Sweeps:
+    """`sweep_until_stored` on a clock of its own: each sweep finishes and takes two seconds,
+    each wait takes what it asks, and Razorpay's list shows the payments from `listed_at`
+    seconds on (never, when None)."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, *, listed_at: float | None) -> None:
+        self.now = 0.0
+        self.listed_at = listed_at
+        monkeypatch.setattr(demo_scenes.time, "monotonic", lambda: self.now)
+        monkeypatch.setattr(demo_scenes.time, "sleep", self._pass)
+        monkeypatch.setattr(demo_scenes, "run_by_hand", self._sweep)
+        monkeypatch.setattr(demo_scenes, "_stored", self._stored)
+
+    def _pass(self, seconds: float) -> None:
+        self.now += seconds
+
+    def _sweep(self, *_: object) -> tuple[dict[str, object], str]:
+        self.now += 2.0
+        return {"finished": True}, ""
+
+    async def _stored(self, data_dir: Path, paid: list[str]) -> set[str]:
+        listed = self.listed_at is not None and self.now >= self.listed_at
+        return set(paid) if listed else set()
+
+
+def test_payments_razorpay_lists_nine_minutes_late_are_stored_and_the_scene_goes_on(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    sweeps = Sweeps(monkeypatch, listed_at=9 * 60.0)
+
+    demo_scenes.sweep_until_stored(tmp_path / "webhook-sync.toml", tmp_path, PAID)
+
+    assert 9 * 60.0 <= sweeps.now < 9 * 60.0 + 10
+    assert "swept: all 2 payments stored" in capsys.readouterr().out
+
+
+def test_payments_razorpay_never_lists_fail_the_scene_only_after_the_sweepers_tolerance(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    sweeps = Sweeps(monkeypatch, listed_at=None)
+
+    with pytest.raises(CommandFailed) as failed:
+        demo_scenes.sweep_until_stored(tmp_path / "webhook-sync.toml", tmp_path, PAID)
+
+    tolerance = (OVERLAP + SETTLE).total_seconds()
+    assert tolerance < sweeps.now < tolerance + 2 * 60
+    line = str(failed.value)
+    assert "2 of 2 payments" in line
+    assert "Razorpay's payments list has not shown them" in line
+    assert "hourly re-list" in line
+
+
 # -- demo verify -----------------------------------------------------------------------------
 
 
@@ -621,7 +681,12 @@ async def test_outage_pays_orders_while_stopped_and_the_sweep_brings_each_back_o
     assert scene.lines[-1] == "the receiver is stopped"
     await assert_swept_once(run, read_rows, paid)
     receiver_log = (run.config.service.data_dir / "demo-serve.log").read_text(encoding="utf-8")
-    assert "sweep slice" in receiver_log
+    slices = [
+        line
+        for line in map(json.loads, receiver_log.splitlines())
+        if line["message"] == "sweep slice" and line["list"] == "payments"
+    ]
+    assert sum(line["listed"] for line in slices) == 2
     assert [value for value in SECRET_VALUES if value in receiver_log] == []
 
 
