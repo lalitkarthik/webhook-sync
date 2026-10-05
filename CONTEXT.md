@@ -212,7 +212,7 @@ _Avoid_: page (a page is one API response), batch
 How far back a source lets us list events: 30 days for Stripe. Past it, only a full backfill by creation date can catch up. Razorpay has no events list, so it has no horizon: its sweeper lists payments by creation date.
 
 **Re-list**:
-The sweeper's hourly second read of a source with no events list (Razorpay): every payment created in the last 7 days and every refund created in the last 21, so a change to an older payment reaches its row.
+The sweeper's hourly second read of a source with no events list (Razorpay): every payment created in the last 7 days and every refund created in the last 21, so a change to an older payment reaches its row, and a payment Razorpay listed later than the sweep's overlap is stored. A sweep by hand can ask for it at once (`POST /admin/sweep` with `relist`), as `demo outage` does.
 _Avoid_: re-fetch (one payment by id), poll (too vague)
 
 **Re-list floor**:
