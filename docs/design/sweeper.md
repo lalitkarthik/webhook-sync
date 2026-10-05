@@ -6,7 +6,7 @@
 
 *Updated 2026-10-04 after #63: a window walked with `skip` is walked again until a walk brings no new id, and fails its slice after five walks, since same-second order is undocumented (Q186).*
 
-*Updated 2026-10-05 after #69: Razorpay's list was measured showing a test-mode payment 28 to 54 minutes after it was made, so the re-list is also what brings in a payment listed after the overlap, and a sweep by hand can ask for it.*
+*Updated 2026-10-05 after #69: Razorpay's list was measured showing five test-mode payments 39 to 54 minutes after they were made, so the re-list is also what brings in a payment listed after the overlap, and a sweep by hand can ask for it.*
 
 ## Why it exists
 
@@ -62,9 +62,9 @@ Razorpay has no events list, and its lists filter by **creation** time ([sources
 
 The disputes poll joins when disputes are built. Changes to older payments reach the ledger through nightly verify. The README states the gap.
 
-**A payment the list shows late.** Razorpay's lists can run behind: on 5 October 2026 the payments list showed a new test-mode payment 28 to 54 minutes after it was made, whatever the query, while the fetch by id returned it within seconds ([razorpay-list-facts.md](../research/razorpay-list-facts.md) Q7). The slices can't store what the list doesn't show. Their 10-minute overlap brings in a payment listed up to about 10 minutes late; by the time a later one is listed, the checkpoint is past it, and the next hourly re-list stores it, with Via = `sweep`. So a payment made while the server was down can come back up to an hour after the list first shows it. A sweep asked for by hand can ask for the re-list at once (`POST /admin/sweep` with `{"relist": true}`), due or not. Whether the overlap should grow is an open question; it is still 10 minutes.
+**A payment the list shows late.** Razorpay's lists can run behind: on 5 October 2026 the payments list showed five timed test-mode payments 39 to 54 minutes after they were made, whatever the query, while the fetch by id returned each within seconds ([razorpay-list-facts.md](../research/razorpay-list-facts.md) Q7). The slices can't store what the list doesn't show. Their 10-minute overlap brings in a payment listed up to about 10 minutes late; by the time a later one is listed, the checkpoint is past it, and the next hourly re-list stores it, with Via = `sweep`. So a payment made while the server was down can come back up to an hour after the list first shows it. A sweep asked for by hand can ask for the re-list at once (`POST /admin/sweep` with `{"relist": true}`), due or not. The overlap stays at 10 minutes ([spec Assumption A18](../specs/p6-demo-doctor-readme.md)): the hourly re-list already stores a payment listed later, and a longer overlap would make every sweep re-read more.
 
-**In the outage scene** ([Q107](grilling-log.md)), the startup sweep stores the missed payments first, with Via = `sweep`; Razorpay's own retries of the same deliveries arrive later and are logged as duplicates. Each payment still has one row. `wsync demo outage` sweeps every 5 s; once the payments checkpoint is more than 10 minutes past a payment the list has not shown, it asks for the re-list with each sweep, every 15 s, and gives up two hours after it began.
+**In the outage scene** ([Q107](grilling-log.md)), the startup sweep stores the missed payments first, with Via = `sweep`; Razorpay's own retries of the same deliveries arrive later and are logged as duplicates. Each payment still has one row. `wsync demo outage` sweeps every 5 s; once the payments checkpoint is more than 10 minutes past a payment the list has not shown, it asks for the re-list with each sweep, waits 15 s between them, and gives up two hours after it began. A list that fails does not stop this: the payments list is read before the refunds list.
 
 ## Silent webhooks
 
