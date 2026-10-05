@@ -1,10 +1,11 @@
 """FakeRazorpay's lists and payments: a delivery that never arrives, a payment made at a given
-second, items created in the same second in a shifting order, a payment appearing between two
-page calls, and a late authorisation (testing.md, "FakeRazorpay").
+second, a payment the list shows late, items created in the same second in a shifting order, a
+payment appearing between two page calls, and a late authorisation (testing.md, "FakeRazorpay").
 
 Seam: FakeRazorpay through respx, as the sweeper calls it.
 """
 
+from datetime import timedelta
 from typing import Any
 
 import httpx
@@ -72,6 +73,24 @@ async def test_a_made_payment_is_listed_and_fetched_under_its_own_id_and_second(
         SECOND + 5,
         1180,
     )
+
+
+async def test_a_payment_listed_late_is_fetched_at_once_and_listed_only_once_it_is_that_old(
+    razorpay: FakeRazorpay,
+) -> None:
+    razorpay.listed_late = timedelta(minutes=40)  # as measured (razorpay-list-facts.md, Q7)
+    razorpay.make("pay_ListedLate0001", SECOND)
+
+    at_once = await listed(razorpay, SECOND - 60, SECOND + 3600)
+    payment = await fetched(razorpay, "pay_ListedLate0001")
+    razorpay.now += timedelta(minutes=39, seconds=59)
+    a_second_short = await listed(razorpay, SECOND - 60, SECOND + 3600)
+    razorpay.now += timedelta(seconds=1)
+    [item] = await listed(razorpay, SECOND - 60, SECOND + 3600)
+
+    assert (at_once, a_second_short) == ([], [])
+    assert (payment["id"], payment["status"]) == ("pay_ListedLate0001", "captured")
+    assert (item["id"], item["created_at"]) == ("pay_ListedLate0001", SECOND)
 
 
 async def test_items_created_in_the_same_second_come_back_in_a_shifting_order(

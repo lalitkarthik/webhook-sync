@@ -426,8 +426,10 @@ class FakeRazorpay:
         return [query for called, query in self.list_calls if called == path]
 
     async def _list_payments(self, request: httpx.Request) -> httpx.Response:
-        shown_by = int((self.now - self.listed_late).timestamp())
-        shown = [payment for payment in self.payments.values() if payment["created_at"] <= shown_by]
+        shown = list(self.payments.values())
+        if self.listed_late:
+            old_enough = int((self.now - self.listed_late).timestamp())
+            shown = [payment for payment in shown if payment["created_at"] <= old_enough]
         answer = await self._list(request, shown)
         full = answer.status_code == 200 and answer.json()["count"] == int(
             request.url.params.get("count", "10")
