@@ -16,6 +16,7 @@ from dotenv import dotenv_values
 from processes import free_port, wsync_path
 from support import RECORDED_ACCOUNT
 
+from webhook_sync.cli.demo import STORED_WITHIN
 from webhook_sync.config import SECRET_NAMES
 
 pytestmark = pytest.mark.live
@@ -24,6 +25,9 @@ ENV_FILE = Path(os.environ.get("WSYNC_ENV_FILE") or Path(__file__).parents[2] / 
 SHEET = "SHEET_ID"
 """The throwaway sheet's id in `.env`."""
 SCENES = (("reset",), ("outage", "--orders", "2"), ("verify",))
+SCENE_LIMIT = STORED_WITHIN + 15 * 60
+"""Real seconds a scene gets: as long as `outage` waits for Razorpay's list (#69), and a
+quarter of an hour for the rest of it."""
 
 
 def test_reset_outage_and_verify_pay_real_test_orders_and_end_on_0_differences(
@@ -62,7 +66,7 @@ def test_reset_outage_and_verify_pay_real_test_orders_and_end_on_0_differences(
             capture_output=True,
             text=True,
             encoding="utf-8",
-            timeout=135 * 60,  # above the two hours `outage` gives Razorpay's list (#69)
+            timeout=SCENE_LIMIT,
             check=False,
         )
         output = result.stdout + result.stderr

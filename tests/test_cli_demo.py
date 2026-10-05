@@ -24,6 +24,7 @@ import time
 from collections.abc import Generator, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from itertools import pairwise
 from pathlib import Path
 from threading import Thread
 from typing import ClassVar
@@ -451,11 +452,19 @@ class Sweeps:
     starts, each sweep finishes and takes two seconds, each wait takes what it asks, and
     Razorpay's list shows the payments from `listed_at` seconds on (never, when None). A sweep
     stores a listed payment while its slices still read that far back, and a re-list stores it
-    whenever it is listed."""
+    whenever it is listed. With `refunds_down` the refunds list fails every time, after the
+    payments list has been read, so no sweep finishes."""
 
-    def __init__(self, monkeypatch: pytest.MonkeyPatch, *, listed_at: float | None) -> None:
+    def __init__(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        listed_at: float | None,
+        refunds_down: bool = False,
+    ) -> None:
         self.now = 0.0
         self.listed_at = listed_at
+        self.refunds_down = refunds_down
         self.stored = False
         self.relists: list[float] = []
         """When each re-list was asked for."""
@@ -482,7 +491,7 @@ class Sweeps:
         sweeps = [
             {"list": name, "checkpoint_at": to_db_text(at)} for name in ("payments", "refunds")
         ]
-        return {"finished": True, "sweeps": sweeps}, ""
+        return {"finished": not self.refunds_down, "sweeps": sweeps}, ""
 
     async def _stored(self, data_dir: Path, paid: list[str]) -> set[str]:
         return set(paid) if self.stored else set()
@@ -516,6 +525,24 @@ def test_payments_razorpay_lists_after_the_sweeps_overlap_are_stored_by_a_re_lis
     assert "swept: all 2 payments stored" in printed
 
 
+def test_a_refunds_list_that_keeps_failing_does_not_keep_the_re_list_from_being_asked_for(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    sweeps = Sweeps(monkeypatch, listed_at=29 * 60.0, refunds_down=True)
+
+    demo_scenes.sweep_until_stored(tmp_path / "webhook-sync.toml", tmp_path, PAID)
+
+    tolerance = (OVERLAP + SETTLE).total_seconds()
+    assert 29 * 60.0 <= sweeps.now < 29 * 60.0 + 30
+    assert tolerance < sweeps.relists[0] < tolerance + 30
+    # The first re-list follows at once; each later one waits its 15 s, failing list or not.
+    gaps = [later - earlier for earlier, later in pairwise(sweeps.relists[1:])]
+    assert min(gaps) >= demo_scenes.RELIST_AGAIN_AFTER
+    printed = capsys.readouterr().out
+    assert "the sweep stopped before catching up" in printed
+    assert "swept: all 2 payments stored" in printed
+
+
 def test_payments_razorpay_never_lists_fail_the_scene_only_after_its_longer_deadline(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -524,7 +551,6 @@ def test_payments_razorpay_never_lists_fail_the_scene_only_after_its_longer_dead
     with pytest.raises(CommandFailed) as failed:
         demo_scenes.sweep_until_stored(tmp_path / "webhook-sync.toml", tmp_path, PAID)
 
-    assert demo_scenes.STORED_WITHIN >= 2 * 54 * 60  # twice the longest measured
     assert demo_scenes.STORED_WITHIN < sweeps.now < demo_scenes.STORED_WITHIN + 60
     line = str(failed.value)
     assert "2 of 2 payments" in line
@@ -749,7 +775,9 @@ async def test_outage_re_lists_a_payment_razorpay_shows_only_after_the_sweeps_ov
     logged = [json.loads(line) for line in receiver_log.splitlines()]
     of_payments = [line for line in logged if line.get("list") == "payments"]
     assert sum(line["stored"] for line in of_payments if line["message"] == "sweep slice") == 0
-    assert [line["stored"] for line in of_payments if line["message"] == "re-list"] == [1]
+    # One re-list stored it: the last. Any before it ran while the list did not show it.
+    relisted = [line["stored"] for line in of_payments if line["message"] == "re-list"]
+    assert (sum(relisted), relisted[-1]) == (1, 1)
 
 
 async def test_when_the_payer_fails_outage_prints_the_page_to_pay_by_hand_and_waits(

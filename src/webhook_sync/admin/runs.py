@@ -7,8 +7,9 @@ server lives (A19): what lasts is in `checkpoints`, `events` and `verify_runs`. 
 `wsync` does the same work in its own process under the lock, on the parts `on_their_own`
 builds; any repair jobs then wait for the next `wsync serve`.
 
-A sweep by hand is one ordinary sweep, without the heartbeat: a ping from a command would hide a
-dead server from the heartbeat service. A full verify by hand repairs only when asked to.
+A sweep by hand is one ordinary sweep, with each list's re-list too when asked for, and without
+the heartbeat: a ping from a command would hide a dead server from the heartbeat service. A full
+verify by hand repairs only when asked to.
 """
 
 import asyncio

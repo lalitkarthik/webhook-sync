@@ -81,8 +81,8 @@ RELIST_AGAIN_AFTER = 15.0
 the refunds of the last 21."""
 STORED_WITHIN = 2 * 60 * 60.0
 """Real seconds of sweeps and re-lists a paid order has to be stored. Razorpay's test-mode list
-showed payments 25 to 54 minutes after they were made on 2026-10-05, later as the day went on
-(razorpay-list-facts.md, Q7): about twice the longest."""
+showed five timed payments 39 to 54 minutes after they were made on 2026-10-05, later as the
+day went on (razorpay-list-facts.md, Q7): about twice the longest."""
 ROWS_WITHIN = 2 * 60.0
 FAIL_FIRST = 4
 """The deliveries of each event the receiver answers 500 in the duplicates scene (Q106)."""
@@ -530,7 +530,9 @@ def sweep_until_stored(config_path: Path, data_dir: Path, paid: Mapping[str, int
     made waits for a later sweep; a sweep that stops short, a list call failing, is tried
     again too. Once the payments checkpoint is more than the sweeper's overlap past a payment
     the list still does not show, no sweep reads that far back again: from then on each sweep
-    is asked for the re-list too, which a running server makes every hour."""
+    is asked for the re-list too, which a running server makes every hour. That holds whether
+    or not the sweep finished: the payments list is read before the refunds list, so a failing
+    refunds list does not keep the payments from being re-listed."""
     deadline = time.monotonic() + STORED_WITHIN
     relist = False
     say("sweeping Razorpay's payments since the checkpoint")
@@ -553,25 +555,25 @@ def sweep_until_stored(config_path: Path, data_dir: Path, paid: Mapping[str, int
                 "and re-lists: Razorpay's payments list has not shown them; the hourly re-list "
                 "of a running wsync serve stores them once it does; see wsync status"
             )
-        again = SWEEP_AGAIN_AFTER
-        if not result["finished"]:
-            say(
-                "the sweep stopped before catching up: a list call to Razorpay failed; "
-                f"sweeping again in {again:.0f} s"
-            )
-        elif relist:
-            again = RELIST_AGAIN_AFTER
-            say(
-                f"{waiting} not listed yet: Razorpay's list can show a payment many minutes "
-                f"late; re-listing again in {again:.0f} s"
-            )
-        elif _past_the_overlap(result["sweeps"], min(paid[payment_id] for payment_id in missing)):
+        again = RELIST_AGAIN_AFTER if relist else SWEEP_AGAIN_AFTER
+        oldest = min(paid[payment_id] for payment_id in missing)
+        if not relist and _past_the_overlap(result["sweeps"], oldest):
             relist, again = True, 0.0
             say(
                 f"{waiting} not listed yet, and the checkpoint is more than "
                 f"{OVERLAP.total_seconds() / 60:.0f} minutes past them, so no sweep reads that "
                 "far back again; re-listing the payments of the last 7 days, as a running "
                 "wsync serve does every hour"
+            )
+        elif not result["finished"]:
+            say(
+                "the sweep stopped before catching up: a list call to Razorpay failed; "
+                f"sweeping again in {again:.0f} s"
+            )
+        elif relist:
+            say(
+                f"{waiting} not listed yet: Razorpay's list can show a payment many minutes "
+                f"late; re-listing again in {again:.0f} s"
             )
         else:
             say(
