@@ -3,9 +3,10 @@
 `POST /admin/resume/{name}` clears a pause in `sinks` and in the running server's claim-time
 cache; `GET /admin/status` returns what `wsync status` prints. `POST /admin/sweep`,
 `/admin/backfill` and `/admin/verify` start a run by hand on the server's sweeper and verify
-and answer 202 with its id; `GET /admin/runs/{id}` reports it (Q152, A19). The app shares the
-public app's writer, pause cache, sweeper and verify, set by the public app's lifespan; until
-that has run, and to a run asked for once the shutdown has begun, it answers 503.
+and answer 202 with its id; `GET /admin/runs/{id}` reports it (Q152, A19). A sweep asked for
+with `{"relist": true}` re-lists each list too, due or not. The app shares the public app's
+writer, pause cache, sweeper and verify, set by the public app's lifespan; until that has run,
+and to a run asked for once the shutdown has begun, it answers 503.
 """
 
 import dataclasses
