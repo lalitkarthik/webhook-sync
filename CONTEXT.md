@@ -315,3 +315,7 @@ _Avoid_: API key (too broad), secret key (Stripe's name for a full-access key)
 **Settings**:
 The config without its secrets: what `webhook-sync.toml` holds. The config adds the secrets read from the environment; `wsync doctor` checks the two apart.
 _Avoid_: options, preferences
+
+**Real run**:
+The weekly CI job that pays test orders on the real Razorpay with the receiver stopped, sweeps them in and runs `verify --full`, failing on any finding.
+_Avoid_: smoke test, e2e run
