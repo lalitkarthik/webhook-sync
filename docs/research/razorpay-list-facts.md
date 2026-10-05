@@ -4,6 +4,8 @@ Researched 2026-10-03 against primary sources, for six questions raised while bu
 
 Primary means razorpay.com/docs, read as the Markdown copies Razorpay serves (`https://razorpay.com/docs/<path>.md`), searched through Razorpay's own full-text dump (`https://razorpay-881012b3.mintlify.site/llms-full.txt`), plus razorpay-python and razorpay-mcp-server source on GitHub. For healthchecks.io: its own docs pages and its source (`healthchecks/healthchecks` at 3addc67). The live calls went to api.razorpay.com with the owner's **test** key. The helper checked the `rzp_test_` prefix before running, and only GETs were made. That was 124 calls, at 07:52-07:56 UTC. No key or personal value was printed or stored. Nothing was pinged at healthchecks.io. No secondary source was used.
 
+*Updated 2026-10-05 after #69: Q7 added, a measurement of how long after payment the payments list shows a test-mode payment.*
+
 | Q | Question | Verdict | One-line finding |
 |---|---|---|---|
 | Q1 | `/v1/payments` paging and bounds | **settled by runs** (ties still open) | Max `count` 100, default 10. Newest first. `from` and `to` both inclusive (re-confirmed on 3 payments). Skip past the end gives 200 and an empty list. `from > to` gives 200 and an empty list. Milliseconds, negatives and decimals give 400. A missing bound means unbounded. `count=0`/`101` give 400. |
@@ -11,6 +13,7 @@ Primary means razorpay.com/docs, read as the Markdown copies Razorpay serves (`h
 | Q3 | `/v1/refunds` | **settled by runs** | Same paging, order and inclusivity. Each refund carries `payment_id`, `status`, `speed_processed` and `created_at`, with keys identical to `GET /v1/refunds/{id}`. An undocumented **`payment_id` filter works**. The undocumented **`status` filter is accepted but does not filter**. A millisecond `to` silently means "no upper bound". |
 | Q4 | Headers, timing, rate limits | **settled by runs: nothing published** | No rate-limit headers. 20 parallel list calls all gave 200. Payments lists took 1.1-2.0 s, refunds lists 0.75-1.3 s. Refunds responses lack `Uber-Trace-Id` and use another error wording, so they come from another service. |
 | Q5 | Consistency while paging; id cursor | **not documented; no cursor** | No page says anything about consistency under concurrent writes. `/v1/payments` rejects `after`, `before`, `starting_after`, `ending_before`, `cursor`, `sort` and `order`. `/v1/refunds` ignores them. The paging rule from razorpay-first Q3(d) stands. |
+| Q7 | How late the list shows a new payment | **measured 2026-10-05: 39 to 54 minutes for five timed payments, whatever the query** | The fetch by id and the order's payments returned each of three payments within 22 s. The payments list first showed them 2,317 s, 2,454 s and 2,372 s after they were made, in every query shape at once, one of them first as `created`. Two more, 40 minutes on, took 54 minutes. The orders list was as late. Not documented. |
 | Q6 | healthchecks.io pings | **documented** | `https://hc-ping.com/<uuid>[/start\|/fail\|/log\|/<0-255>]`, by HEAD, GET or POST. Success answers 200 with body `OK`, but **an unknown UUID and a rate-limited ping also answer 200** ("OK (not found)", "OK (rate limited)"). At most 5 pings a minute per check. The docs suggest a 10 s timeout and retries. |
 
 ## Q1: `GET /v1/payments` with `from`, `to`, `count` and `skip`
@@ -139,6 +142,47 @@ Primary means razorpay.com/docs, read as the Markdown copies Razorpay serves (`h
 - [operations.md](../design/operations.md) `doctor` ("heartbeat URL set and reachable"): treat the ping as good only if the body is exactly `OK`. Report "OK (not found)" as a wrong UUID, and any 404 as a wrong URL on a self-hosted instance. Have `doctor` ping `/log` (or `/<uuid>/log`), which proves the URL without changing the check's state.
 - The `heartbeat_url` example `https://hc-ping.com/…` in [operations.md](../design/operations.md) is right. Note that a slug URL (`/<ping-key>/<slug>`) also works.
 
+## Q7: how long after payment the payments list shows a payment
+
+**Question.** A test order is paid and captured. How long is it until the fetch by id, the order's payments and the payments list each return the payment? Does the list's delay depend on the query the sweeper sends?
+
+**Verdict: measured on 2026-10-05. The list is late whatever the query, and Razorpay documents no delay.** The fetch by id and the order's payments returned each payment the first time they were asked. The payments list showed it 39 to 41 minutes after it was made, and two payments made 40 minutes later after 54 minutes. No query shape showed a payment before another did, so the sweeper's query is not the cause.
+
+**How it was measured.** Three test orders of ₹500 were made with `POST /v1/orders` and paid about three minutes apart by `wsync demo`'s payer (headless Checkout, Netbanking, Success). From 10:11 UTC every read below was asked every 10 s for 37 minutes (224 rounds, 2,998 GETs, every answer 200), and four of the list shapes every 20 s from 10:25 until each had shown all three. "After" is Razorpay's clock (the round's time, corrected by the `Date` header: ours was 0.6 s ahead) minus the payment's `created_at`. The payment id comes from Checkout's answer, so the first ask is about 20 s after the payment was made.
+
+| Payment | `created_at` (UTC) | `GET /v1/payments/{id}` | `GET /v1/orders/{id}/payments` | `GET /v1/payments` (every shape still asked) |
+|---|---|---|---|---|
+| `…ONdfXj` | 10:11:12 | 22 s, `captured` (first ask) | 22 s, `captured` (first ask) | **2,317 s** (38 min 37 s), `captured` |
+| `…AfaBBK` | 10:14:35 | 19 s, `captured` (first ask) | 19 s, `captured` (first ask) | **2,454 s** (40 min 54 s), `captured` |
+| `…LRh3hb` | 10:17:57 | 17 s, `captured` (first ask) | 17 s, `captured` (first ask) | **2,372 s** (39 min 32 s), as `created`; `captured` by 2,530 s |
+
+The list shapes, each with `count=100`:
+
+| Shape | Query | What it showed |
+|---|---|---|
+| The sweeper's slice at that moment | `from` = the last slice's end − 600, `to` = now − 60 | Nothing while its window held the payment (until 672 to 679 s after it was made); the window had long moved on when the list showed it |
+| The same `to`, a fixed `from` | `from` = 10 minutes before the first order, `to` = now − 60 | Each payment at the times in the table |
+| The re-list's shape | the same `from`, `to` = now | The same round |
+| The re-list's real window | `from` = now − 7 days, `to` = now | Nothing in the first 37 minutes; not asked after |
+| No `to` | the same fixed `from` only | The same round |
+| A `from` a few minutes back | `from` = now − 300, `to` = now | Nothing while its window held the payment (until 302 to 309 s) |
+| The same query every round | the fixed `from`, `to` = three hours later | Nothing in the first 37 minutes; not asked after |
+| No bounds | `count=100` only | The same round |
+
+- *The query makes no difference.* With or without `to`, with a `to` at now or a minute back, bounded or not, the list first showed each payment in the same 20-second round. A query repeated unchanged showed nothing sooner than one whose bounds moved, so nothing is cached by query.
+- *The whole account's lists were behind.* During the first 37 minutes the unbounded list gained two payments made by another run on the same account: `…m9C9T9`, made at 09:51:22, first listed 1,692 s later, and `…GEZ6FS`, made at 09:51:46, first listed 1,738 s later (28 and 29 minutes). The orders list (`GET /v1/orders`, with and without `from`, `to` and `expand[]=payments`) did not show the three orders 31 to 38 minutes after they were made; its newest order was 57 minutes old.
+- *The delay grew during the afternoon and differs by the day.* On 4 October the live test passed several times within about 90 s of the receiver starting. On 5 October a real run on GitHub swept for 5 min 5 s before the list showed its two payments; around 09:30 UTC a pair was listed about 25 minutes after payment; then came the 28 and 29 minutes above, then the 39 to 41, then the 54 of the run below.
+- *A real `wsync demo outage` run, the same afternoon* (the live test, with #69's change). Its two payments, `…haGzJk` and `…ZrJcx4`, were made at 10:50:00 and 10:50:24 and captured at once. The receiver started at 10:51 and logged 330 `sweep slice` lines for the payments list in 52 minutes: after the first walk each had `listed` 0 and `stored` 0, the first two reading 10:51:04 to 10:51:12 and 10:51:12 to 10:51:19. From 11:01:16, when the checkpoint was 10 minutes past both payments, each sweep was asked for the re-list: 128 `re-list` lines, each with `listed` 35 until the last, at 11:43:48, with `listed` 37 and `stored` 2. That is 3,228 s and 3,204 s after the payments were made (53 min 48 s and 53 min 24 s, written as 54 minutes everywhere else; the re-list 20 s before did not have them). Both rows show Via = `sweep`, and `demo verify` ended on `34 payments, 0 differences`. The first re-list, at 11:01:16, stored 2 as well: `…AfaBBK` and `…LRh3hb` from the table above, which the list first showed at 10:55 and 10:57, after the first walk and too far back for a slice's overlap. The refunds list failed in 22 of the run's sweeps and the payments list in one. Each failure was of the `retry` class, which covers a timeout, a dropped connection, a 429 and a 5xx; the receiver's log line carries the class and no status, so which of them it was is not recorded. Each was swept again.
+- *The ranges quoted elsewhere.* 39 to 54 minutes is the five payments timed from the moment they were made: the three in the table and the two of the live run. The README, sweeper.md and `wsync demo` quote that range. Three more delays were seen and not timed from the start: the pair of about 25 minutes that the ticket reported, and the 28 and 29 minutes of another run's two payments.
+- *The list can first show an old state.* `…LRh3hb` had been `captured` for 39 minutes by its fetch when the list first showed it, as `created`; the list showed it `captured` within the next 158 s. The sweep stores nothing for a `created` payment, so it is stored only once the list shows it attempted.
+- *Not tried.* Live mode; whether a delivered webhook changes the delay (the account's webhook was disabled, `active: false`, during the run); the refunds list.
+
+**What the design should change**
+- [sweeper.md](../design/sweeper.md) "Razorpay: polling": say that the list can be tens of minutes late, that the slices' 10-minute overlap covers only the first 10, and that the hourly re-list brings in a payment listed later. Done with #69.
+- The overlap (10 minutes) is shorter than every delay measured on the afternoon of 5 October. It stays at 10 minutes all the same, decided with #69 ([spec Assumption A18](../specs/p6-demo-doctor-readme.md)): the re-list already stores such a payment within the hour, and a longer overlap would make every sweep re-read more.
+- `wsync demo outage` and the weekly real run can't see a payment before the list does. The scene asks for the re-list once the sweeps' overlap is past a payment, and waits up to two hours in all: about twice the longest delay measured. The delay was still growing when the runs ended, so two hours is a guess at an upper bound.
+- Verify compares the ledger with the same list. A payment a delivery brought in before the list shows it has a ledger row and no listed item, and `src/webhook_sync/verify/source.py` reports such a row as `orphaned` and changes nothing; the next full run after the list catches up no longer reports it. This is read from the code: no run here provoked it. [verify.md](../design/verify.md) and the README say so since #69.
+
 ## What the design should change
 
 1. **Prefetched state for Razorpay (Q2) — contradicts sweeper.md and sources.md.** A listed payment lacks its refunds, and the list's `expand[]=refunds` returns an empty collection even for refunded payments. Use the listed state as prefetched only when `amount_refunded == 0` and `refund_status` is null (list with `expand[]=card`). Otherwise enqueue without it and let the worker fetch. Refund jobs always fetch. The mapper refuses a state with no `refunds` whose `amount_refunded` > 0. This changes [sweeper.md](../design/sweeper.md) "Razorpay: polling" and "Manual backfill" and [sources.md](../design/sources.md) "Listing for verify and backfill", and qualifies F18's "nothing is fetched twice" for Razorpay.
@@ -148,6 +192,7 @@ Primary means razorpay.com/docs, read as the Markdown copies Razorpay serves (`h
 5. **Paging stops at a short or empty page** (Q1): skip past the end is a 200 with no items.
 6. **Heartbeat** (Q6): POST to the success URL once per sweep pass, with a 10 s timeout, no `/start` and no `/fail`. `doctor` checks the body is exactly `OK` and uses `/log`.
 7. No change to the paging rule, the overlap, the re-list windows or the state hash: every hashed field is on the listed entities (Q2, Q3, Q5).
+8. **The list can be tens of minutes late (Q7).** The re-list, and not the overlap, brings in a payment listed more than 10 minutes late; a sweep by hand can ask for the re-list at once.
 
 ## API runs
 
@@ -193,4 +238,5 @@ Run 2026-10-03, 07:52-07:56 UTC, from the cloud session against `https://api.raz
 - **healthchecks.io:** https://healthchecks.io/docs/http_api/, /docs/reliability_tips/, /docs/python/, /docs/bash/, /docs/measuring_script_run_time/, /docs/configuring_checks/, /docs/monitoring_cron_jobs/; source https://github.com/healthchecks/healthchecks at 3addc67, `hc/api/views.py` (`ping`, `ping_by_slug`).
 - **Earlier notes cited:** [razorpay-first.md](razorpay-first.md) (Q3, Q7, S-Q3a), [razorpay-fetch-facts.md](razorpay-fetch-facts.md) (Q1, Q2, Q4, Q5, Q8), [gaps-google-python-razorpay.md](gaps-google-python-razorpay.md) (G32, G39), [research-gaps.md](../design/research-gaps.md) (G50, G53, G56).
 - **Runs, 2026-10-03:** api.razorpay.com with the test key, as listed above. No healthchecks.io ping was made.
+- **Runs, 2026-10-05 (Q7):** api.razorpay.com with the test key, 10:11 to 11:00 UTC: 3 `POST /v1/orders`, each paid through Checkout in a headless browser, then GETs only (about 3,400). The measuring scripts ran from the temp directory and are not in the repository; no key was printed or stored. Then the live test (`uv run pytest -m live -s tests/live`), 10:49 to 11:44 UTC: two more orders, paid the same way.
 - **Not tried:** any write (so no drift under a concurrent create, no pending refund, no same-second tie); a card payment, so `expand[]=card` on the list was seen only as `null`; a page of 100 real items; a 429.

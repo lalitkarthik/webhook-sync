@@ -6,6 +6,8 @@
 
 *Updated 2026-10-04 after #53 measured the load checks: the storm runs against the rate cap and re-sends what it refused, its bar is the server-side p99, and the burst runs only under `-m load` (Q171-Q173).*
 
+*Updated 2026-10-05 after #69: FakeRazorpay can show a payment in its list only some time after it is made, as Razorpay's test mode was measured doing.*
+
 ## Why the fakes replay recordings
 
 A **fake** built from the design's own beliefs agrees with the design's bugs. The audit found five bugs that fakes written that way would have passed: Stripe resending an event with different bytes (F02), listing events newest first (F03), a sort landing between our read and write (F05), Sheets naming tabs by title (F08), and fetches taking real time (F19). So before any code, a **recording spike** captures what the real services do, and the fakes replay it ([Q82](grilling-log.md)). Razorpay is the first source; what its test mode can't produce is replayed from Razorpay's own documented samples, marked `unrecorded` ([Q113](grilling-log.md)).
@@ -43,7 +45,7 @@ flowchart BT
 
 | Fake | Replays | Can also be told to |
 |---|---|---|
-| **FakeRazorpay** (through respx) | recorded bodies, headers and signatures; documented samples for what test mode can't make (`refund.failed`, `refund.speed_changed`, `payment.dispute.*`), re-signed by our fixture code and marked `unrecorded`; payment and refund lists newest first, with **items created in the same second in a shifting order**, a new payment arriving between page calls, and an empty disputes list without `items` | answer 429 (with a `BAD_REQUEST_ERROR` body), 500, 400 not found, a connection reset, time out; take real time per call; deliver out of order, many times, or never; move a payment `failed` → `authorized` (late authorisation) |
+| **FakeRazorpay** (through respx) | recorded bodies, headers and signatures; documented samples for what test mode can't make (`refund.failed`, `refund.speed_changed`, `payment.dispute.*`), re-signed by our fixture code and marked `unrecorded`; payment and refund lists newest first, with **items created in the same second in a shifting order**, a new payment arriving between page calls, a payment the list shows only some time after it is made, and an empty disputes list without `items` | answer 429 (with a `BAD_REQUEST_ERROR` body), 500, 400 not found, a connection reset, time out; take real time per call; deliver out of order, many times, or never; move a payment `failed` → `authorized` (late authorisation) |
 | **FakeStripe** (parked with Stripe) | documented payloads signed with stripe-python's `generate_signature_header`, marked `unrecorded`, with a switch per open fact (G6, G7, G10, G27, G28) so the invariants run under both answers | as FakeRazorpay |
 | **FakeSheets** | recorded error shapes; tabs with ids; grid size; atomic `batchUpdate`; quotas; call counting | 429, 500, 403; apply a write and lose the reply; a person sorting, editing, deleting a row or a tab, or renaming a tab **between any two calls** |
 

@@ -4,6 +4,8 @@
 
 **How to read it.** The picture shows the comparisons; the findings table is the reference.
 
+*Updated 2026-10-05 after #69: Razorpay's list can show a payment tens of minutes late, so a payment a delivery brought in can be reported `orphaned` until the list shows it.*
+
 ## Why it exists
 
 The sweeper recovers what it can see. Verify is the independent check that the whole chain worked: it doesn't trust our own records, and compares each hop against the one before. It is demo 1's "prove every row" idea applied to syncing ([Q41](grilling-log.md)).
@@ -37,7 +39,7 @@ Summing only the types `charge` and `refund` would be wrong three ways: newer pa
 |---|---|---|
 | **missing** | At the source, not in the ledger | A ledger job carrying the listed state |
 | **stale** | In both, but different | A ledger job carrying the listed state |
-| **orphaned** | In the ledger, not at the source | None: usually deleted test data or the wrong account. Shown for a person. |
+| **orphaned** | In the ledger, not at the source | None: usually deleted test data or the wrong account. Shown for a person. It can also be a payment a delivery brought in before Razorpay's list showed it: the list ran 39 to 54 minutes behind in test mode on 5 October 2026 ([razorpay-list-facts.md](../research/razorpay-list-facts.md) Q7). The row is left alone, and the next full run after the list catches up no longer reports it. |
 | sheet missing, sheet differs | In the ledger; absent or different in the sheet | A mirror job |
 | sheet duplicate, sheet foreign | A key twice; a row whose key isn't in the ledger | None: shown for a person |
 | totals differ | The independent totals disagree | None: a person looks; the difference is shown per currency |

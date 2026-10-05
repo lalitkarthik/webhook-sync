@@ -4,6 +4,10 @@
 
 **How to read it.** The first section is the reason; the flowchart is Stripe's sweep; Razorpay's differences follow. Razorpay is built first; Stripe is parked ([Q103](grilling-log.md)), but its sweep is the template Razorpay's follows.
 
+*Updated 2026-10-04 after #63: a window walked with `skip` is walked again until a walk brings no new id, and fails its slice after five walks, since same-second order is undocumented (Q186).*
+
+*Updated 2026-10-05 after #69: Razorpay's list was measured showing five test-mode payments 39 to 54 minutes after they were made, so the re-list is also what brings in a payment listed after the overlap, and a sweep by hand can ask for it.*
+
 ## Why it exists
 
 Webhooks are best-effort. A source gives up on a failed delivery eventually, and some give up quickly:
@@ -53,12 +57,14 @@ Stripe lists events for 30 days only. Past 25 days behind, an alert. Past 30, th
 
 Razorpay has no events list, and its lists filter by **creation** time ([sources.md](sources.md), [Q86](grilling-log.md), [Q107](grilling-log.md), [Q108](grilling-log.md)). Two loops:
 
-1. **Slices**, as for Stripe, over `GET /v1/payments` and `GET /v1/refunds`. The checkpoint (one per list, on Razorpay's clock from the `Date` header) means: every item **created** before it has been listed and stored at least once. Each slice is requested as `from = start − 600`, `to = end`, and only items with `created_at < end` are kept, so the 10-minute overlap re-reads the edge whatever the bounds do. Pages are read with `count=100` and no `skip`: the next page sets `to` to the oldest `created_at` seen plus one, and ids already seen are dropped. If a page brings nothing new (more than 100 items in two seconds), that two-second window is paged with `skip`. This doesn't rely on the order of items created in the same second, which Razorpay doesn't document. Each item becomes a synthetic event (`origin = 'sweep'`, id `sweep:<entity id>:<state hash>`) with a ledger job; a `created` payment is not stored.
+1. **Slices**, as for Stripe, over `GET /v1/payments` and `GET /v1/refunds`. The checkpoint (one per list, on Razorpay's clock from the `Date` header) means: every item **created** before it has been listed and stored at least once. Each slice is requested as `from = start − 600`, `to = end`, and only items with `created_at < end` are kept, so the 10-minute overlap re-reads the edge whatever the bounds do. Pages are read with `count=100` and no `skip`: the next page sets `to` to the oldest `created_at` seen plus one, and ids already seen are dropped. If a page can't move `to` down (more than 100 items in two seconds), the window is walked with `skip`. Those pages depend on the order of items created in the same second, which Razorpay doesn't document, so the walk collects items by id and is repeated until one whole walk brings no new id; after five walks that don't settle, the slice fails: its checkpoint stays and the next pass walks it again ([Q186](grilling-log.md)). The refunds list, the re-list and backfill page the same way. Each item becomes a synthetic event (`origin = 'sweep'`, id `sweep:<entity id>:<state hash>`) with a ledger job; a `created` payment is not stored.
 2. **The hourly re-list**: payments created in the last 7 days and refunds created in the last 21 days, every page. An item whose state hash changed becomes a synthetic event and a ledger job. This is how a late authorisation, an auto-refund after the capture timeout, a fee set at capture and a refund reaching `processed` reach the row (G53).
 
 The disputes poll joins when disputes are built. Changes to older payments reach the ledger through nightly verify. The README states the gap.
 
-**In the outage scene** ([Q107](grilling-log.md)), the startup sweep stores the missed payments first, with Via = `sweep`; Razorpay's own retries of the same deliveries arrive later and are logged as duplicates. Each payment still has one row.
+**A payment the list shows late.** Razorpay's lists can run behind: on 5 October 2026 the payments list showed five timed test-mode payments 39 to 54 minutes after they were made, whatever the query, while the fetch by id returned each within seconds ([razorpay-list-facts.md](../research/razorpay-list-facts.md) Q7). The slices can't store what the list doesn't show. Their 10-minute overlap brings in a payment listed up to about 10 minutes late; by the time a later one is listed, the checkpoint is past it, and the next hourly re-list stores it, with Via = `sweep`. So a payment made while the server was down can come back up to an hour after the list first shows it. A sweep asked for by hand can ask for the re-list at once (`POST /admin/sweep` with `{"relist": true}`), due or not. The overlap stays at 10 minutes ([spec Assumption A18](../specs/p6-demo-doctor-readme.md)): the hourly re-list already stores a payment listed later, and a longer overlap would make every sweep re-read more.
+
+**In the outage scene** ([Q107](grilling-log.md)), the startup sweep stores the missed payments first, with Via = `sweep`; Razorpay's own retries of the same deliveries arrive later and are logged as duplicates. Each payment still has one row. `wsync demo outage` sweeps every 5 s; once the payments checkpoint is more than 10 minutes past a payment the list has not shown, it asks for the re-list with each sweep, waits 15 s between them, and gives up two hours after it began. A list that fails does not stop this: the payments list is read before the refunds list.
 
 ## Silent webhooks
 

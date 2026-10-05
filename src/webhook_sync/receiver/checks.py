@@ -1,6 +1,9 @@
 """The receiver's checks 3-5 (receiver.md, "The checks, in order"), each answering a `Rejection`.
 
 The source's own checks (signature, a JSON object with an event id) live in its adapter.
+
+Ported from hookline (https://github.com/hassanatic/hookline, commit c0e549e), `hookline/app.py`:
+MIT, Copyright (c) 2026 Hassan Abdullah. Changed: see THIRD_PARTY_NOTICES.md.
 """
 
 from fastapi import Request

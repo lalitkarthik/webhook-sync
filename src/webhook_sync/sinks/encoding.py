@@ -20,7 +20,7 @@ from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from webhook_sync.config import Config
+from webhook_sync.config import Settings
 from webhook_sync.sinks.currencies import EXPONENTS, SOURCE_OVERRIDES
 
 type Json = dict[str, Any]
@@ -54,7 +54,7 @@ class Column:
     cell: Callable[[Row], Json]
 
 
-def payment_columns(config: Config) -> tuple[Column, ...]:
+def payment_columns(config: Settings) -> tuple[Column, ...]:
     """The configured Payments columns, in order, `metadata` expanded per key."""
     zone = config.service.timezone
     label = zone_label(zone)

@@ -3,6 +3,10 @@
 A stage plugs in only its work: a function from a claimed job to `Done` (with the writes to
 commit alongside `complete`), or a raised `StageFailed` naming the error class. Time comes from
 the one clock (A14); the sleeps are injected, so tests drive the runner without sleeping.
+
+Ported from driftless (https://github.com/quyumkehinde/driftless, commit e49725d),
+`internal/queue/queue.go`: Apache-2.0, Copyright 2026 Quyum Kehinde.
+Changed: see THIRD_PARTY_NOTICES.md.
 """
 
 import asyncio

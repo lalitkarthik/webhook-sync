@@ -4,6 +4,8 @@
 
 **How to read it.** The picture is the plan. The full design in the other pages is the target; this page is the order to reach it, with a working, shown result early ([Q67](grilling-log.md), audit F30).
 
+*Updated 2026-10-05 after #66 wrote the third-party notices: the queue's files in the layout and the retry row of the ported-code table are named as built (`operations.py`, `runner.py`, `retry.py`, `pause.py`; there never was a `queue/backoff.py`).*
+
 ## Why it is staged
 
 The audit estimated the full slices at 85-123 hours. After pitching, demo 1 and demo 3, about 4-8 build hours a week are left for this repository, so building everything before pitching would mean pitching in mid-December at the earliest. Instead a prototype is shown first, a cut of about ten finished features makes it solid, and the rest follows as buyers ask. This repository's prototype is built before demo 1's MVP; after that, the posts that actually arrive decide where the hours go ([Q68](grilling-log.md)).
@@ -85,7 +87,7 @@ webhook-sync/
 │   ├── db/                       writer.py (one connection, lock, BEGIN IMMEDIATE), reader.py, migrate.py, lockfile.py
 │   ├── receiver/                 routes, the checks, the one transaction, rejection counters
 │   ├── sources/                  base.py (the interface), razorpay.py, stripe.py (parked), ratelimit.py
-│   ├── queue/                    operations.py, sql_sqlite.py, backoff.py, classes.py, pause.py
+│   ├── queue/                    operations.py, runner.py, retry.py, pause.py
 │   ├── ledger/                   the ledger worker, row building
 │   ├── sinks/                    base.py, sheets.py (ported writer), encoding.py, summary.py, forward.py (later)
 │   ├── sweeper/                  slices, checkpoints, heartbeat ping, silent-webhook check
@@ -112,7 +114,7 @@ Stack: Python 3.14, uv, FastAPI, uvicorn, SQLAlchemy Core (async) with aiosqlite
 | `queue/` | driftless `jobs.sql`, `queue.go` | Apache-2.0 | Python on SQLite; one live job with rerun (driftless's own requeue idea); claim tokens and heartbeats; error classes; row-by-row reaper with backoff |
 | `sweeper/` | driftless `sweep/sweeper.go` | Apache-2.0 | time slices on the source clock; empty slices advance; Razorpay polling |
 | `sinks/sheets.py` | sync-engine `destination-google-sheets/src/writer.ts` | Apache-2.0, "Copyright 2025 Supabase" (G24) | abort on a failed read; read by sheet id; typed `updateCells` instead of `pasteData`; keys only on append; post-write check; no sheet-side version guard |
-| `queue/backoff.py` | Svix retry schedule idea | MIT | two profiles; a 0.5-1.5 factor; `Retry-After` never clamped |
+| `queue/retry.py` | Svix retry schedule idea | MIT | two profiles; a 0.5-1.5 factor; `Retry-After` never clamped |
 
 ## Where to go next
 

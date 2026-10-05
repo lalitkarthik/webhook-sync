@@ -46,6 +46,7 @@ from webhook_sync.clock import to_db_text
 from webhook_sync.config import AlertsConfig, Config, SweeperConfig
 from webhook_sync.db.schema import checkpoints
 from webhook_sync.db.writer import Writer
+from webhook_sync.logs import JsonFormatter
 from webhook_sync.queue import record_pause
 from webhook_sync.queue import runner as runner_module
 from webhook_sync.receiver.app import create_app
@@ -191,6 +192,39 @@ async def test_payments_made_while_the_server_was_down_reach_the_ledger_and_the_
     assert await read_rows("SELECT * FROM deliveries") == []
     events = await read_rows("SELECT origin, payment_key FROM events ORDER BY payment_key")
     assert events == [{"origin": "sweep", "payment_key": payment_id} for payment_id in OUTAGE]
+
+
+async def test_each_sweep_slice_is_logged_with_its_list_its_bounds_and_what_it_listed_and_stored(
+    swept_config: Config,
+    data_dir: Path,
+    outside: Outside,
+    read_rows: ReadRows,
+    sweeper_logs: pytest.LogCaptureFixture,
+) -> None:
+    listed = recorded_listed_payments()
+    for payment_id in OUTAGE:
+        outside.razorpay.payments[payment_id] = listed[payment_id]
+
+    async with running(swept_config, data_dir):
+        await wait_for(read_rows, ALL_ROWS, settled(OUTAGE))
+        await passes_ended(sweeper_logs, 1)
+
+    lines = [
+        json.loads(JsonFormatter().format(record))
+        for record in sweeper_logs.records
+        if record.getMessage() == "sweep slice"
+    ]
+    payments = [line for line in lines if line["list"] == "payments"]
+    assert {line["list"] for line in lines} == {"payments", "refunds"}
+    assert sum(line["listed"] for line in payments) == len(OUTAGE)
+    assert sum(line["stored"] for line in payments) == len(OUTAGE)
+    # A day back from Razorpay's now in four slices, the last ending a minute behind it.
+    assert [(line["slice_start"], line["slice_end"]) for line in payments] == [
+        ("2026-10-01T20:00:00.000000Z", "2026-10-02T02:00:00.000000Z"),
+        ("2026-10-02T02:00:00.000000Z", "2026-10-02T08:00:00.000000Z"),
+        ("2026-10-02T08:00:00.000000Z", "2026-10-02T14:00:00.000000Z"),
+        ("2026-10-02T14:00:00.000000Z", "2026-10-02T19:59:00.000000Z"),
+    ]
 
 
 async def test_a_late_delivery_of_a_swept_payment_is_a_new_event_that_changes_nothing(
@@ -1031,3 +1065,90 @@ async def test_sweeps_storing_events_with_a_recent_delivery_raise_no_alert(
 
     assert await read_rows("SELECT count(*) AS n FROM events WHERE origin = 'sweep'") == [{"n": 1}]
     assert alert_texts(outside.router) == []
+
+
+CROWDED = at(NOW - timedelta(hours=2))
+"""A second in the day's last slice in which more than a page of payments is created."""
+
+
+def crowd(fake: FakeRazorpay, count: int) -> list[str]:
+    """`count` payments created in the second `CROWDED`: more than one list page can hold."""
+    made = [f"pay_Crowd{n:09d}" for n in range(count)]
+    for payment_id in made:
+        fake.make(payment_id, CROWDED)
+    return made
+
+
+SWEPT_PER_PAYMENT = (
+    "SELECT payment_key, count(*) AS n FROM events WHERE origin = 'sweep'"
+    " GROUP BY payment_key ORDER BY payment_key"
+)
+
+
+async def test_over_a_page_created_in_one_second_in_a_shifting_order_is_each_stored_once(
+    swept_config: Config, data_dir: Path, outside: Outside, read_rows: ReadRows
+) -> None:
+    fake = outside.razorpay
+    fake.shifting = True  # Razorpay doesn't document the order of same-second items (Q186)
+    made = crowd(fake, 150)
+
+    async with running(swept_config, data_dir):
+        await wait_for(read_rows, CAUGHT_UP, [{"n": 2}])
+
+    assert await read_rows(SWEPT_PER_PAYMENT) == [
+        {"payment_key": payment_id, "n": 1} for payment_id in sorted(made)
+    ]
+    # The crowded window was walked with skip more than once, until a walk brought nothing new.
+    walks = [q for q in fake.calls_to("/v1/payments") if q.get("skip") is None]
+    assert len([q for q in walks if int(q["to"]) == CROWDED + 1]) >= 2
+
+
+async def test_a_window_that_never_settles_fails_its_slice_and_the_next_pass_walks_it_again(
+    swept_config: Config,
+    data_dir: Path,
+    outside: Outside,
+    read_rows: ReadRows,
+    sweeper_logs: pytest.LogCaptureFixture,
+) -> None:
+    fake = outside.razorpay
+    made = crowd(fake, 150)
+    # Each full page makes one more payment in the crowded second: every walk finds a new id.
+    late = [fake.made(f"pay_Late{n:010d}", CROWDED) for n in range(10)]
+    fake.arriving.extend(late)
+
+    async with running(swept_config, data_dir):
+        await passes_ended(sweeper_logs, 1)
+    stopped = [
+        r for r in sweeper_logs.records if r.getMessage() == "sweep stopped: the list failed"
+    ]
+    stuck_at = await checkpoint(read_rows, "payments")
+
+    fake.arriving.clear()
+    async with running(swept_config, data_dir):
+        await wait_for(read_rows, CAUGHT_UP, [{"n": 2}])
+
+    assert [(r.levelname, r.__dict__["list"]) for r in stopped] == [("WARNING", "payments")]
+    assert "did not settle in 5 walks" in stopped[0].__dict__["error"]
+    assert stuck_at == "2026-10-02T14:00:00.000000Z"  # the start of the crowded slice
+    crowded = [q for q in fake.calls_to("/v1/payments") if int(q["to"]) == CROWDED + 1]
+    assert len([q for q in crowded if q.get("skip") is None]) == 5 + 2  # five walks, then two
+    # One late payment per full page of the first pass: the call that narrowed to the crowded
+    # window, then the first page of each of the five walks.
+    stored = sorted([*made, *(payment.listed["id"] for payment in late[:6])])
+    assert await read_rows(SWEPT_PER_PAYMENT) == [
+        {"payment_key": payment_id, "n": 1} for payment_id in stored
+    ]
+
+
+async def test_a_slice_under_a_page_is_one_list_call_with_no_skip(
+    swept_config: Config, data_dir: Path, outside: Outside, read_rows: ReadRows
+) -> None:
+    fake = outside.razorpay
+    crowd(fake, 99)
+
+    async with running(swept_config, data_dir):
+        await wait_for(read_rows, CAUGHT_UP, [{"n": 2}])
+
+    calls = fake.calls_to("/v1/payments")
+    assert all("skip" not in query for query in calls)
+    assert len(calls) == 1 + 4  # Razorpay's now, then a day back in four slices

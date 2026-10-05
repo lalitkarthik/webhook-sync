@@ -212,7 +212,7 @@ _Avoid_: page (a page is one API response), batch
 How far back a source lets us list events: 30 days for Stripe. Past it, only a full backfill by creation date can catch up. Razorpay has no events list, so it has no horizon: its sweeper lists payments by creation date.
 
 **Re-list**:
-The sweeper's hourly second read of a source with no events list (Razorpay): every payment created in the last 7 days and every refund created in the last 21, so a change to an older payment reaches its row.
+The sweeper's hourly second read of a source with no events list (Razorpay): every payment created in the last 7 days and every refund created in the last 21, so a change to an older payment reaches its row, and a payment Razorpay listed later than the sweep's overlap is stored. A sweep by hand can ask for it at once (`POST /admin/sweep` with `relist`), as `demo outage` does.
 _Avoid_: re-fetch (one payment by id), poll (too vague)
 
 **Re-list floor**:
@@ -288,6 +288,16 @@ _Avoid_: benchmark, stress test
 **Scene**:
 One scripted demonstration for the video, driven by `wsync demo <scene>`.
 
+**Doctor**:
+`wsync doctor`: checks a setup end to end (config, secrets, key and mode, the sheet, the database, and with `--url` the public webhook URL) and says in plain words what is wrong. It changes nothing.
+_Avoid_: health check (that is the `/health` endpoint), diagnostics
+
+**Payer**:
+The part of `wsync demo` that pays a test order: a headless browser driving Checkout's mock bank page. It lives in the optional `wsync[demo]` extra.
+
+**Live test**:
+A test that calls the real Razorpay test mode and the throwaway sheet. Marked `live` and left out of the default run.
+
 **Demo fail-first switch**:
 `wsync serve --demo-fail-first N`: stores each new event as usual, then answers 500 to its first N attempts, so the source's own retries make the duplicate-storm scene. Test mode and the demo allow-list only.
 _Avoid_: chaos mode, fault injection (crash points are the tests' fault injection)
@@ -301,3 +311,11 @@ _Avoid_: customer (reserved for the buyer's own paying customers), user, client 
 **Restricted key**:
 A Stripe API key limited to named permissions; the service requires one with read access only.
 _Avoid_: API key (too broad), secret key (Stripe's name for a full-access key)
+
+**Settings**:
+The config without its secrets: what `webhook-sync.toml` holds. The config adds the secrets read from the environment; `wsync doctor` checks the two apart.
+_Avoid_: options, preferences
+
+**Real run**:
+The weekly CI job that pays test orders on the real Razorpay with the receiver stopped, sweeps them in and runs `verify --full`, failing on any finding.
+_Avoid_: smoke test, e2e run

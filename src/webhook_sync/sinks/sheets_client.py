@@ -52,6 +52,7 @@ QUOTA_WINDOW = timedelta(seconds=60)
 TAB_MISSING = "tab missing"
 SPREADSHEET_MISSING = "spreadsheet missing"
 SHEET_FULL = "sheet full"
+KEY_REFUSED = "Google refused the service-account key"
 
 type Json = dict[str, Any]
 
@@ -212,9 +213,7 @@ class SheetsClient:
         try:
             token = await self._tokens.token()
         except TokenRefused:
-            return SheetsFailure(
-                "Google refused the service-account key", "pause", pause_target="sink"
-            )
+            return SheetsFailure(KEY_REFUSED, "pause", pause_target="sink")
         except TokenUnavailable as error:
             return SheetsFailure(f"Google token call failed: {error}", "retry")
         try:

@@ -1,4 +1,9 @@
-"""The retry profiles: the backoff tables and the attempts a job is allowed (queue.md; A8)."""
+"""The retry profiles: the backoff tables and the attempts a job is allowed (queue.md; A8).
+
+The idea of a fixed table of waits is from svix-webhooks
+(https://github.com/svix/svix-webhooks, commit cb056ba): MIT, Copyright (c) 2021 Svix.
+Changed: see THIRD_PARTY_NOTICES.md.
+"""
 
 import random
 from datetime import timedelta
