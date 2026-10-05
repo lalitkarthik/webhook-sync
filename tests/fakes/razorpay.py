@@ -32,6 +32,8 @@ from support import (
 RAZORPAY_API = "https://api.razorpay.test"
 LIKE = "pay_Tj9rKBOXWcsMeE"
 """The recorded capture a made payment copies: netbanking, INR 500, its fee set."""
+CAPTURED_OF_LIKE = "Tj9sMcl7hE9PaT"
+"""The recorded `payment.captured` event of `LIKE`, whose bytes verify (the recordings' README)."""
 ERROR_FIELDS = ("error_code", "error_description", "error_reason", "error_source", "error_step")
 
 
@@ -373,6 +375,13 @@ class FakeRazorpay:
             **signed,
         }
         return Delivery(body, headers)
+
+    def captured_delivery(self, payment_id: str) -> Delivery:
+        """The `payment.captured` delivery Razorpay sends for a payment made at Checkout
+        (`pay`): the recorded one of `LIKE`, its payment that payment as fetched now."""
+        recorded = json.loads(recorded_delivery(CAPTURED_OF_LIKE))
+        recorded["payload"]["payment"]["entity"] = self.fetches[payment_id]
+        return self.delivery(CAPTURED_OF_LIKE).with_body(recorded)
 
     async def deliver(
         self, client: httpx.AsyncClient, delivery: Delivery, *, times: int = 1

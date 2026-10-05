@@ -1,4 +1,5 @@
-"""`wsync demo reset`, `outage` and `verify` as real subprocesses (seam 3; Q105, Q120, Q181).
+"""`wsync demo reset`, `outage`, `duplicates` and `verify` as real subprocesses (seam 3; Q105,
+Q120, Q181).
 
 Razorpay and Google are FakeRazorpay and FakeSheets over HTTP on 127.0.0.1, as in the command
 tests of P4 and the crash tests of P5, and the payer is a fake one (`fakes.payer`) the command
@@ -12,11 +13,13 @@ import copy
 import os
 import queue
 import re
+import signal
 import stat
 import subprocess
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
+from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
 from threading import Thread
@@ -53,7 +56,7 @@ from webhook_sync.sinks.sheets import (
     SYNC_STATUS_HEADER,
 )
 
-SCENES = ("reset", "outage", "verify")
+SCENES = ("reset", "outage", "duplicates", "verify")
 LIVE_KEY_ID = "rzp_live_fixtureKeyId01"
 SECRET_VALUES = (
     TEST_KEY_ID,
@@ -469,6 +472,9 @@ class Scene:
             stderr=subprocess.STDOUT,
             text=True,
             encoding="utf-8",
+            # A group of its own, so that `interrupt` reaches the scene and not the tests.
+            creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+            start_new_session=sys.platform != "win32",
         )
         self.lines: list[str] = []
         self._new: queue.Queue[str | None] = queue.Queue()
@@ -494,6 +500,14 @@ class Scene:
             if text in line:
                 return line
         pytest.fail(f"no line held {text!r}:\n" + "\n".join(self.lines))
+
+    def interrupt(self) -> None:
+        """Ctrl+C, as the owner presses it; on Windows, Ctrl+Break: a console sends Ctrl+C
+        to no process group but its own."""
+        if sys.platform == "win32":
+            os.kill(self.process.pid, signal.CTRL_BREAK_EVENT)
+        else:
+            os.killpg(self.process.pid, signal.SIGINT)
 
     async def ended(self, *, within: float = SCENE_LIMIT) -> tuple[int, str]:
         try:
@@ -596,6 +610,108 @@ async def test_outage_waits_out_a_429_and_sweeps_again_when_a_sweep_stops_short(
 async def test_outage_refuses_while_a_server_runs(run: CrashRun) -> None:
     async with run.server():
         code, output = await wsync_demo(run, "outage")
+
+    assert code == 2
+    assert "a server is running: stop wsync serve first" in output
+    assert run.razorpay.orders == {}
+
+
+# -- demo duplicates ---------------------------------------------------------------------------
+
+LEFT_RUNNING = re.compile(r"the receiver is running in its normal mode at (\S+), pid (\d+)")
+
+
+@contextmanager
+def left_running(run: CrashRun, output: str) -> Generator[httpx.AsyncClient]:
+    """A client for the receiver the scene left running; stopped when the block ends. The
+    test reads the database inside the block: on Windows a stopped server's files may stay
+    held a moment longer (the crash harness)."""
+    found = LEFT_RUNNING.search(output)
+    assert found is not None, output
+    assert found[1] == f"http://127.0.0.1:{run.port}"
+    try:
+        yield httpx.AsyncClient(base_url=found[1], trust_env=False, timeout=30)
+    finally:
+        if sys.platform == "win32":
+            subprocess.run(["taskkill", "/T", "/F", "/PID", found[2]], capture_output=True)
+        else:
+            os.kill(int(found[2]), signal.SIGTERM)
+
+
+async def assert_in_normal_mode(run: CrashRun, client: httpx.AsyncClient, payment_id: str) -> None:
+    """Healthy, and the event answered as it normally is, new or a duplicate: no switch
+    answers it 500."""
+    async with client:
+        assert (await client.get("/health")).status_code == 200
+        [sent] = await run.razorpay.deliver(client, run.razorpay.captured_delivery(payment_id))
+    assert sent.status_code in (200, 202)
+
+
+async def test_duplicates_answers_500_to_four_deliveries_and_keeps_one_row(
+    run: CrashRun, read_rows: ReadRows
+) -> None:
+    scene = Scene(run, "duplicates", payer=FAKE_PAYER)
+    await scene.until("waiting for Razorpay's deliveries")
+    [payment_id] = run.razorpay.orders_paid()
+    delivery = run.razorpay.captured_delivery(payment_id)
+    async with httpx.AsyncClient(
+        base_url=f"http://127.0.0.1:{run.port}", trust_env=False, timeout=30
+    ) as receiver:
+        for attempt in range(1, 6):  # Razorpay's retries, one after another
+            await run.razorpay.deliver(receiver, delivery)
+            await scene.until(f"payment.captured attempt {attempt}:")
+    code, output = await scene.ended()
+
+    with left_running(run, output) as client:
+        assert code == 0, output
+        assert [sent.status_code for sent in run.razorpay.sent] == [500, 500, 500, 500, 200]
+        assert "starting the receiver: wsync serve --demo-fail-first 4" in output
+        assert f"{payment_id} captured" in output
+        assert "payment.captured attempt 1: answered 500 on purpose, stored as new" in output
+        assert "payment.captured attempt 2: answered 500 on purpose, a duplicate" in output
+        assert "payment.captured attempt 5: answered 200, a duplicate" in output
+        assert f"{payment_id}: one ledger row and one sheet row; 4 duplicates" in output
+        assert await read_rows("SELECT payment_id, via FROM payments") == [
+            {"payment_id": payment_id, "via": "delivery"}
+        ]
+        _, *rows = run.sheets.tab(PAYMENTS).values()
+        assert [row[0] for row in rows] == [payment_id]
+        await assert_in_normal_mode(run, client, payment_id)
+
+
+async def test_duplicates_with_no_delivery_names_the_tunnel_and_fails(run: CrashRun) -> None:
+    scene = Scene(run, "duplicates", "--wait", "2", payer=FAKE_PAYER)
+
+    code, output = await scene.ended()
+
+    with left_running(run, output) as client:
+        assert code == 1, output
+        [payment_id] = run.razorpay.orders_paid()
+        assert f"no delivery of {payment_id} arrived in 2 s" in output
+        assert "the public URL or the tunnel is the likely cause" in output
+        assert "wsync doctor --url" in output
+        await assert_in_normal_mode(run, client, payment_id)
+
+
+async def test_an_interrupted_duplicates_leaves_the_receiver_in_its_normal_mode(
+    run: CrashRun,
+) -> None:
+    scene = Scene(run, "duplicates", payer=FAKE_PAYER)
+    await scene.until("waiting for Razorpay's deliveries")
+
+    scene.interrupt()
+    code, output = await scene.ended()
+
+    with left_running(run, output) as client:
+        assert code != 0, output
+        assert "interrupted" in output
+        [payment_id] = run.razorpay.orders_paid()
+        await assert_in_normal_mode(run, client, payment_id)
+
+
+async def test_duplicates_refuses_while_a_server_runs(run: CrashRun) -> None:
+    async with run.server():
+        code, output = await wsync_demo(run, "duplicates")
 
     assert code == 2
     assert "a server is running: stop wsync serve first" in output
