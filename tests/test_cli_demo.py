@@ -46,8 +46,8 @@ from support import (
     fixture_secrets,
 )
 
-from webhook_sync.cli.admin import CommandFailed
 from webhook_sync.cli import demo as demo_scenes
+from webhook_sync.cli.admin import CommandFailed
 from webhook_sync.cli.demo import stop_receiver, with_demo_retry_profile
 from webhook_sync.config import load_settings
 from webhook_sync.db.lock import hold_lock
