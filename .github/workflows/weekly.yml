@@ -2,7 +2,10 @@ name: Weekly
 
 # The tests on Windows, where the service is developed, once a week (Q170): the default suite,
 # then the load checks by themselves, the burst included (Q173), their timing printed and not
-# asserted: CI is set (Q161, Q172). P6 adds the real-services job.
+# asserted: CI is set (Q161, Q172). Then the real run (Q183): on Linux, against Razorpay test mode
+# and the demo sheet, `demo reset`, two test orders paid with the receiver stopped and swept in,
+# and `verify --full`, which must find nothing. Its secrets are set by
+# `python scripts/set_env.py github` (Q176); with one missing the job skips with a notice.
 on:
   schedule:
     - cron: "30 3 * * 1"  # Mondays 03:30 UTC
@@ -24,3 +27,88 @@ jobs:
         run: uv run pytest -m "not load"
       - name: Load checks
         run: uv run pytest -m load
+
+  real-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash  # with -o pipefail, so verify's exit code survives the tee
+    env:
+      RAZORPAY_KEY_ID: ${{ secrets.RAZORPAY_KEY_ID }}
+      RAZORPAY_KEY_SECRET: ${{ secrets.RAZORPAY_KEY_SECRET }}
+      RAZORPAY_WEBHOOK_SECRET: ${{ secrets.RAZORPAY_WEBHOOK_SECRET }}
+      GOOGLE_SERVICE_ACCOUNT_B64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_B64 }}
+      SHEET_ID: ${{ secrets.SHEET_ID }}
+      CONFIG: real-run/webhook-sync.toml  # untracked, in the workspace
+    steps:
+      - name: Secrets
+        id: secrets
+        run: |
+          missing=""
+          for name in RAZORPAY_KEY_ID RAZORPAY_KEY_SECRET RAZORPAY_WEBHOOK_SECRET GOOGLE_SERVICE_ACCOUNT_B64 SHEET_ID; do
+            [ -n "${!name}" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::notice title=Real run skipped::these Actions secrets are not set:$missing (python scripts/set_env.py github sets them)"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          elif [[ "$RAZORPAY_KEY_ID" != rzp_test_* ]]; then
+            echo "::error title=Real run refused::RAZORPAY_KEY_ID is not a test-mode key"
+            exit 1
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.secrets.outputs.ready == 'true'
+        uses: actions/checkout@v7
+      - if: steps.secrets.outputs.ready == 'true'
+        uses: astral-sh/setup-uv@v7
+      - if: steps.secrets.outputs.ready == 'true'
+        run: uv python install
+      - if: steps.secrets.outputs.ready == 'true'
+        run: uv sync --locked --extra demo
+      - if: steps.secrets.outputs.ready == 'true'
+        name: Chromium
+        run: uv run playwright install --with-deps chromium
+      - if: steps.secrets.outputs.ready == 'true'
+        name: Config
+        # The account is the owner's test account, the one the recordings were made on.
+        run: |
+          mkdir -p "$(dirname "$CONFIG")"
+          cat > "$CONFIG" <<EOF
+          [service]
+          public_listen = "127.0.0.1:8080"
+          admin_listen = "127.0.0.1:8081"
+          data_dir = "data"
+
+          [sources.razorpay]
+          mode = "test"
+          account = "acc_Tj5AnsI7BH2aLR"
+
+          [sinks.sheets]
+          spreadsheet_id = "$SHEET_ID"
+
+          [demo]
+          spreadsheet_ids = ["$SHEET_ID"]
+          EOF
+      - if: steps.secrets.outputs.ready == 'true'
+        name: demo reset
+        run: uv run wsync demo reset --config "$CONFIG"
+      - if: steps.secrets.outputs.ready == 'true'
+        name: Two test orders paid with the receiver stopped, then swept
+        run: uv run wsync demo outage --orders 2 --config "$CONFIG"
+      - if: steps.secrets.outputs.ready == 'true'
+        name: verify --full
+        # verify exits 0 whatever it finds, so its findings line is read: anything but 0 fails.
+        run: |
+          uv run wsync verify --full --config "$CONFIG" | tee "$RUNNER_TEMP/verify.txt"
+          if grep -q "Razorpay is paused" "$RUNNER_TEMP/verify.txt"; then
+            echo "::error title=Real run::Razorpay was not checked: only the sheet was"
+            exit 1
+          fi
+          if ! grep -q "^0 findings, " "$RUNNER_TEMP/verify.txt"; then
+            echo "::error title=Real run::verify --full found differences"
+            exit 1
+          fi
+      - if: failure() && steps.secrets.outputs.ready == 'true'
+        name: The receiver's log
+        run: tail -n 200 "$(dirname "$CONFIG")/data/demo-serve.log" || true
