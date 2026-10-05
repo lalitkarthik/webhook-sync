@@ -34,16 +34,18 @@ jobs:
     defaults:
       run:
         shell: bash  # with -o pipefail, so verify's exit code survives the tee
+    # The secrets go only to the steps that read them, never to the actions or the installs.
     env:
-      RAZORPAY_KEY_ID: ${{ secrets.RAZORPAY_KEY_ID }}
-      RAZORPAY_KEY_SECRET: ${{ secrets.RAZORPAY_KEY_SECRET }}
-      RAZORPAY_WEBHOOK_SECRET: ${{ secrets.RAZORPAY_WEBHOOK_SECRET }}
-      GOOGLE_SERVICE_ACCOUNT_B64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_B64 }}
-      SHEET_ID: ${{ secrets.SHEET_ID }}
       CONFIG: real-run/webhook-sync.toml  # untracked, in the workspace
     steps:
       - name: Secrets
         id: secrets
+        env:
+          RAZORPAY_KEY_ID: ${{ secrets.RAZORPAY_KEY_ID }}
+          RAZORPAY_KEY_SECRET: ${{ secrets.RAZORPAY_KEY_SECRET }}
+          RAZORPAY_WEBHOOK_SECRET: ${{ secrets.RAZORPAY_WEBHOOK_SECRET }}
+          GOOGLE_SERVICE_ACCOUNT_B64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_B64 }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
         run: |
           missing=""
           for name in RAZORPAY_KEY_ID RAZORPAY_KEY_SECRET RAZORPAY_WEBHOOK_SECRET GOOGLE_SERVICE_ACCOUNT_B64 SHEET_ID; do
@@ -71,6 +73,8 @@ jobs:
         run: uv run playwright install --with-deps chromium
       - if: steps.secrets.outputs.ready == 'true'
         name: Config
+        env:
+          SHEET_ID: ${{ secrets.SHEET_ID }}
         # The account is the owner's test account, the one the recordings were made on.
         run: |
           mkdir -p "$(dirname "$CONFIG")"
@@ -92,12 +96,30 @@ jobs:
           EOF
       - if: steps.secrets.outputs.ready == 'true'
         name: demo reset
+        env:
+          RAZORPAY_KEY_ID: ${{ secrets.RAZORPAY_KEY_ID }}
+          RAZORPAY_KEY_SECRET: ${{ secrets.RAZORPAY_KEY_SECRET }}
+          RAZORPAY_WEBHOOK_SECRET: ${{ secrets.RAZORPAY_WEBHOOK_SECRET }}
+          GOOGLE_SERVICE_ACCOUNT_B64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_B64 }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
         run: uv run wsync demo reset --config "$CONFIG"
       - if: steps.secrets.outputs.ready == 'true'
         name: Two test orders paid with the receiver stopped, then swept
+        env:
+          RAZORPAY_KEY_ID: ${{ secrets.RAZORPAY_KEY_ID }}
+          RAZORPAY_KEY_SECRET: ${{ secrets.RAZORPAY_KEY_SECRET }}
+          RAZORPAY_WEBHOOK_SECRET: ${{ secrets.RAZORPAY_WEBHOOK_SECRET }}
+          GOOGLE_SERVICE_ACCOUNT_B64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_B64 }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
         run: uv run wsync demo outage --orders 2 --config "$CONFIG"
       - if: steps.secrets.outputs.ready == 'true'
         name: verify --full
+        env:
+          RAZORPAY_KEY_ID: ${{ secrets.RAZORPAY_KEY_ID }}
+          RAZORPAY_KEY_SECRET: ${{ secrets.RAZORPAY_KEY_SECRET }}
+          RAZORPAY_WEBHOOK_SECRET: ${{ secrets.RAZORPAY_WEBHOOK_SECRET }}
+          GOOGLE_SERVICE_ACCOUNT_B64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_B64 }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
         # verify exits 0 whatever it finds, so its findings line is read: anything but 0 fails.
         run: |
           uv run wsync verify --full --config "$CONFIG" | tee "$RUNNER_TEMP/verify.txt"
