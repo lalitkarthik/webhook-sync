@@ -505,6 +505,11 @@ class Scene:
         )
         self.lines: list[str] = []
         self._new: queue.Queue[str | None] = queue.Queue()
+        self._closed = False
+        """Whether the end of the output has been read."""
+        self._killed: set[int] = set()
+        """The left-running receivers already killed, by pid: none is killed twice, as a pid
+        can be reused."""
         Thread(target=self._read, daemon=True).start()
 
     def _read(self) -> None:
@@ -522,6 +527,7 @@ class Scene:
             except queue.Empty:
                 continue
             if line is None:
+                self._closed = True
                 break
             self.lines.append(line)
             if text in line:
@@ -529,19 +535,29 @@ class Scene:
         pytest.fail(f"no line held {text!r}:\n" + "\n".join(self.lines))
 
     def kill(self) -> None:
-        """Kill the scene's processes, then any receiver it said it left running."""
-        kill_tree(self.process.pid)
-        self.process.wait(timeout=30)
-        while True:  # its last lines, until the pipe closes
+        """Kill the scene's processes while they run, then any receiver it said it left
+        running."""
+        if self.process.poll() is None:  # a reaped pid may be someone else's by now
+            kill_tree(self.process.pid)
+            self.process.wait(timeout=30)
+        while not self._closed:  # its last lines, until the pipe closes
             try:
                 line = self._new.get(timeout=5)
             except queue.Empty:
                 break
             if line is None:
-                break
-            self.lines.append(line)
+                self._closed = True
+            else:
+                self.lines.append(line)
+        self.kill_left_running()
+
+    def kill_left_running(self) -> None:
+        """Kill each receiver the scene said it left running, once."""
         for found in LEFT_RUNNING.finditer("\n".join(self.lines)):
-            kill_tree(int(found[2]))
+            pid = int(found[2])
+            if pid not in self._killed:
+                self._killed.add(pid)
+                kill_tree(pid)
 
     def interrupt(self) -> None:
         """Ctrl+C, as the owner presses it; on Windows, Ctrl+Break: a console sends Ctrl+C
@@ -559,6 +575,7 @@ class Scene:
             pytest.fail("the scene did not end:\n" + "\n".join(self.lines))
         while (line := await asyncio.to_thread(self._new.get)) is not None:
             self.lines.append(line)
+        self._closed = True
         output = "\n".join(self.lines)
         assert [value for value in SECRET_VALUES if value in output] == []
         return code, output
@@ -662,18 +679,18 @@ async def test_outage_refuses_while_a_server_runs(run: CrashRun) -> None:
 
 
 @contextmanager
-def left_running(run: CrashRun, output: str) -> Generator[httpx.AsyncClient]:
+def left_running(run: CrashRun, scene: Scene) -> Generator[httpx.AsyncClient]:
     """A client for the receiver the scene left running; stopped when the block ends. The
     test reads the database inside the block: on Windows a stopped server's files may stay
     held a moment longer (the crash harness)."""
+    output = "\n".join(scene.lines)
     found = LEFT_RUNNING.search(output)
     try:
         assert found is not None, output
         assert found[1] == f"http://127.0.0.1:{run.port}"
         yield httpx.AsyncClient(base_url=found[1], trust_env=False, timeout=30)
     finally:
-        if found is not None:
-            kill_tree(int(found[2]))
+        scene.kill_left_running()
 
 
 async def assert_in_normal_mode(run: CrashRun, client: httpx.AsyncClient, payment_id: str) -> None:
@@ -700,7 +717,7 @@ async def test_duplicates_answers_500_to_four_deliveries_and_keeps_one_row(
             await scene.until(f"payment.captured attempt {attempt}:")
     code, output = await scene.ended()
 
-    with left_running(run, output) as client:
+    with left_running(run, scene) as client:
         assert code == 0, output
         assert [sent.status_code for sent in run.razorpay.sent] == [500, 500, 500, 500, 200]
         assert "starting the receiver: wsync serve --demo-fail-first 4" in output
@@ -722,7 +739,7 @@ async def test_duplicates_with_no_delivery_names_the_tunnel_and_fails(run: Crash
 
     code, output = await scene.ended()
 
-    with left_running(run, output) as client:
+    with left_running(run, scene) as client:
         assert code == 1, output
         [payment_id] = run.razorpay.orders_paid()
         assert f"no delivery of {payment_id} arrived in 2 s" in output
@@ -765,7 +782,7 @@ async def test_an_interrupted_duplicates_leaves_the_receiver_in_its_normal_mode(
     scene.interrupt()
     code, output = await scene.ended()
 
-    with left_running(run, output) as client:
+    with left_running(run, scene) as client:
         assert code != 0, output
         assert "interrupted" in output
         [payment_id] = run.razorpay.orders_paid()

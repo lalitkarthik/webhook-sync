@@ -618,7 +618,7 @@ def duplicates(args: argparse.Namespace, config: Config) -> int:
                 try:
                     stop_receiver(receiver, data_dir)
                     say("the receiver is stopped")
-                except CommandFailed as failed:
+                except (CommandFailed, OSError) as failed:
                     say(str(failed))
             _leave_running(args.config, config)
     return 0
@@ -725,7 +725,7 @@ def _leave_running(config_path: Path, config: Config) -> None:
         return
     try:
         process, base_url, _ = _serve(config_path, config, (), "wsync serve", detached=True)
-    except CommandFailed as failed:
+    except (CommandFailed, OSError) as failed:
         say(f"the receiver in its normal mode did not start: {failed}; start wsync serve by hand")
         return
     stop_with = (
